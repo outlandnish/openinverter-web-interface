@@ -517,6 +517,29 @@ static void handleCommand() {
       server.send(200, "text/plain", "No reply to save command");
     }
   }
+  else if (cmd == "stop") {
+    if (OICan::StartStop(0)) {
+      server.send(200, "text/plain", "Inverter halted");
+    }
+    else {
+      server.send(200, "text/plain", "Stop command failed");
+    }
+  }
+  else if (cmd.startsWith("start")) {
+    String str(cmd);
+    int modeStart = str.indexOf(' ');
+    int opmode = str.substring(modeStart, str.indexOf('\r')).toInt();
+
+    if (OICan::StartStop(opmode)) {
+      server.send(200, "text/plain", "Inverter started");
+    }
+    else {
+      server.send(200, "text/plain", "Start command failed");
+    }
+  }
+  else {
+    server.send(200, "text/plain", "Unknown command");
+  }
 
   digitalWrite(LED_BUILTIN, LOW);
 }

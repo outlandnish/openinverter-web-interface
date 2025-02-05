@@ -54,7 +54,9 @@
 #define SDO_CMD_SAVE          0
 #define SDO_CMD_LOAD          1
 #define SDO_CMD_RESET         2
-
+#define SDO_CMD_DEFAULTS      3
+#define SDO_CMD_START         4
+#define SDO_CMD_STOP          5
 
 namespace OICan {
 
@@ -577,7 +579,24 @@ bool SaveToFlash() {
 
   setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_SAVE, 0U);
 
-  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK && rxframe.data[0] == SDO_WRITE_REPLY) {
+    return true;
+  }
+  else {
+    return false;
+  }
+}
+
+bool StartStop(int opmode)
+{
+  if (state != IDLE) return false;
+
+  twai_message_t rxframe;
+  uint8_t subIdx = opmode == 0 ? SDO_CMD_STOP : SDO_CMD_START;
+
+  setValueSdo(SDO_INDEX_COMMANDS, subIdx, opmode);
+
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK && rxframe.data[0] == SDO_WRITE_REPLY) {
     return true;
   }
   else {

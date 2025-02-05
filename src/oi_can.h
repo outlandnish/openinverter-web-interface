@@ -33,6 +33,7 @@ SetResult AddCanMapping(String json);
 SetResult RemoveCanMapping(String json);
 SetResult SetValue(String name, double value);
 double GetValue(String name);
+bool StartStop(int opmode);
 bool SaveToFlash();
 String StreamValues(String names, int samples);
 int StartUpdate(String fileName);
