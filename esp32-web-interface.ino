@@ -639,7 +639,7 @@ static void handleSettings()
   if (updated)
   {
     File file = SPIFFS.open("/settings-updated.html", "r");
-    size_t sent = server.streamFile(file, getContentType("settings-updated.html"));
+    server.streamFile(file, getContentType("settings-updated.html"));
     file.close();
   }
 }

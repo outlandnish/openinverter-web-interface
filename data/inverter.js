@@ -82,14 +82,14 @@ var inverter = {
         console.log(req + ": " + xmlhttp.status);
         if (xmlhttp.status != 200) {
           paramsCache.failedFetchCount += 1;
-          if ( paramsCache.failedFetchCount >= 2 ){
+          if ( paramsCache.failedFetchCount >= 2 && typeof ui !== 'undefined'){
             ui.showCommunicationErrorBar();
           }
         }
         else {
           paramsCache.failedFetchCount = 0;
         }
-        if ( paramsCache.failedFetchCount < 2 ) {
+        if ( paramsCache.failedFetchCount < 2 && typeof ui !== 'undefined') {
           ui.hideCommunicationErrorBar();
         }
       }
@@ -182,10 +182,7 @@ var inverter = {
       replyFunc(values);
     };
 
-    if (inverter.firmwareVersion < 3.53 || items.length > 10)
-      inverter.sendCmd("get " + items.join(','), process, repeat);
-    else
-      inverter.sendCmd("stream " + repeat + " " + items.join(','), process);
+    inverter.sendCmd("stream " + repeat + " " + items.join(','), process);
   },
 
 

@@ -21,6 +21,7 @@
 var plot = {
 
     stop: true,
+    barGraph: false,
 
     /** @brief launch new tab showing gauges based fields selected from the plot&gauge page */
     launchGauges: function()
@@ -33,6 +34,18 @@ var plot = {
     /** @brief generates chart at bottom of page */
     generateChart: function()
     {
+      if (plot.barGraph)
+      {
+        chart = new Chart("canvas", {
+                  type: 'bar',
+                  options: {
+                      animation: false
+                  }
+              });
+
+      }
+      else
+      {
         chart = new Chart("canvas", {
             type: "line",
             options: {
@@ -54,11 +67,19 @@ var plot = {
                     }]
                 }
             } });
+      }
     },
 
     /** @brief start plotting selected spot values */
     startPlot: function()
     {
+      if (plot.barGraph)
+      {
+        items = {};
+        items.names = [ "u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8", "u9", "u10", "u11", "u12", "u13", "u14", "u15" ];
+      }
+      else
+      {
         items = ui.getPlotItems();
         var colours = [ 'rgb(255, 99, 132)', 'rgb(54, 162, 235)', 'rgb(255, 159, 64)', 'rgb(153, 102, 255)', 'rgb(255, 205, 86)', 'rgb(75, 192, 192)' ];
 
@@ -77,13 +98,14 @@ var plot = {
                 };
             chart.config.data.datasets.push(newDataset);
         }
-
-        ui.setAutoReload(false);
-        time = 0;
         chart.update();
-        plot.stop = false;
-        document.getElementById("pauseButton").disabled = false;
-        plot.acquire();
+      }
+
+      ui.setAutoReload(false);
+      time = 0;
+      plot.stop = false;
+      document.getElementById("pauseButton").disabled = false;
+      plot.acquire();
     },
 
     /** @brief Stop plotting */
@@ -108,16 +130,44 @@ var plot = {
         }
     },
 
+    toggleBargraph: function()
+    {
+      chart.destroy();
+      plot.barGraph = !plot.barGraph;
+      plot.generateChart();
+      chart.draw();
+
+      if (plot.barGraph)
+      {
+      }
+      else
+      {
+      }
+    },
+
     acquire: function()
     {
         if (plot.stop) return;
         if (!items.names.length) return;
-        var burstLength = document.getElementById('burstLength').value;
+        var burstLength = plot.barGraph ? 1 : document.getElementById('burstLength').value;
         var maxValues = document.getElementById('maxValues').value;
 
         inverter.getValues(items.names, burstLength,
         function(values)
         {
+          if (plot.barGraph)
+          {
+            chart.config.data = {
+                labels: items.names,
+                datasets: [{
+                    label: "Cell voltages",
+                      backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                    data: Object.values(values).map(function(a) { return a[0]; })
+                }]
+            };
+          }
+          else
+          {
             for (var i = 0; i < burstLength; i++)
             {
                 chart.config.data.labels.push(time);
@@ -135,9 +185,35 @@ var plot = {
                     data.splice(0, Math.max(data.length - maxValues, 0));
                 }
             }
+          }
 
-            chart.update();
-            plot.acquire();
+          chart.update();
+          plot.acquire();
         });
     },
+}
+
+
+var bmsBarGraph = {
+    bargraph: {},
+
+    acquire: function ()
+    {
+	    var items = [ "u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8", "u9", "u10", "u11", "u12", "u13", "u14", "u15" ];
+
+	    inverter.getValues(items, 1,
+	    function(values)
+	    {
+	        bmsBarGraph.bargraph.config.data = {
+	            labels: items,
+	            datasets: [{
+	                label: "Cell voltages",
+                    backgroundColor: 'rgba(54, 162, 235, 0.7)',
+	                data: Object.values(values).map(function(a) { return a[0]; })
+	            }]
+	        };
+	        bmsBarGraph.bargraph.update();
+		    bmsBarGraph.acquire();
+	    });
+    }
 }

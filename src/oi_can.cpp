@@ -607,37 +607,41 @@ bool StartStop(int opmode)
 String StreamValues(String names, int samples) {
   if (state != IDLE) return "";
 
+  JsonDocument doc;
   twai_message_t rxframe;
+
+  File file = SPIFFS.open(jsonFileName, "r");
+  deserializeJson(doc, file);
+  file.close();
 
   int ids[30], numItems = 0;
   String result;
 
   for (int pos = 0; pos >= 0; pos = names.indexOf(',', pos + 1)) {
     String name = names.substring(pos + 1, names.indexOf(',', pos + 1));
-    ids[numItems++] = getId(name);
+    ids[numItems++] = doc[name]["id"].as<int>();
   }
 
   for (int i = 0; i < samples; i++) {
     for (int item = 0; item < numItems; item++) {
       int id = ids[item];
       requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
-    }
 
-    int item = 0;
-    while (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
-      if (item > 0) result += ",";
-      if (rxframe.data[0] == 0x80)
-        result += "0";
-      else {
-        int receivedItem = (rxframe.data[1] << 8) + rxframe.data[3];
-
-        if (receivedItem == ids[item])
-          result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
-        else
+      if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        if (item > 0) result += ",";
+        if (rxframe.data[0] == 0x80)
           result += "0";
+        else {
+          int receivedItem = (rxframe.data[1] << 8) + rxframe.data[3];
+
+          if (receivedItem == id)
+            result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
+          else
+            result += "0";
+        }
       }
-      item++;
     }
+
     result += "\r\n";
   }
   return result;
