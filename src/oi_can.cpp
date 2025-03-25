@@ -463,8 +463,14 @@ void SendCanMapping(WiFiClient client) {
           object["subindex"] = subIndex;
           doc.add(object);
           subIndex++;
-          requestSdoElement(index, subIndex); //request next item
-          reqMapStt = DATAPOSLEN;
+
+          if (subIndex < 100) { //limit maximum items in case there is a bug ;)
+            requestSdoElement(index, subIndex); //request next item
+            reqMapStt = DATAPOSLEN;
+          }
+          else {
+            reqMapStt = DONE;
+          }
         }
         else //should never get here
           reqMapStt = DONE;
