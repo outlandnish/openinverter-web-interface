@@ -1,6 +1,6 @@
-esp32-web-interface
+Open Inverter Web Interface
 =====================
-Web interface for Huebner inverter
+This is a fork of the `esp32-web-interface` for the Huebner inverter. It has been modified to work on the ESP32-C3-DevKitM-1 with a CAN interface and supports multiple Open Inverter devices.
 
 [![Build status](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
