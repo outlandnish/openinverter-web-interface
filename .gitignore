@@ -12,6 +12,9 @@ web/package-lock.json
 web/yarn.lock
 web/pnpm-lock.yaml
 
+# Intlayer
+web/.intlayer/
+
 # Build outputs (web interface compiled files)
 data/dist/
 
