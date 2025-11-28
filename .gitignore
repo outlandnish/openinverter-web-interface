@@ -1,3 +1,26 @@
 .DS_Store
 .pio/
 platformio-local-override.ini
+logs
+
+# Node.js / NPM
+web/node_modules/
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/package-lock.json
+web/yarn.lock
+web/pnpm-lock.yaml
+
+# Build outputs (web interface compiled files)
+data/dist/
+
+# SPIFFS configuration files (user-specific, not version controlled)
+data/wifi.txt
+data/devices.json
+data/last_device.json
+data/*.json
+
+# Development
+.vscode/
+dist/
