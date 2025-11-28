@@ -1,5 +1,5 @@
 import { useContext } from 'preact/hooks'
-import { ToastContext } from '../components/ToastContainer'
+import { ToastContext } from '@components/Toast/ToastContainer'
 
 export function useToast() {
   const context = useContext(ToastContext)

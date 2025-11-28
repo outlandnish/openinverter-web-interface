@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import preact from '@preact/preset-vite'
 import { intlayerPlugin } from 'vite-intlayer'
+import path from 'path'
 
 // Use simulator when VITE_USE_SIMULATOR=true or when running dev:sim
 const useSimulator = process.env.VITE_USE_SIMULATOR === 'true'
@@ -12,6 +13,18 @@ const wsTarget = useSimulator ? 'ws://localhost:4000' : 'ws://inverter.local'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [preact(), intlayerPlugin()],
+
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@components': path.resolve(__dirname, './src/components'),
+      '@pages': path.resolve(__dirname, './src/pages'),
+      '@hooks': path.resolve(__dirname, './src/hooks'),
+      '@api': path.resolve(__dirname, './src/api'),
+      '@utils': path.resolve(__dirname, './src/utils'),
+      '@styles': path.resolve(__dirname, './src/styles'),
+    },
+  },
 
   esbuild: {
     jsx: 'automatic',

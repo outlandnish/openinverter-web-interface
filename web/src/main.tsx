@@ -1,7 +1,7 @@
 import { render } from 'preact'
 import { IntlayerProvider } from 'preact-intlayer'
 import { App } from './App'
-import { ToastProvider } from './components/ToastContainer'
+import { ToastProvider } from '@components/Toast/ToastContainer'
 import './styles/theme.css'
 import './style.css'
 

@@ -1387,17 +1387,45 @@ button:active {
   background: var(--oi-beige);
 }
 
+.spot-values-table thead tr {
+  display: flex;
+  justify-content: space-between;
+}
+
 .spot-values-table th {
   padding: 0.75rem;
-  text-align: left;
   font-weight: 600;
   color: var(--oi-blue);
   border-bottom: 2px solid #e0e0e0;
 }
 
+.spot-values-table th:first-child {
+  flex: 0 1 auto;
+  text-align: left;
+}
+
+.spot-values-table th:last-child {
+  flex: 0 1 auto;
+  text-align: right;
+}
+
 .spot-values-table td {
   padding: 0.75rem;
   border-bottom: 1px solid #f0f0f0;
+}
+
+.spot-values-table tr {
+  display: flex;
+  justify-content: space-between;
+}
+
+.spot-values-table td:first-child {
+  flex: 0 1 auto;
+}
+
+.spot-values-table td:last-child {
+  flex: 0 1 auto;
+  text-align: right;
 }
 
 .spot-values-table tr:hover {

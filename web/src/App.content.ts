@@ -43,6 +43,12 @@ const appContent = {
         de: 'Entwicklungsserver leitet alle API-Aufrufe an http://inverter.local weiter',
       }),
     },
+    notFound: {
+      title: t({
+        en: '404 - Page Not Found',
+        de: '404 - Seite nicht gefunden',
+      }),
+    },
   },
 } satisfies DeclarationContent
 
