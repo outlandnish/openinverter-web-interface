@@ -20,7 +20,7 @@
 #include "driver/gpio.h"
 #include "driver/twai.h"
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <StreamUtils.h>
 #include <ArduinoJson.h>
 #include "oi_can.h"
@@ -72,6 +72,38 @@ static File updateFile;
 static int currentPage = 0;
 static const size_t PAGE_SIZE_BYTES = 1024;
 static int retries = 0;
+static JsonDocument paramJson; // In-memory parameter JSON storage
+static String jsonBuffer;      // Buffer for receiving JSON segments
+
+// Continuous scanning state
+static bool continuousScanActive = false;
+static uint8_t scanStartNode = 1;
+static uint8_t scanEndNode = 32;
+static uint8_t currentScanNode = 1;
+static uint8_t scanSerialPart = 0; // Which part of serial we're reading (0-3)
+static uint32_t scanDeviceSerial[4];
+static unsigned long lastScanTime = 0;
+static const unsigned long SCAN_DELAY_MS = 50; // Delay between node probes
+static DeviceDiscoveryCallback discoveryCallback = nullptr;
+
+// CAN debug helpers
+static void printCanTx(const twai_message_t* frame) {
+  // Debug output disabled
+  // DBG_OUTPUT_PORT.printf("CAN TX: ID=0x%03" PRIx32 " DLC=%d Data=", frame->identifier, frame->data_length_code);
+  // for (int i = 0; i < frame->data_length_code; i++) {
+  //   DBG_OUTPUT_PORT.printf("%02X ", frame->data[i]);
+  // }
+  // DBG_OUTPUT_PORT.println();
+}
+
+static void printCanRx(const twai_message_t* frame) {
+  // Debug output disabled
+  // DBG_OUTPUT_PORT.printf("CAN RX: ID=0x%03" PRIx32 " DLC=%d Data=", frame->identifier, frame->data_length_code);
+  // for (int i = 0; i < frame->data_length_code; i++) {
+  //   DBG_OUTPUT_PORT.printf("%02X ", frame->data[i]);
+  // }
+  // DBG_OUTPUT_PORT.println();
+}
 
 static void requestSdoElement(uint16_t index, uint8_t subIndex) {
   tx_frame.extd = false;
@@ -87,6 +119,7 @@ static void requestSdoElement(uint16_t index, uint8_t subIndex) {
   tx_frame.data[7] = 0;
 
   twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  printCanTx(&tx_frame);
 }
 
 static void setValueSdo(uint16_t index, uint8_t subIndex, uint32_t value) {
@@ -100,19 +133,10 @@ static void setValueSdo(uint16_t index, uint8_t subIndex, uint32_t value) {
   *(uint32_t*)&tx_frame.data[4] = value;
 
   twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  printCanTx(&tx_frame);
 }
 
-static int getId(String name) {
-  JsonDocument doc;
-  JsonDocument filter;
-
-  File file = SPIFFS.open(jsonFileName, "r");
-  filter[name]["id"] = true;
-  deserializeJson(doc, file, DeserializationOption::Filter(filter));
-  file.close();
-
-  return doc[name]["id"].as<int>();
-}
+// getId() removed - web client now sends parameter IDs directly instead of names
 
 static void requestNextSegment(bool toggleBit) {
   tx_frame.extd = false;
@@ -128,6 +152,7 @@ static void requestNextSegment(bool toggleBit) {
   tx_frame.data[7] = 0;
 
   twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  printCanTx(&tx_frame);
 }
 
 static void handleSdoResponse(twai_message_t *rxframe) {
@@ -152,16 +177,9 @@ static void handleSdoResponse(twai_message_t *rxframe) {
           sprintf(jsonFileName, "/%" PRIx32 ".json", serial[3]);
           DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n", serial[0], serial[1], serial[2], serial[3]);
 
-          if (SPIFFS.exists(jsonFileName)) {
-            state = IDLE;
-            DBG_OUTPUT_PORT.println("json file already downloaded");
-          }
-          else {
-            state = OBTAIN_JSON;
-            DBG_OUTPUT_PORT.printf("Downloading json to %s\r\n", jsonFileName);
-            file = SPIFFS.open(jsonFileName, "w+");
-            requestSdoElement(SDO_INDEX_STRINGS, 0); //Initiates JSON upload
-          }
+          // Go to IDLE - JSON will be downloaded on-demand when browser requests it
+          state = IDLE;
+          DBG_OUTPUT_PORT.println("Connection established. Parameter JSON available on request.");
         }
       }
       break;
@@ -169,14 +187,28 @@ static void handleSdoResponse(twai_message_t *rxframe) {
       //Receiving last segment
       if ((rxframe->data[0] & SDO_SIZE_SPECIFIED) && (rxframe->data[0] & SDO_READ) == 0) {
         int size = 7 - ((rxframe->data[0] >> 1) & 0x7);
-        file.write(&rxframe->data[1], size);
-        file.close();
-        DBG_OUTPUT_PORT.println("Download complete");
+        for (int i = 0; i < size; i++) {
+          jsonBuffer += (char)rxframe->data[1 + i];
+        }
+
+        DBG_OUTPUT_PORT.println("JSON download complete");
+        DBG_OUTPUT_PORT.printf("JSON size: %d bytes\r\n", jsonBuffer.length());
+
+        // Parse JSON into paramJson for future use
+        DeserializationError error = deserializeJson(paramJson, jsonBuffer);
+        if (error) {
+          DBG_OUTPUT_PORT.printf("JSON parse error: %s\r\n", error.c_str());
+        } else {
+          DBG_OUTPUT_PORT.println("JSON parsed successfully");
+        }
+
         state = IDLE;
       }
       //Receiving a segment
       else if (rxframe->data[0] == (toggleBit << 4) && (rxframe->data[0] & SDO_READ) == 0) {
-        file.write(&rxframe->data[1], 7);
+        for (int i = 0; i < 7; i++) {
+          jsonBuffer += (char)rxframe->data[1 + i];
+        }
         toggleBit = !toggleBit;
         requestNextSegment(toggleBit);
       }
@@ -228,6 +260,7 @@ static void handleUpdate(twai_message_t *rxframe) {
         updstate = SEND_SIZE;
         DBG_OUTPUT_PORT.printf("Sending ID %" PRIu32 "\r\n", *(uint32_t*)tx_frame.data);
         twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+        printCanTx(&tx_frame);
 
         if (rxframe->data[1] < 1) //boot loader with timing quirk, wait 100 ms
           delay(100);
@@ -245,6 +278,7 @@ static void handleUpdate(twai_message_t *rxframe) {
         currentPage = 0;
         DBG_OUTPUT_PORT.printf("Sending size %u\r\n", tx_frame.data[0]);
         twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+        printCanTx(&tx_frame);
       }
       break;
     case SEND_PAGE:
@@ -277,6 +311,7 @@ static void handleUpdate(twai_message_t *rxframe) {
 
         updstate = SEND_PAGE;
         twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+        printCanTx(&tx_frame);
       }
       else if (rxframe->data[0] == 'C') {
         tx_frame.identifier = 0x7dd;
@@ -288,6 +323,7 @@ static void handleUpdate(twai_message_t *rxframe) {
 
         updstate = CHECK_CRC;
         twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+        printCanTx(&tx_frame);
       }
       break;
     case CHECK_CRC:
@@ -323,7 +359,7 @@ static void handleUpdate(twai_message_t *rxframe) {
 }
 
 int StartUpdate(String fileName) {
-  updateFile = SPIFFS.open(fileName, "r");
+  updateFile = LittleFS.open(fileName, "r");
   //Reset host processor
   setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
   updstate = SEND_MAGIC;
@@ -337,25 +373,49 @@ int GetCurrentUpdatePage() {
   return currentPage;
 }
 
+String GetRawJson() {
+  if (state != IDLE) {
+    DBG_OUTPUT_PORT.println("Cannot get JSON - device busy");
+    return "{}";
+  }
+
+  // Trigger JSON download from device
+  state = OBTAIN_JSON;
+  jsonBuffer = ""; // Clear buffer
+  paramJson.clear(); // Clear parsed JSON
+  DBG_OUTPUT_PORT.println("Downloading parameter JSON from device...");
+  requestSdoElement(SDO_INDEX_STRINGS, 0);
+
+  // Wait for download to complete (with timeout)
+  unsigned long startTime = millis();
+  while (state == OBTAIN_JSON && (millis() - startTime) < 10000) {
+    Loop(); // Process CAN messages
+    delay(1);
+  }
+
+  if (state != IDLE) {
+    DBG_OUTPUT_PORT.println("JSON download timeout or error");
+    state = IDLE;
+    return "{}";
+  }
+
+  DBG_OUTPUT_PORT.println("JSON ready to send to client");
+  return jsonBuffer;
+}
+
 bool SendJson(WiFiClient client) {
   if (state != IDLE) return false;
 
   JsonDocument doc;
   twai_message_t rxframe;
 
-  File file = SPIFFS.open(jsonFileName, "r");
-  auto result = deserializeJson(doc, file);
-  file.close();
-
-  if (result != DeserializationError::Ok) {
-    SPIFFS.remove(jsonFileName); //if json file is invalid, remove it and trigger re-download
-    updstate = REQUEST_JSON;
-    retries = 50;
-    DBG_OUTPUT_PORT.println("JSON file invalid, re-downloading");
+  // Use in-memory JSON if available
+  if (paramJson.isNull() || paramJson.size() == 0) {
+    DBG_OUTPUT_PORT.println("No parameter JSON in memory");
     return false;
   }
 
-  JsonObject root = doc.as<JsonObject>();
+  JsonObject root = paramJson.as<JsonObject>();
   int failed = 0;
 
   for (JsonPair kv : root) {
@@ -365,6 +425,7 @@ bool SendJson(WiFiClient client) {
       requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xff);
 
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK && rxframe.data[3] == (id & 0xFF)) {
+        printCanRx(&rxframe);
         kv.value()["value"] = ((double)*(int32_t*)&rxframe.data[4]) / 32;
       } else {
         failed++;
@@ -379,6 +440,11 @@ bool SendJson(WiFiClient client) {
 }
 
 void SendCanMapping(WiFiClient client) {
+  if (state != IDLE) {
+    DBG_OUTPUT_PORT.println("SendCanMapping called while not IDLE, ignoring");
+    return;
+  }
+
   enum ReqMapStt { START, COBID, DATAPOSLEN, GAINOFS, DONE };
 
   twai_message_t rxframe;
@@ -402,6 +468,7 @@ void SendCanMapping(WiFiClient client) {
       break;
     case COBID:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
         if (rxframe.data[0] != SDO_ABORT) {
           cobid = *(int32_t*)&rxframe.data[4]; //convert bytes to word
           subIndex++;
@@ -422,6 +489,7 @@ void SendCanMapping(WiFiClient client) {
       break;
     case DATAPOSLEN:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
         if (rxframe.data[0] != SDO_ABORT) {
           paramid = *(uint16_t*)&rxframe.data[4];
           pos = rxframe.data[6];
@@ -442,6 +510,7 @@ void SendCanMapping(WiFiClient client) {
       break;
     case GAINOFS:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
         if (rxframe.data[0] != SDO_ABORT) {
           int32_t gainFixedPoint = ((*(uint32_t*)&rxframe.data[4]) & 0xFFFFFF) << (32-24);
           gainFixedPoint >>= (32-24);
@@ -498,13 +567,16 @@ SetResult AddCanMapping(String json) {
   setValueSdo(index, 0, (uint32_t)doc["id"]); //Send CAN Id
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    printCanRx(&rxframe);
     DBG_OUTPUT_PORT.println("Sent COB Id");
     setValueSdo(index, 1, doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) | (doc["length"].as<int32_t>() << 24)); //data item, position and length
     if (rxframe.data[0] != SDO_ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+      printCanRx(&rxframe);
       DBG_OUTPUT_PORT.println("Sent position and length");
       setValueSdo(index, 2, (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) | doc["offset"].as<int32_t>() << 24); //gain and offset
 
       if (rxframe.data[0] != SDO_ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
         if (rxframe.data[0] != SDO_ABORT){
           DBG_OUTPUT_PORT.println("Sent gain and offset -> map successful");
           return Ok;
@@ -535,6 +607,7 @@ SetResult RemoveCanMapping(String json){
   setValueSdo(doc["index"].as<uint32_t>(), doc["subindex"].as<uint8_t>(), 0U); //Writing 0 to map index removes the mapping
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    printCanRx(&rxframe);
     if (rxframe.data[0] != SDO_ABORT){
       DBG_OUTPUT_PORT.println("Item removed");
       return Ok;
@@ -548,16 +621,15 @@ SetResult RemoveCanMapping(String json){
   return CommError;
 }
 
-SetResult SetValue(String name, double value) {
+SetResult SetValue(int paramId, double value) {
   if (state != IDLE) return CommError;
 
   twai_message_t rxframe;
 
-  int id = getId(name);
-
-  setValueSdo(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF, (uint32_t)(value * 32));
+  setValueSdo(SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF, (uint32_t)(value * 32));
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    printCanRx(&rxframe);
     if (rxframe.data[0] == SDO_RESPONSE_DOWNLOAD)
       return Ok;
     else if (*(uint32_t*)&rxframe.data[4] == SDO_ERR_RANGE)
@@ -578,6 +650,7 @@ bool SaveToFlash() {
   setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_SAVE, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
+    printCanRx(&rxframe);
     return true;
   }
   else {
@@ -585,7 +658,7 @@ bool SaveToFlash() {
   }
 }
 
-String StreamValues(String names, int samples) {
+String StreamValues(String paramIds, int samples) {
   if (state != IDLE) return "";
 
   twai_message_t rxframe;
@@ -593,9 +666,10 @@ String StreamValues(String names, int samples) {
   int ids[30], numItems = 0;
   String result;
 
-  for (int pos = 0; pos >= 0; pos = names.indexOf(',', pos + 1)) {
-    String name = names.substring(pos + 1, names.indexOf(',', pos + 1));
-    ids[numItems++] = getId(name);
+  // Parse comma-separated parameter IDs
+  for (int pos = 0; pos >= 0; pos = paramIds.indexOf(',', pos + 1)) {
+    String idStr = paramIds.substring(pos + 1, paramIds.indexOf(',', pos + 1));
+    ids[numItems++] = idStr.toInt();
   }
 
   for (int i = 0; i < samples; i++) {
@@ -606,6 +680,7 @@ String StreamValues(String names, int samples) {
 
     int item = 0;
     while (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+      printCanRx(&rxframe);
       if (item > 0) result += ",";
       if (rxframe.data[0] == 0x80)
         result += "0";
@@ -624,16 +699,15 @@ String StreamValues(String names, int samples) {
   return result;
 }
 
-double GetValue(String name) {
+double GetValue(int paramId) {
   if (state != IDLE) return 0;
 
   twai_message_t rxframe;
 
-  int id = getId(name);
-
-  requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
+  requestSdoElement(SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    printCanRx(&rxframe);
     if (rxframe.data[0] == 0x80)
       return 0;
     else
@@ -687,6 +761,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
     break;
   }
 
+  // Filter for SDO responses and bootloader messages only
   twai_filter_config_t f_config = {.acceptance_code = (uint32_t)(id << 5) | (uint32_t)(0x7de << 21),
                                    .acceptance_mask = 0x001F001F,
                                    .single_filter = false};
@@ -708,6 +783,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 
   _nodeId = nodeId;
   state = OBTAINSERIAL;
+  DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
   requestSdoElement(SDO_INDEX_SERIAL, 0);
   DBG_OUTPUT_PORT.println("Initialized CAN");
 }
@@ -717,6 +793,7 @@ void Loop() {
   twai_message_t rxframe;
 
   if (twai_receive(&rxframe, 0) == ESP_OK) {
+    printCanRx(&rxframe);
     if (rxframe.identifier == (0x580 | _nodeId)) {
       handleSdoResponse(&rxframe);
       recvdResponse = true;
@@ -740,6 +817,356 @@ void Loop() {
      delay(100);
   }
 
+  // Process continuous scanning
+  ProcessContinuousScan();
+
+}
+
+bool ReloadJson() {
+  if (state != IDLE) return false;
+
+  // Remove the cached JSON file to force re-download
+  if (LittleFS.exists(jsonFileName)) {
+    LittleFS.remove(jsonFileName);
+    DBG_OUTPUT_PORT.printf("Removed cached JSON file: %s\r\n", jsonFileName);
+  }
+
+  // Trigger JSON download
+  state = OBTAINSERIAL;
+  requestSdoElement(SDO_INDEX_SERIAL, 0);
+
+  DBG_OUTPUT_PORT.println("Reloading JSON from device");
+  return true;
+}
+
+bool ResetDevice() {
+  if (state != IDLE) return false;
+
+  // Send reset command to the device
+  setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
+
+  DBG_OUTPUT_PORT.println("Device reset command sent");
+
+  // The device will reset immediately and won't send an acknowledgment
+  // After a short delay, trigger JSON reload
+  delay(500); // Give device time to start resetting
+  state = OBTAINSERIAL;
+  retries = 50;
+
+  return true;
+}
+
+// Device management functions
+
+String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
+  if (state != IDLE) return "[]";
+
+  JsonDocument doc;
+  JsonArray devices = doc.to<JsonArray>();
+
+  // Load saved devices to update them
+  JsonDocument savedDoc;
+  if (LittleFS.exists("/devices.json")) {
+    File file = LittleFS.open("/devices.json", "r");
+    if (file) {
+      deserializeJson(savedDoc, file);
+      file.close();
+    }
+  }
+
+  // Ensure devices object exists in saved doc
+  if (!savedDoc.containsKey("devices")) {
+    savedDoc.createNestedObject("devices");
+  }
+
+  JsonObject savedDevices = savedDoc["devices"].as<JsonObject>();
+  bool devicesUpdated = false;
+
+  DBG_OUTPUT_PORT.printf("Scanning CAN bus for devices (nodes %d-%d)...\n", startNodeId, endNodeId);
+
+  // Save current state
+  State prevState = state;
+  uint8_t prevNodeId = _nodeId;
+
+  for (uint8_t nodeId = startNodeId; nodeId <= endNodeId; nodeId++) {
+    twai_message_t rxframe;
+    uint32_t deviceSerial[4];
+    bool deviceFound = true;
+
+    DBG_OUTPUT_PORT.printf("Probing node %d...\n", nodeId);
+
+    // Temporarily set the node ID for scanning
+    _nodeId = nodeId;
+
+    // Request serial number parts
+    for (uint8_t part = 0; part < 4; part++) {
+      requestSdoElement(SDO_INDEX_SERIAL, part);
+
+      if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
+        printCanRx(&rxframe);
+        if (rxframe.identifier == (0x580 | nodeId) &&
+            rxframe.data[0] != SDO_ABORT &&
+            (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
+            rxframe.data[3] == part) {
+          deviceSerial[part] = *(uint32_t*)&rxframe.data[4];
+        } else {
+          deviceFound = false;
+          break;
+        }
+      } else {
+        deviceFound = false;
+        break;
+      }
+    }
+
+    if (deviceFound) {
+      char serialStr[40];
+      sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
+              deviceSerial[0], deviceSerial[1], deviceSerial[2], deviceSerial[3]);
+
+      DBG_OUTPUT_PORT.printf("Found device at node %d: %s\n", nodeId, serialStr);
+
+      // Add to scan results
+      JsonObject device = devices.add<JsonObject>();
+      device["nodeId"] = nodeId;
+      device["serial"] = serialStr;
+      device["lastSeen"] = millis();
+
+      // Update saved devices with new nodeId and lastSeen
+      if (!savedDevices.containsKey(serialStr)) {
+        savedDevices.createNestedObject(serialStr);
+      }
+      JsonObject savedDevice = savedDevices[serialStr].as<JsonObject>();
+      savedDevice["nodeId"] = nodeId;
+      savedDevice["lastSeen"] = millis();
+      devicesUpdated = true;
+
+      DBG_OUTPUT_PORT.printf("Updated stored nodeId for %s to %d\n", serialStr, nodeId);
+    }
+  }
+
+  // Restore previous state
+  _nodeId = prevNodeId;
+  state = prevState;
+
+  // Save updated devices back to LittleFS
+  if (devicesUpdated) {
+    File file = LittleFS.open("/devices.json", "w");
+    if (file) {
+      serializeJson(savedDoc, file);
+      file.close();
+      DBG_OUTPUT_PORT.println("Updated devices.json with new nodeIds");
+    }
+  }
+
+  String result;
+  serializeJson(doc, result);
+  DBG_OUTPUT_PORT.printf("Scan complete. Found %d devices\n", devices.size());
+
+  return result;
+}
+
+String GetSavedDevices() {
+  if (!LittleFS.exists("/devices.json")) {
+    DBG_OUTPUT_PORT.println("No saved devices file");
+    return "{\"devices\":{}}";
+  }
+
+  File file = LittleFS.open("/devices.json", "r");
+  if (!file) {
+    DBG_OUTPUT_PORT.println("Failed to open devices file");
+    return "{\"devices\":{}}";
+  }
+
+  String result = file.readString();
+  file.close();
+
+  DBG_OUTPUT_PORT.println("Loaded saved devices");
+  return result;
+}
+
+bool SaveDeviceName(String serial, String name, int nodeId) {
+  JsonDocument doc;
+
+  // Load existing devices
+  if (LittleFS.exists("/devices.json")) {
+    File file = LittleFS.open("/devices.json", "r");
+    if (file) {
+      deserializeJson(doc, file);
+      file.close();
+    }
+  }
+
+  // Ensure devices object exists
+  if (!doc.containsKey("devices")) {
+    doc.createNestedObject("devices");
+  }
+
+  JsonObject devices = doc["devices"].as<JsonObject>();
+
+  // Get or create device object (serial is the key)
+  if (!devices.containsKey(serial)) {
+    devices.createNestedObject(serial);
+  }
+
+  JsonObject device = devices[serial].as<JsonObject>();
+  device["name"] = name;
+
+  if (nodeId >= 0) {
+    device["nodeId"] = nodeId;
+  }
+
+  DBG_OUTPUT_PORT.printf("Saved device: %s -> %s (nodeId: %d)\n", serial.c_str(), name.c_str(), nodeId);
+
+  // Save back to file
+  File file = LittleFS.open("/devices.json", "w");
+  if (!file) {
+    DBG_OUTPUT_PORT.println("Failed to open devices file for writing");
+    return false;
+  }
+
+  serializeJson(doc, file);
+  file.close();
+
+  DBG_OUTPUT_PORT.println("Saved devices file");
+  return true;
+}
+
+
+// Continuous scanning implementation
+
+void StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
+  if (state != IDLE) {
+    DBG_OUTPUT_PORT.println("Cannot start continuous scan - device busy");
+    return;
+  }
+
+  continuousScanActive = true;
+  scanStartNode = startNodeId;
+  scanEndNode = endNodeId;
+  currentScanNode = startNodeId;
+  scanSerialPart = 0;
+  lastScanTime = 0;
+
+  DBG_OUTPUT_PORT.printf("Started continuous CAN scan (nodes %d-%d)\n", startNodeId, endNodeId);
+}
+
+void StopContinuousScan() {
+  continuousScanActive = false;
+  DBG_OUTPUT_PORT.println("Stopped continuous CAN scan");
+}
+
+bool IsContinuousScanActive() {
+  return continuousScanActive;
+}
+
+void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback) {
+  discoveryCallback = callback;
+}
+
+void ProcessContinuousScan() {
+  if (!continuousScanActive || state != IDLE) {
+    return;
+  }
+
+  unsigned long currentTime = millis();
+  if (currentTime - lastScanTime < SCAN_DELAY_MS) {
+    return; // Not time to probe yet
+  }
+
+  lastScanTime = currentTime;
+
+  // Save current state
+  uint8_t prevNodeId = _nodeId;
+  _nodeId = currentScanNode;
+
+  // Request serial number part
+  requestSdoElement(SDO_INDEX_SERIAL, scanSerialPart);
+
+  twai_message_t rxframe;
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
+    printCanRx(&rxframe);
+
+    if (rxframe.identifier == (0x580 | currentScanNode) &&
+        rxframe.data[0] != SDO_ABORT &&
+        (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
+        rxframe.data[3] == scanSerialPart) {
+
+      scanDeviceSerial[scanSerialPart] = *(uint32_t*)&rxframe.data[4];
+      scanSerialPart++;
+
+      // If we've read all 4 parts, we found a device
+      if (scanSerialPart >= 4) {
+        char serialStr[40];
+        sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
+                scanDeviceSerial[0], scanDeviceSerial[1], scanDeviceSerial[2], scanDeviceSerial[3]);
+
+        DBG_OUTPUT_PORT.printf("Continuous scan found device at node %d: %s\n", currentScanNode, serialStr);
+
+        // Update devices.json with new nodeId and lastSeen
+        JsonDocument savedDoc;
+        if (LittleFS.exists("/devices.json")) {
+          File file = LittleFS.open("/devices.json", "r");
+          if (file) {
+            deserializeJson(savedDoc, file);
+            file.close();
+          }
+        }
+
+        // Ensure devices object exists
+        if (!savedDoc.containsKey("devices")) {
+          savedDoc.createNestedObject("devices");
+        }
+
+        JsonObject devices = savedDoc["devices"].as<JsonObject>();
+
+        // Get or create device object
+        if (!devices.containsKey(serialStr)) {
+          devices.createNestedObject(serialStr);
+        }
+
+        JsonObject device = devices[serialStr].as<JsonObject>();
+        device["nodeId"] = currentScanNode;
+        device["lastSeen"] = currentTime;
+
+        // Save back to file
+        File file = LittleFS.open("/devices.json", "w");
+        if (file) {
+          serializeJson(savedDoc, file);
+          file.close();
+        }
+
+        // Notify via callback
+        if (discoveryCallback) {
+          discoveryCallback(currentScanNode, serialStr, currentTime);
+        }
+
+        // Move to next node
+        scanSerialPart = 0;
+        currentScanNode++;
+        if (currentScanNode > scanEndNode) {
+          currentScanNode = scanStartNode; // Wrap around to start
+        }
+      }
+    } else {
+      // No response or error - move to next node
+      scanSerialPart = 0;
+      currentScanNode++;
+      if (currentScanNode > scanEndNode) {
+        currentScanNode = scanStartNode; // Wrap around to start
+      }
+    }
+  } else {
+    // Timeout - move to next node
+    scanSerialPart = 0;
+    currentScanNode++;
+    if (currentScanNode > scanEndNode) {
+      currentScanNode = scanStartNode; // Wrap around to start
+    }
+  }
+
+  // Restore previous node ID
+  _nodeId = prevNodeId;
 }
 
 }

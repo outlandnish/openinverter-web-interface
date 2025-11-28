@@ -10,9 +10,10 @@ void Config::load() {
     if (settings.version != EEPROM_VERSION) {
         //defaults
         settings.version = EEPROM_VERSION;
-        settings.canRXPin = GPIO_NUM_26;
-        settings.canTXPin = GPIO_NUM_25;
+        settings.canRXPin = GPIO_NUM_4;
+        settings.canTXPin = GPIO_NUM_5;
         settings.canEnablePin = 0;
+        settings.canSpeed = 2; // Default to 500k (Baud500k = 2)
     }
 }
 int Config::getCanRXPin() {
@@ -38,6 +39,14 @@ void Config::setCanTXPin(int pin) {
 
 void Config::setCanRXPin(int pin) {
     settings.canRXPin = pin;
+}
+
+int Config::getCanSpeed() {
+    return settings.canSpeed;
+}
+
+void Config::setCanSpeed(int speed) {
+    settings.canSpeed = speed;
 }
 
 void Config::saveSettings() {

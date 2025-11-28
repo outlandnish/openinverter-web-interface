@@ -28,17 +28,35 @@ enum BaudRate { Baud125k, Baud250k, Baud500k };
 void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin);
 void Loop();
 bool SendJson(WiFiClient c);
+String GetRawJson(); // Get parameter JSON directly from device
 void SendCanMapping(WiFiClient c);
 SetResult AddCanMapping(String json);
 SetResult RemoveCanMapping(String json);
-SetResult SetValue(String name, double value);
-double GetValue(String name);
+SetResult SetValue(int paramId, double value);
+double GetValue(int paramId);
 bool SaveToFlash();
-String StreamValues(String names, int samples);
+String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
 int GetCurrentUpdatePage();
 int GetNodeId();
 BaudRate GetBaudRate();
+bool ReloadJson();
+bool ResetDevice();
+
+// Device management functions
+String ScanDevices(uint8_t startNodeId, uint8_t endNodeId);
+String GetSavedDevices();
+bool SaveDeviceName(String serial, String name, int nodeId = -1);
+
+// Continuous scanning functions
+void StartContinuousScan(uint8_t startNodeId = 1, uint8_t endNodeId = 32);
+void StopContinuousScan();
+bool IsContinuousScanActive();
+void ProcessContinuousScan(); // Call this in Loop() to process scanning
+
+// Callback type for device discoveries
+typedef void (*DeviceDiscoveryCallback)(uint8_t nodeId, const char* serial, uint32_t lastSeen);
+void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback);
 
 }
 #endif
