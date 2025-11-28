@@ -1,0 +1,105 @@
+/**
+ * OpenInverter Web Interface Theme
+ * Main theme file that imports all theme modules
+ */
+
+/* Theme Variables */
+@import './theme/colors.css';
+@import './theme/spacing.css';
+@import './theme/typography.css';
+
+/* Component Styles */
+@import './components/buttons.css';
+@import './components/icons.css';
+
+/* Base Resets */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: var(--leading-normal);
+}
+
+/* Base Typography */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--font-semibold);
+  line-height: var(--leading-tight);
+}
+
+h1 {
+  font-size: var(--text-3xl);
+}
+
+h2 {
+  font-size: var(--text-2xl);
+  color: var(--oi-blue);
+}
+
+h3 {
+  font-size: var(--text-xl);
+}
+
+h4 {
+  font-size: var(--text-lg);
+}
+
+/* Base Form Elements */
+input[type="text"],
+input[type="number"],
+input[type="file"],
+select,
+textarea {
+  width: 100%;
+  padding: var(--spacing-md);
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  font-family: var(--font-sans);
+  transition: border-color 0.2s ease;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--oi-blue);
+}
+
+label {
+  display: block;
+  margin-bottom: var(--spacing-sm);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+/* Utility Classes */
+.container {
+  max-width: var(--container-xl);
+  margin: 0 auto;
+  padding: 0 var(--spacing-lg);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-accent {
+  color: var(--oi-blue);
+}

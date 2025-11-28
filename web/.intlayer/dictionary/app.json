@@ -1,0 +1,41 @@
+{
+  "key": "app",
+  "content": {
+    "nodeType": "translation",
+    "translation": {
+      "en": {
+        "title": "Open Inverter",
+        "loading": "Loading...",
+        "settings": {
+          "title": "Device Parameters",
+          "nodeId": "Node ID:",
+          "canSpeed": "CAN Speed:",
+          "saveButton": "Save Settings",
+          "savedAlert": "Settings saved!"
+        },
+        "info": {
+          "description": "This is a Preact-based web interface for your ESP32 inverter controller.",
+          "devProxy": "Development server proxies all API calls to http://inverter.local"
+        }
+      },
+      "de": {
+        "title": "Open Inverter",
+        "loading": "Wird geladen...",
+        "settings": {
+          "title": "Geräteparameter",
+          "nodeId": "Knoten-ID:",
+          "canSpeed": "CAN-Geschwindigkeit:",
+          "saveButton": "Einstellungen speichern",
+          "savedAlert": "Einstellungen gespeichert!"
+        },
+        "info": {
+          "description": "Dies ist eine Preact-basierte Weboberfläche für Ihren ESP32-Wechselrichter-Controller.",
+          "devProxy": "Entwicklungsserver leitet alle API-Aufrufe an http://inverter.local weiter"
+        }
+      }
+    }
+  },
+  "localIds": [
+    "app::local::src/App.content.ts"
+  ]
+}

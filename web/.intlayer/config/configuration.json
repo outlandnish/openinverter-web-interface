@@ -1,0 +1,122 @@
+{
+  "internationalization": {
+    "locales": [
+      "en",
+      "de"
+    ],
+    "requiredLocales": [
+      "en",
+      "de"
+    ],
+    "strictMode": "inclusive",
+    "defaultLocale": "en"
+  },
+  "routing": {
+    "mode": "prefix-no-default",
+    "storage": [
+      "cookie",
+      "header"
+    ],
+    "basePath": ""
+  },
+  "content": {
+    "fileExtensions": [
+      ".content.ts",
+      ".content.js",
+      ".content.cjs",
+      ".content.cjx",
+      ".content.mjs",
+      ".content.mjx",
+      ".content.json",
+      ".content.tsx",
+      ".content.jsx"
+    ],
+    "baseDir": "/Users/outlandnish/dev/esp32-web-interface/web",
+    "excludedPath": [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/.intlayer/**",
+      "**/.next/**",
+      "**/.nuxt/**",
+      "**/.expo/**",
+      "**/.vercel/**",
+      "**/.turbo/**",
+      "**/.tanstack/**"
+    ],
+    "watch": true,
+    "contentDir": [
+      "/Users/outlandnish/dev/esp32-web-interface/web"
+    ],
+    "moduleAugmentationDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/types",
+    "unmergedDictionariesDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/unmerged_dictionary",
+    "remoteDictionariesDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/remote_dictionary",
+    "dictionariesDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/dictionary",
+    "dynamicDictionariesDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/dynamic_dictionary",
+    "fetchDictionariesDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/fetch_dictionary",
+    "typesDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/types",
+    "mainDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/main",
+    "configDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/config",
+    "cacheDir": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/cache",
+    "watchedFilesPattern": [
+      "/**/*.content.ts",
+      "/**/*.content.js",
+      "/**/*.content.cjs",
+      "/**/*.content.cjx",
+      "/**/*.content.mjs",
+      "/**/*.content.mjx",
+      "/**/*.content.json",
+      "/**/*.content.tsx",
+      "/**/*.content.jsx"
+    ],
+    "watchedFilesPatternWithPath": [
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.ts",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.js",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.cjs",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.cjx",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.mjs",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.mjx",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.json",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.tsx",
+      "/Users/outlandnish/dev/esp32-web-interface/web/**/*.content.jsx"
+    ],
+    "outputFilesPatternWithPath": "/Users/outlandnish/dev/esp32-web-interface/web/.intlayer/dictionary/**/*.json"
+  },
+  "editor": {
+    "applicationURL": "",
+    "editorURL": "http://localhost:8000",
+    "cmsURL": "https://intlayer.org",
+    "backendURL": "https://back.intlayer.org",
+    "port": 8000,
+    "enabled": true,
+    "dictionaryPriorityStrategy": "local_first",
+    "liveSync": true,
+    "liveSyncPort": 4000,
+    "liveSyncURL": "http://localhost:4000"
+  },
+  "log": {
+    "mode": "default",
+    "prefix": "\u001b[38;5;239m[intlayer] \u001b[0m"
+  },
+  "ai": {},
+  "build": {
+    "importMode": "static",
+    "traversePattern": [
+      "**/*.{js,ts,mjs,cjs,jsx,tsx,mjx,cjx,vue,svelte,svte}",
+      "!**/node_modules/**"
+    ],
+    "outputFormat": [
+      "cjs",
+      "esm"
+    ],
+    "cache": true
+  },
+  "dictionary": {
+    "fill": true
+  },
+  "metadata": {
+    "name": "Intlayer",
+    "version": "7.3.1",
+    "doc": "https://intlayer.org/docs"
+  }
+}

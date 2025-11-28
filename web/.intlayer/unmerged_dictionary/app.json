@@ -1,0 +1,77 @@
+[
+  {
+    "key": "app",
+    "content": {
+      "title": {
+        "nodeType": "translation",
+        "translation": {
+          "en": "Open Inverter",
+          "de": "Open Inverter"
+        }
+      },
+      "loading": {
+        "nodeType": "translation",
+        "translation": {
+          "en": "Loading...",
+          "de": "Wird geladen..."
+        }
+      },
+      "settings": {
+        "title": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "Device Parameters",
+            "de": "Geräteparameter"
+          }
+        },
+        "nodeId": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "Node ID:",
+            "de": "Knoten-ID:"
+          }
+        },
+        "canSpeed": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "CAN Speed:",
+            "de": "CAN-Geschwindigkeit:"
+          }
+        },
+        "saveButton": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "Save Settings",
+            "de": "Einstellungen speichern"
+          }
+        },
+        "savedAlert": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "Settings saved!",
+            "de": "Einstellungen gespeichert!"
+          }
+        }
+      },
+      "info": {
+        "description": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "This is a Preact-based web interface for your ESP32 inverter controller.",
+            "de": "Dies ist eine Preact-basierte Weboberfläche für Ihren ESP32-Wechselrichter-Controller."
+          }
+        },
+        "devProxy": {
+          "nodeType": "translation",
+          "translation": {
+            "en": "Development server proxies all API calls to http://inverter.local",
+            "de": "Entwicklungsserver leitet alle API-Aufrufe an http://inverter.local weiter"
+          }
+        }
+      }
+    },
+    "localId": "app::local::src/App.content.ts",
+    "location": "local",
+    "filePath": "src/App.content.ts"
+  }
+]
