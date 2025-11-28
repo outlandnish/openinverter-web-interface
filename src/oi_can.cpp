@@ -54,7 +54,9 @@
 #define SDO_CMD_SAVE          0
 #define SDO_CMD_LOAD          1
 #define SDO_CMD_RESET         2
-
+#define SDO_CMD_DEFAULTS      3
+#define SDO_CMD_START         4
+#define SDO_CMD_STOP          5
 
 namespace OICan {
 
@@ -530,8 +532,14 @@ void SendCanMapping(WiFiClient client) {
           object["subindex"] = subIndex;
           doc.add(object);
           subIndex++;
-          requestSdoElement(index, subIndex); //request next item
-          reqMapStt = DATAPOSLEN;
+
+          if (subIndex < 100) { //limit maximum items in case there is a bug ;)
+            requestSdoElement(index, subIndex); //request next item
+            reqMapStt = DATAPOSLEN;
+          }
+          else {
+            reqMapStt = DONE;
+          }
         }
         else //should never get here
           reqMapStt = DONE;
@@ -661,7 +669,12 @@ bool SaveToFlash() {
 String StreamValues(String paramIds, int samples) {
   if (state != IDLE) return "";
 
+  JsonDocument doc;
   twai_message_t rxframe;
+
+  File file = SPIFFS.open(jsonFileName, "r");
+  deserializeJson(doc, file);
+  file.close();
 
   int ids[30], numItems = 0;
   String result;
@@ -676,7 +689,6 @@ String StreamValues(String paramIds, int samples) {
     for (int item = 0; item < numItems; item++) {
       int id = ids[item];
       requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
-    }
 
     int item = 0;
     while (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
@@ -691,9 +703,17 @@ String StreamValues(String paramIds, int samples) {
           result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
         else
           result += "0";
+        else {
+          int receivedItem = (rxframe.data[1] << 8) + rxframe.data[3];
+
+          if (receivedItem == id)
+            result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
+          else
+            result += "0";
+        }
       }
-      item++;
     }
+
     result += "\r\n";
   }
   return result;
