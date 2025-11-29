@@ -14,6 +14,8 @@ void Config::load() {
         settings.canTXPin = GPIO_NUM_5;
         settings.canEnablePin = 0;
         settings.canSpeed = 2; // Default to 500k (Baud500k = 2)
+        settings.scanStartNode = 1;
+        settings.scanEndNode = 32;
     }
 }
 int Config::getCanRXPin() {
@@ -47,6 +49,22 @@ int Config::getCanSpeed() {
 
 void Config::setCanSpeed(int speed) {
     settings.canSpeed = speed;
+}
+
+int Config::getScanStartNode() {
+    return settings.scanStartNode;
+}
+
+void Config::setScanStartNode(int node) {
+    settings.scanStartNode = node;
+}
+
+int Config::getScanEndNode() {
+    return settings.scanEndNode;
+}
+
+void Config::setScanEndNode(int node) {
+    settings.scanEndNode = node;
 }
 
 void Config::saveSettings() {

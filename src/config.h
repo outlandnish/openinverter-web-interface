@@ -1,13 +1,15 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define EEPROM_VERSION 3
+#define EEPROM_VERSION 4
 typedef struct {
     int version;
     int canRXPin;
     int canTXPin;
     int canEnablePin;
     int canSpeed;
+    int scanStartNode;
+    int scanEndNode;
 } EEPROMSettings;
 
 
@@ -28,6 +30,12 @@ class Config
 
     int getCanSpeed();
     void setCanSpeed(int speed);
+
+    int getScanStartNode();
+    void setScanStartNode(int node);
+
+    int getScanEndNode();
+    void setScanEndNode(int node);
 
     void saveSettings();
   private:
