@@ -50,7 +50,7 @@ String GetSavedDevices();
 bool SaveDeviceName(String serial, String name, int nodeId = -1);
 
 // Continuous scanning functions
-void StartContinuousScan(uint8_t startNodeId = 1, uint8_t endNodeId = 32);
+bool StartContinuousScan(uint8_t startNodeId = 1, uint8_t endNodeId = 32); // Returns true if scan started successfully
 void StopContinuousScan();
 bool IsContinuousScanActive();
 void ProcessContinuousScan(); // Call this in Loop() to process scanning
@@ -58,6 +58,10 @@ void ProcessContinuousScan(); // Call this in Loop() to process scanning
 // Callback type for device discoveries
 typedef void (*DeviceDiscoveryCallback)(uint8_t nodeId, const char* serial, uint32_t lastSeen);
 void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback);
+
+// Callback type for scan progress
+typedef void (*ScanProgressCallback)(uint8_t currentNode, uint8_t startNode, uint8_t endNode);
+void SetScanProgressCallback(ScanProgressCallback callback);
 
 // Heartbeat functions to check device status
 void ProcessHeartbeat(); // Call this in Loop() to send periodic heartbeats
