@@ -1,6 +1,7 @@
 import { createContext, ComponentChildren } from 'preact'
 import { useContext, useEffect, useState, useCallback } from 'preact/hooks'
 import { useWebSocketContext } from './WebSocketContext'
+import { useToast } from '@hooks/useToast'
 import { api, SavedDevice } from '@api/inverter'
 import { saveLastDevice, getLastDevice } from '@utils/lastDevice'
 
@@ -20,6 +21,8 @@ export interface DeviceContextValue {
   scanning: boolean
   devicesSeenInCurrentScan: Set<string>
   lastScanStartTime: number
+  currentScanNode: number | null
+  scanRange: { start: number; end: number } | null
 
   // Last connected device
   lastConnectedSerial: string | null
@@ -45,9 +48,14 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
   const [lastConnectedSerial, setLastConnectedSerial] = useState<string | null>(null)
   const [lastScanStartTime, setLastScanStartTime] = useState<number>(0)
   const [devicesSeenInCurrentScan, setDevicesSeenInCurrentScan] = useState<Set<string>>(new Set())
+  const [currentScanNode, setCurrentScanNode] = useState<number | null>(null)
+  const [scanRange, setScanRange] = useState<{ start: number; end: number } | null>(null)
 
   // Use shared WebSocket connection
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
+
+  // Use toast for error notifications
+  const { showError } = useToast()
 
   // Subscribe to WebSocket messages for device updates
   useEffect(() => {
@@ -55,6 +63,11 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
       console.log('[DeviceContext] WebSocket event:', message.event, message.data)
 
       switch (message.event) {
+        case 'error':
+          console.error('[DeviceContext] Error:', message.data.message)
+          showError(message.data.message)
+          break
+
         case 'deviceDiscovered':
           console.log('Device discovered:', {
             serial: message.data.serial,
@@ -96,7 +109,19 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
             setLastScanStartTime(scanStartTime)
             // Clear the devices seen in current scan
             setDevicesSeenInCurrentScan(new Set())
+          } else {
+            // Clear scan progress when scan stops
+            setCurrentScanNode(null)
+            setScanRange(null)
           }
+          break
+
+        case 'scanProgress':
+          setCurrentScanNode(message.data.currentNode)
+          setScanRange({
+            start: message.data.startNode,
+            end: message.data.endNode
+          })
           break
 
         case 'savedDevices':
@@ -218,6 +243,8 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
     scanning,
     devicesSeenInCurrentScan,
     lastScanStartTime,
+    currentScanNode,
+    scanRange,
     lastConnectedSerial,
     loadDevices,
     startScan,
