@@ -2,12 +2,13 @@ import { useState, useEffect } from 'preact/hooks'
 import { useLocation, useRoute } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
-import { useWebSocket } from '@hooks/useWebSocket'
+import { useWebSocketContext } from '@contexts/WebSocketContext'
 import MultiLineChart, { COLORS, type DataPoint } from '@components/MultiLineChart'
 import Layout from '@components/Layout'
 import ConnectionStatus from '@components/ConnectionStatus'
 import { useToast } from '@hooks/useToast'
 import { api } from '@api/inverter'
+import { formatParameterValue, normalizeEnumValue } from '@utils/parameterDisplay'
 
 type HistoricalData = Record<string, DataPoint[]>
 const MAX_HISTORY_POINTS = 100
@@ -46,9 +47,12 @@ export default function DeviceDetails() {
   // Load device parameters
   const { params, loading: paramsLoading, error: paramsError, refresh: refreshParams, getDisplayName } = useParams(routeParams?.serial)
 
-  // WebSocket connection
-  const { isConnected, sendMessage } = useWebSocket('/ws', {
-    onMessage: (message) => {
+  // Use shared WebSocket connection
+  const { isConnected, sendMessage, subscribe } = useWebSocketContext()
+
+  // Subscribe to WebSocket messages and load settings when ready
+  useEffect(() => {
+    const unsubscribe = subscribe((message: any) => {
       console.log('WebSocket event:', message.event, message.data)
 
       switch (message.event) {
@@ -125,20 +129,18 @@ export default function DeviceDetails() {
           const otaErrorMsg = message.data.error || 'Unknown error occurred'
           setOtaStatus('error')
           setOtaError(otaErrorMsg)
-          showError(`${content.otaUpdateFailed} ${otaErrorMsg}`)
+          showError(content.otaUpdateFailedWithError({ error: otaErrorMsg }))
           break
       }
-    },
-    onOpen: () => {
+    })
+
+    // Load settings after subscription is set up and WebSocket is connected
+    if (isConnected) {
       console.log('WebSocket connected, loading settings...')
       loadSettings()
     }
-  })
 
-  useEffect(() => {
-    if (isConnected) {
-      loadSettings()
-    }
+    return unsubscribe
   }, [isConnected])
 
   // Load device name from saved devices
@@ -170,7 +172,18 @@ export default function DeviceDetails() {
 
   const loadSettings = () => {
     setLoading(true)
-    sendMessage('getNodeId')
+
+    // First connect to the device, then get node ID
+    if (routeParams?.serial) {
+      // Try to connect to the device with the serial
+      // The nodeId might not be known yet, so we'll get it from the response
+      sendMessage('connect', {
+        serial: routeParams.serial
+      })
+
+      // Also request the node ID
+      sendMessage('getNodeId')
+    }
   }
 
   const handleSaveNodeId = () => {
@@ -297,7 +310,7 @@ export default function DeviceDetails() {
       const errorMessage = error instanceof Error ? error.message : 'Upload failed'
       setOtaStatus('error')
       setOtaError(errorMessage)
-      showError(`${content.otaUpdateFailed} ${errorMessage}`)
+      showError(content.otaUpdateFailedWithError({ error: errorMessage }))
     }
   }
 
@@ -318,14 +331,6 @@ export default function DeviceDetails() {
     setCollapsedSections(newCollapsed)
   }
 
-  if (loading) {
-    return (
-      <div class="container">
-        <div class="loading">{appContent.loading}</div>
-      </div>
-    )
-  }
-
   // Organize parameters by category
   const spotParams = params ? Object.entries(params).filter(([_, param]) => !param.isparam) : []
   const categories = new Map<string, Array<[string, any]>>()
@@ -341,29 +346,52 @@ export default function DeviceDetails() {
   return (
     <Layout currentSerial={routeParams?.serial}>
       <div class="container">
-        <div class="page-header">
-          <div class="page-title-row">
-            <h1 class="page-title">{deviceName || routeParams?.serial || content.deviceMonitor}</h1>
-            <ConnectionStatus
-              connected={deviceConnected}
-              label={deviceConnected ? content.connected : content.disconnected}
-            />
+        {loading ? (
+          <div class="loading-container" style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '400px',
+            gap: '1rem'
+          }}>
+            <div class="spinner" style={{
+              border: '4px solid rgba(0, 0, 0, 0.1)',
+              borderTop: '4px solid #007bff',
+              borderRadius: '50%',
+              width: '48px',
+              height: '48px',
+              animation: 'spin 1s linear infinite'
+            }} />
+            <div class="loading-text" style={{ fontSize: '1.2rem', color: '#666' }}>
+              {content.connectingToDevice}
+            </div>
           </div>
-          <div class="device-info-inline">
-            <div class="info-badge">
-              <span class="info-label">{content.serial}</span>
-              <span class="info-value">{routeParams?.serial || content.unknown}</span>
+        ) : (
+          <>
+            <div class="page-header">
+              <div class="page-title-row">
+                <h1 class="page-title">{deviceName || routeParams?.serial || content.deviceMonitor}</h1>
+                <ConnectionStatus
+                  connected={deviceConnected}
+                  label={deviceConnected ? content.connected : content.disconnected}
+                />
+              </div>
+              <div class="device-info-inline">
+                <div class="info-badge">
+                  <span class="info-label">{content.serial}</span>
+                  <span class="info-value">{routeParams?.serial || content.unknown}</span>
+                </div>
+                <div class="info-badge">
+                  <span class="info-label">{content.nodeId}</span>
+                  <span class="info-value">{nodeId || 'N/A'}</span>
+                </div>
+                <div class="info-badge">
+                  <span class="info-label">{content.firmware}</span>
+                  <span class="info-value">{firmwareVersion || content.unknown}</span>
+                </div>
+              </div>
             </div>
-            <div class="info-badge">
-              <span class="info-label">{content.nodeId}</span>
-              <span class="info-value">{nodeId || 'N/A'}</span>
-            </div>
-            <div class="info-badge">
-              <span class="info-label">{content.firmware}</span>
-              <span class="info-value">{firmwareVersion || content.unknown}</span>
-            </div>
-          </div>
-        </div>
 
       {/* Spot Values Monitoring Card */}
       <section id="live-monitoring" class="card">
@@ -394,7 +422,7 @@ export default function DeviceDetails() {
               onClick={handleStartStop}
               disabled={!isConnected || !params}
             >
-              {streaming ? `⏸ ${content.stopMonitoring}` : `▶ ${content.startMonitoring}`}
+              {streaming ? <>⏸ {content.stopMonitoring}</> : <>▶ {content.startMonitoring}</>}
             </button>
             {!streaming && (
               <>
@@ -412,7 +440,7 @@ export default function DeviceDetails() {
         {streaming && (
           <div class="streaming-indicator">
             <span class="pulse-dot"></span>
-            {content.streaming} {selectedParams.size} {content.parametersEvery} {updateInterval}ms
+            {content.streamingStatus({ count: selectedParams.size, interval: updateInterval })}
           </div>
         )}
 
@@ -451,13 +479,12 @@ export default function DeviceDetails() {
                         ? spotValues[paramId]
                         : param.value
 
-                      const displayValue = value !== undefined && value !== null
-                        ? `${typeof value === 'number' ? value.toFixed(2) : value}${param.unit ? ' ' + param.unit : ''}`
-                        : ''
+                      // Use utility function to format the display value
+                      const displayValue = formatParameterValue(param, value)
 
                       return (
-                        <tr 
-                          key={key} 
+                        <tr
+                          key={key}
                           class={selectedParams.has(key) ? 'selected' : ''}
                           onClick={() => !streaming && handleParamToggle(key)}
                           style={{ cursor: streaming ? 'default' : 'pointer' }}
@@ -494,7 +521,7 @@ export default function DeviceDetails() {
                       />
                       <span style={{ color: hasData ? COLORS[Array.from(chartParams).indexOf(key) % COLORS.length] : '#999' }}>
                         {getDisplayName(key)}
-                        {!hasData && ` (${content.noData})`}
+                        {!hasData && <> ({content.noData})</>}
                       </span>
                     </label>
                   )
@@ -584,16 +611,16 @@ export default function DeviceDetails() {
                           <div class="parameter-input-group">
                             {hasEnum ? (
                               <select
-                                value={param.value}
+                                value={normalizeEnumValue(param.value)}
                                 onChange={async (e) => {
                                   const newValue = (e.target as HTMLSelectElement).value
                                   try {
                                     await api.setParamById(paramId, newValue)
-                                    showSuccess(`${getDisplayName(key)} ${content.parameterUpdated}`)
+                                    showSuccess(content.parameterUpdatedSuccess({ paramName: getDisplayName(key) }))
                                     // Refresh params to show new value
                                     await refreshParams()
                                   } catch (error) {
-                                    showError(`${content.failedToUpdate} ${getDisplayName(key)}`)
+                                    showError(content.failedToUpdateParam({ paramName: getDisplayName(key) }))
                                   }
                                 }}
                                 disabled={!isConnected}
@@ -618,12 +645,12 @@ export default function DeviceDetails() {
                                   
                                   // Validate range
                                   if (param.minimum !== undefined && newValue < param.minimum) {
-                                    showError(`${content.valueMustBeAtLeast} ${param.minimum}`)
+                                    showError(content.valueMustBeAtLeast({ min: param.minimum }))
                                     target.value = param.value.toString()
                                     return
                                   }
                                   if (param.maximum !== undefined && newValue > param.maximum) {
-                                    showError(`${content.valueMustBeAtMost} ${param.maximum}`)
+                                    showError(content.valueMustBeAtMost({ max: param.maximum }))
                                     target.value = param.value.toString()
                                     return
                                   }
@@ -631,11 +658,11 @@ export default function DeviceDetails() {
                                   if (newValue !== param.value) {
                                     try {
                                       await api.setParamById(paramId, newValue)
-                                      showSuccess(`${getDisplayName(key)} ${content.parameterUpdated}`)
+                                      showSuccess(content.parameterUpdatedSuccess({ paramName: getDisplayName(key) }))
                                       // Refresh params to show new value
                                       await refreshParams()
                                     } catch (error) {
-                                      showError(`${content.failedToUpdate} ${getDisplayName(key)}`)
+                                      showError(content.failedToUpdateParam({ paramName: getDisplayName(key) }))
                                       target.value = param.value.toString()
                                     }
                                   }
@@ -647,7 +674,7 @@ export default function DeviceDetails() {
                             {param.minimum !== undefined && param.maximum !== undefined && !hasEnum && (
                               <small class="parameter-hint">
                                 {content.range} {param.minimum} - {param.maximum}
-                                {param.default !== undefined && ` (${content.default} ${param.default})`}
+                                {param.default !== undefined && <> ({content.default} {param.default})</>}
                               </small>
                             )}
                           </div>
@@ -790,6 +817,8 @@ export default function DeviceDetails() {
           </div>
         )}
       </section>
+          </>
+        )}
       </div>
     </Layout>
   )

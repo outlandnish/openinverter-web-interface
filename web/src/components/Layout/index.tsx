@@ -1,9 +1,9 @@
 import { ComponentChildren } from 'preact'
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useRef } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import Sidebar from '@components/Sidebar'
-import { SavedDevice } from '@api/inverter'
-import { useWebSocket } from '@hooks/useWebSocket'
+import { useWebSocketContext } from '@contexts/WebSocketContext'
+import { useDeviceContext } from '@contexts/DeviceContext'
 import { useToast } from '@hooks/useToast'
 import { useSwipeGesture } from '@hooks/useSwipeGesture'
 
@@ -16,62 +16,33 @@ interface LayoutProps {
 export default function Layout({ children, currentSerial, onQuickScan }: LayoutProps) {
   const content = useIntlayer('layout')
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [savedDevices, setSavedDevices] = useState<Record<string, SavedDevice>>({})
-  const [scanning, setScanning] = useState(false)
   const { showError, showWarning, showInfo } = useToast()
-  const [hasConnectedOnce, setHasConnectedOnce] = useState(false)
+  const prevConnectedRef = useRef<boolean>(false)
+  const hasConnectedOnceRef = useRef<boolean>(false)
 
-  // WebSocket connection for real-time device updates
-  const { isConnected, sendMessage } = useWebSocket('/ws', {
-    onMessage: (message) => {
-      switch (message.event) {
-        case 'deviceDiscovered':
-          // Update device in saved devices
-          setSavedDevices(prev => {
-            const serial = message.data.serial
-            const existing = prev[serial] || {}
-            return {
-              ...prev,
-              [serial]: {
-                ...existing,
-                nodeId: message.data.nodeId,
-                lastSeen: message.data.lastSeen,
-                name: message.data.name || existing.name,
-              }
-            }
-          })
-          break
+  // Use shared WebSocket connection
+  const { isConnected } = useWebSocketContext()
 
-        case 'savedDevices':
-          if (message.data.devices) {
-            setSavedDevices(message.data.devices)
-          }
-          break
+  // Use shared Device context
+  const { savedDevices, scanning } = useDeviceContext()
 
-        case 'scanStatus':
-          setScanning(message.data.active)
-          break
-      }
-    },
-    onOpen: () => {
-      if (hasConnectedOnce) {
-        showInfo(content.reconnected)
-      }
-      setHasConnectedOnce(true)
-    },
-    onClose: () => {
-      if (hasConnectedOnce) {
-        showWarning(content.connectionLost)
-      }
-    }
-  })
-
-  // Track connection status changes
+  // Handle connection state changes
   useEffect(() => {
-    if (!isConnected && hasConnectedOnce) {
-      showError(content.attemptingReconnect)
+    // Only show messages if connection state actually changed
+    if (isConnected !== prevConnectedRef.current) {
+      if (isConnected) {
+        if (hasConnectedOnceRef.current) {
+          showInfo(content.reconnected)
+        } else {
+          hasConnectedOnceRef.current = true
+        }
+      } else if (hasConnectedOnceRef.current) {
+        showWarning(content.connectionLost)
+        showError(content.attemptingReconnect)
+      }
+      prevConnectedRef.current = isConnected
     }
-  }, [isConnected, hasConnectedOnce])
+  }, [isConnected])
 
   // Auto-open sidebar on desktop
   useEffect(() => {

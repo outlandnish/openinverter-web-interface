@@ -1,4 +1,4 @@
-import { t, type DeclarationContent } from 'intlayer'
+import { t, insert, type DeclarationContent } from 'intlayer'
 
 const spotValuesContent = {
   key: 'spot-values',
@@ -35,13 +35,9 @@ const spotValuesContent = {
       en: 'Select None',
       de: 'Keine auswählen',
     }),
-    streaming: t({
-      en: 'Streaming',
-      de: 'Streaming',
-    }),
-    parametersEvery: t({
-      en: 'parameters every',
-      de: 'Parameter alle',
+    streamingStatus: insert({
+      en: 'Streaming {{count}} parameters every {{interval}}ms',
+      de: 'Streaming {{count}} Parameter alle {{interval}}ms',
     }),
     tableView: t({
       en: '📊 Table View',

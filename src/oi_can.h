@@ -25,7 +25,8 @@ namespace OICan {
 enum SetResult { Ok, UnknownIndex, ValueOutOfRange, CommError };
 enum BaudRate { Baud125k, Baud250k, Baud500k };
 
-void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin);
+void InitCAN(BaudRate baud, int txPin, int rxPin); // Initialize CAN bus only
+void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin); // Initialize and connect to device
 void Loop();
 bool SendJson(WiFiClient c);
 String GetRawJson(); // Get parameter JSON directly from device
@@ -57,6 +58,10 @@ void ProcessContinuousScan(); // Call this in Loop() to process scanning
 // Callback type for device discoveries
 typedef void (*DeviceDiscoveryCallback)(uint8_t nodeId, const char* serial, uint32_t lastSeen);
 void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback);
+
+// Heartbeat functions to check device status
+void ProcessHeartbeat(); // Call this in Loop() to send periodic heartbeats
+void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen); // Update lastSeen and notify clients
 
 }
 #endif

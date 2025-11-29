@@ -1,4 +1,4 @@
-import { t, type DeclarationContent } from 'intlayer'
+import { t, insert, type DeclarationContent } from 'intlayer'
 
 const deviceDetailsContent = {
   key: 'device-details',
@@ -18,6 +18,10 @@ const deviceDetailsContent = {
     deviceDisconnected: t({
       en: 'Device disconnected',
       de: 'Gerät getrennt',
+    }),
+    connectingToDevice: t({
+      en: 'Connecting to device...',
+      de: 'Verbindung zum Gerät wird hergestellt...',
     }),
     serial: t({
       en: 'Serial:',
@@ -59,13 +63,9 @@ const deviceDetailsContent = {
       en: 'Select None',
       de: 'Keine auswählen',
     }),
-    streaming: t({
-      en: 'Streaming',
-      de: 'Streaming',
-    }),
-    parametersEvery: t({
-      en: 'parameters every',
-      de: 'Parameter alle',
+    streamingStatus: insert({
+      en: 'Streaming {{count}} parameters every {{interval}}ms',
+      de: 'Streaming {{count}} Parameter alle {{interval}}ms',
     }),
     tableView: t({
       en: '📊 Table View',
@@ -123,13 +123,13 @@ const deviceDetailsContent = {
       en: 'Failed to save parameters',
       de: 'Fehler beim Speichern der Parameter',
     }),
-    parameterUpdated: t({
-      en: 'updated',
-      de: 'aktualisiert',
+    parameterUpdatedSuccess: insert({
+      en: '{{paramName}} updated',
+      de: '{{paramName}} aktualisiert',
     }),
-    failedToUpdate: t({
-      en: 'Failed to update',
-      de: 'Fehler beim Aktualisieren',
+    failedToUpdateParam: insert({
+      en: 'Failed to update {{paramName}}',
+      de: 'Fehler beim Aktualisieren {{paramName}}',
     }),
     range: t({
       en: 'Range:',
@@ -139,13 +139,13 @@ const deviceDetailsContent = {
       en: 'default:',
       de: 'Standard:',
     }),
-    valueMustBeAtLeast: t({
-      en: 'Value must be at least',
-      de: 'Wert muss mindestens sein',
+    valueMustBeAtLeast: insert({
+      en: 'Value must be at least {{min}}',
+      de: 'Wert muss mindestens {{min}} sein',
     }),
-    valueMustBeAtMost: t({
-      en: 'Value must be at most',
-      de: 'Wert darf höchstens sein',
+    valueMustBeAtMost: insert({
+      en: 'Value must be at most {{max}}',
+      de: 'Wert darf höchstens {{max}} sein',
     }),
     firmwareUpdate: t({
       en: 'Firmware Update (OTA)',
@@ -215,9 +215,9 @@ const deviceDetailsContent = {
       en: 'Try Again',
       de: 'Erneut versuchen',
     }),
-    otaUpdateFailed: t({
-      en: 'OTA Update Failed:',
-      de: 'OTA-Update fehlgeschlagen:',
+    otaUpdateFailedWithError: insert({
+      en: 'OTA Update Failed: {{error}}',
+      de: 'OTA-Update fehlgeschlagen: {{error}}',
     }),
   },
 } satisfies DeclarationContent

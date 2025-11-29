@@ -205,7 +205,7 @@ export default function SpotValues() {
               onClick={handleStartStop}
               disabled={!isConnected}
             >
-              {streaming ? `⏸ ${content.stopMonitoring}` : `▶ ${content.startMonitoring}`}
+              {streaming ? <>⏸ {content.stopMonitoring}</> : <>▶ {content.startMonitoring}</>}
             </button>
             {!streaming && (
               <>
@@ -223,7 +223,7 @@ export default function SpotValues() {
         {streaming && (
           <div class="streaming-indicator">
             <span class="pulse-dot"></span>
-            {content.streaming} {selectedParams.size} {content.parametersEvery} {interval}ms
+            {content.streamingStatus({ count: selectedParams.size, interval })}
           </div>
         )}
 
@@ -309,7 +309,7 @@ export default function SpotValues() {
                     />
                     <span style={{ color: hasData ? COLORS[Array.from(chartParams).indexOf(key) % COLORS.length] : '#999' }}>
                       {getDisplayName(key)}
-                      {!hasData && ` (${content.noData})`}
+                      {!hasData && <> ({content.noData})</>}
                     </span>
                   </label>
                 )

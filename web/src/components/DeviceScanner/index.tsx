@@ -50,7 +50,7 @@ export default function DeviceScanner({ scanning, onScan, deviceCount, disabled 
             <circle cx="12" cy="12" r="10"></circle>
             <path d="M9 12l2 2 4-4"></path>
           </svg>
-          <span>{content.foundDevices} {deviceCount} {deviceCount !== 1 ? content.devices : content.device}</span>
+          <span>{deviceCount !== 1 ? content.foundDevicesCountPlural({ count: deviceCount }) : content.foundDevicesCount({ count: deviceCount })}</span>
         </div>
       )}
     </div>

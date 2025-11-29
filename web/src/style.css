@@ -611,6 +611,11 @@ button:active {
   color: #155724;
 }
 
+.device-status.offline {
+  background: #f8d7da;
+  color: #721c24;
+}
+
 .empty-state-centered {
   display: flex;
   flex-direction: column;

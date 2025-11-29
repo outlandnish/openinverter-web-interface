@@ -54,6 +54,9 @@
 #include <StreamString.h>
 #include <LittleFS.h>
 #include <time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/uart.h"
 #include "oi_can.h"
 #include "config.h"
@@ -68,6 +71,104 @@
 #define STATUS_LED_PIN 8
 #define STATUS_LED_COUNT 1
 #define STATUS_LED_CHANNEL 0
+
+// FreeRTOS Queue handles
+QueueHandle_t canCommandQueue = nullptr;
+QueueHandle_t canEventQueue = nullptr;
+
+// Command types for CAN task
+enum CANCommandType {
+  CMD_START_SCAN,
+  CMD_STOP_SCAN,
+  CMD_CONNECT,
+  CMD_SET_NODE_ID,
+  CMD_SET_DEVICE_NAME,
+  CMD_GET_NODE_ID,
+  CMD_START_SPOT_VALUES,
+  CMD_STOP_SPOT_VALUES
+};
+
+// Event types from CAN task
+enum CANEventType {
+  EVT_DEVICE_DISCOVERED,
+  EVT_SCAN_STATUS,
+  EVT_CONNECTED,
+  EVT_NODE_ID_INFO,
+  EVT_NODE_ID_SET,
+  EVT_SPOT_VALUES_STATUS,
+  EVT_SPOT_VALUES,
+  EVT_DEVICE_NAME_SET
+};
+
+// Command message structure
+struct CANCommand {
+  CANCommandType type;
+  union {
+    struct {
+      uint8_t start;
+      uint8_t end;
+    } scan;
+    struct {
+      uint8_t nodeId;
+      char serial[50];
+    } connect;
+    struct {
+      uint8_t nodeId;
+    } setNodeId;
+    struct {
+      char serial[50];
+      char name[50];
+      int nodeId;
+    } setDeviceName;
+    struct {
+      int paramIds[100];
+      int paramCount;
+      uint32_t interval;
+    } spotValues;
+  } data;
+};
+
+// Event message structure
+struct CANEvent {
+  CANEventType type;
+  union {
+    struct {
+      uint8_t nodeId;
+      char serial[50];
+      uint32_t lastSeen;
+      char name[50];
+    } deviceDiscovered;
+    struct {
+      bool active;
+    } scanStatus;
+    struct {
+      uint8_t nodeId;
+      char serial[50];
+    } connected;
+    struct {
+      uint8_t id;
+      uint8_t speed;
+    } nodeIdInfo;
+    struct {
+      uint8_t id;
+      uint8_t speed;
+    } nodeIdSet;
+    struct {
+      bool active;
+      uint32_t interval;
+      int paramCount;
+    } spotValuesStatus;
+    struct {
+      uint32_t timestamp;
+      char valuesJson[1024]; // JSON string of values
+    } spotValues;
+    struct {
+      bool success;
+      char serial[50];
+      char name[50];
+    } deviceNameSet;
+  } data;
+};
 
 
 //HardwareSerial Inverter(INVERTER_PORT);
@@ -333,8 +434,8 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         serializeJson(response, output);
         client->text(output);
 
-        DBG_OUTPUT_PORT.printf("Started spot values streaming: %d params, %dms interval\n",
-                               spotValuesParamIds.size(), spotValuesInterval);
+        DBG_OUTPUT_PORT.printf("Started spot values streaming: %zu params, %lums interval\n",
+                               spotValuesParamIds.size(), (unsigned long)spotValuesInterval);
 
       } else if (action == "stopSpotValues") {
         spotValuesActive = false;
@@ -492,6 +593,138 @@ bool loadWiFiCredentials(String &ssid, String &password) {
   return true;
 }
 
+// CAN processing task - runs independently on separate core
+void canTask(void* parameter) {
+  DBG_OUTPUT_PORT.println("[CAN Task] Started");
+
+  CANCommand cmd;
+
+  while(true) {
+    // Process commands from WebSocket
+    if (xQueueReceive(canCommandQueue, &cmd, 0) == pdTRUE) {
+      switch(cmd.type) {
+        case CMD_START_SCAN:
+          DBG_OUTPUT_PORT.printf("[CAN Task] Starting scan %d-%d\n", cmd.data.scan.start, cmd.data.scan.end);
+          OICan::StartContinuousScan(cmd.data.scan.start, cmd.data.scan.end);
+
+          // Send scan status event
+          {
+            CANEvent evt;
+            evt.type = EVT_SCAN_STATUS;
+            evt.data.scanStatus.active = true;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_STOP_SCAN:
+          DBG_OUTPUT_PORT.println("[CAN Task] Stopping scan");
+          OICan::StopContinuousScan();
+
+          // Send scan status event
+          {
+            CANEvent evt;
+            evt.type = EVT_SCAN_STATUS;
+            evt.data.scanStatus.active = false;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_CONNECT:
+          DBG_OUTPUT_PORT.printf("[CAN Task] Connecting to node %d\n", cmd.data.connect.nodeId);
+          {
+            OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
+            OICan::Init(cmd.data.connect.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
+
+            // Send connected event
+            CANEvent evt;
+            evt.type = EVT_CONNECTED;
+            evt.data.connected.nodeId = cmd.data.connect.nodeId;
+            strcpy(evt.data.connected.serial, cmd.data.connect.serial);
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_SET_NODE_ID:
+          DBG_OUTPUT_PORT.printf("[CAN Task] Setting node ID to %d\n", cmd.data.setNodeId.nodeId);
+          {
+            OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
+            OICan::Init(cmd.data.setNodeId.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
+
+            // Send node ID set event
+            CANEvent evt;
+            evt.type = EVT_NODE_ID_SET;
+            evt.data.nodeIdSet.id = OICan::GetNodeId();
+            evt.data.nodeIdSet.speed = OICan::GetBaudRate();
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_GET_NODE_ID:
+          {
+            CANEvent evt;
+            evt.type = EVT_NODE_ID_INFO;
+            evt.data.nodeIdInfo.id = OICan::GetNodeId();
+            evt.data.nodeIdInfo.speed = OICan::GetBaudRate();
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_SET_DEVICE_NAME:
+          {
+            bool success = OICan::SaveDeviceName(cmd.data.setDeviceName.serial, cmd.data.setDeviceName.name, cmd.data.setDeviceName.nodeId);
+            CANEvent evt;
+            evt.type = EVT_DEVICE_NAME_SET;
+            evt.data.deviceNameSet.success = success;
+            strcpy(evt.data.deviceNameSet.serial, cmd.data.setDeviceName.serial);
+            strcpy(evt.data.deviceNameSet.name, cmd.data.setDeviceName.name);
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_START_SPOT_VALUES:
+          // Handle start spot values
+          spotValuesActive = true;
+          spotValuesInterval = cmd.data.spotValues.interval;
+          spotValuesParamIds.clear();
+          for(int i = 0; i < cmd.data.spotValues.paramCount; i++) {
+            spotValuesParamIds.push_back(cmd.data.spotValues.paramIds[i]);
+          }
+
+          spotValuesTicker.attach_ms(spotValuesInterval, broadcastSpotValues);
+
+          {
+            CANEvent evt;
+            evt.type = EVT_SPOT_VALUES_STATUS;
+            evt.data.spotValuesStatus.active = true;
+            evt.data.spotValuesStatus.interval = spotValuesInterval;
+            evt.data.spotValuesStatus.paramCount = spotValuesParamIds.size();
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_STOP_SPOT_VALUES:
+          spotValuesActive = false;
+          spotValuesTicker.detach();
+          spotValuesParamIds.clear();
+
+          {
+            CANEvent evt;
+            evt.type = EVT_SPOT_VALUES_STATUS;
+            evt.data.spotValuesStatus.active = false;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+      }
+    }
+
+    // Run CAN processing loop
+    OICan::Loop();
+
+    // Small delay to prevent task starvation
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
 void setup(void){
   DBG_OUTPUT_PORT.begin(115200);
   //Inverter.setRxBufferSize(50000);
@@ -592,9 +825,10 @@ void setup(void){
     digitalWrite(config.getCanEnablePin(), LOW);
   }
 
-  // Initialize CAN with stored speed
+  // Initialize CAN bus at startup
+  DBG_OUTPUT_PORT.println("Initializing CAN bus...");
   OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
-  OICan::Init(1, baud, config.getCanTXPin(), config.getCanRXPin());
+  OICan::InitCAN(baud, config.getCanTXPin(), config.getCanRXPin());
 
   // Set device discovery callback for continuous scanning
   OICan::SetDeviceDiscoveryCallback(broadcastDeviceDiscovery);

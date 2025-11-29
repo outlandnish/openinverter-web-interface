@@ -23,6 +23,8 @@
 #include <LittleFS.h>
 #include <StreamUtils.h>
 #include <ArduinoJson.h>
+#include <map>
+#include <vector>
 #include "oi_can.h"
 
 #define DBG_OUTPUT_PORT Serial
@@ -669,12 +671,7 @@ bool SaveToFlash() {
 String StreamValues(String paramIds, int samples) {
   if (state != IDLE) return "";
 
-  JsonDocument doc;
   twai_message_t rxframe;
-
-  File file = SPIFFS.open(jsonFileName, "r");
-  deserializeJson(doc, file);
-  file.close();
 
   int ids[30], numItems = 0;
   String result;
@@ -689,6 +686,7 @@ String StreamValues(String paramIds, int samples) {
     for (int item = 0; item < numItems; item++) {
       int id = ids[item];
       requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
+    }
 
     int item = 0;
     while (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
@@ -703,17 +701,9 @@ String StreamValues(String paramIds, int samples) {
           result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
         else
           result += "0";
-        else {
-          int receivedItem = (rxframe.data[1] << 8) + rxframe.data[3];
-
-          if (receivedItem == id)
-            result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
-          else
-            result += "0";
-        }
       }
+      item++;
     }
-
     result += "\r\n";
   }
   return result;
@@ -746,6 +736,64 @@ BaudRate GetBaudRate() {
   return baudRate;
 }
 
+// Initialize CAN bus without connecting to a specific device
+void InitCAN(BaudRate baud, int txPin, int rxPin) {
+  twai_general_config_t g_config = {
+        .mode = TWAI_MODE_NORMAL,
+        .tx_io = static_cast<gpio_num_t>(txPin),
+        .rx_io = static_cast<gpio_num_t>(rxPin),
+        .clkout_io = TWAI_IO_UNUSED,
+        .bus_off_io = TWAI_IO_UNUSED,
+        .tx_queue_len = 30,
+        .rx_queue_len = 30,
+        .alerts_enabled = TWAI_ALERT_NONE,
+        .clkout_divider = 0,
+        .intr_flags = 0
+  };
+
+  twai_stop();
+  twai_driver_uninstall();
+
+  twai_timing_config_t t_config;
+  baudRate = baud;
+
+  switch (baud)
+  {
+  case Baud125k:
+    t_config = TWAI_TIMING_CONFIG_125KBITS();
+    break;
+  case Baud250k:
+    t_config = TWAI_TIMING_CONFIG_250KBITS();
+    break;
+  case Baud500k:
+    t_config = TWAI_TIMING_CONFIG_500KBITS();
+    break;
+  }
+
+  // Accept all messages for scanning (no filtering)
+  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+  if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
+     DBG_OUTPUT_PORT.println("CAN driver installed");
+  } else {
+     DBG_OUTPUT_PORT.println("Failed to install CAN driver");
+     return;
+  }
+
+  // Start TWAI driver
+  if (twai_start() == ESP_OK) {
+    DBG_OUTPUT_PORT.println("CAN driver started");
+  } else {
+    DBG_OUTPUT_PORT.println("Failed to start CAN driver");
+    return;
+  }
+
+  _nodeId = 0; // No specific device connected yet
+  state = IDLE;
+  DBG_OUTPUT_PORT.println("CAN bus initialized (no device connected)");
+}
+
+// Initialize CAN and connect to a specific device
 void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   twai_general_config_t g_config = {
         .mode = TWAI_MODE_NORMAL,
@@ -787,17 +835,17 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
                                    .single_filter = false};
 
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
-     printf("Driver installed\n");
+     DBG_OUTPUT_PORT.println("CAN driver installed");
   } else {
-     printf("Failed to install driver\n");
+     DBG_OUTPUT_PORT.println("Failed to install CAN driver");
      return;
   }
 
   // Start TWAI driver
   if (twai_start() == ESP_OK) {
-    printf("Driver started\n");
+    DBG_OUTPUT_PORT.println("CAN driver started");
   } else {
-    printf("Failed to start driver\n");
+    DBG_OUTPUT_PORT.println("Failed to start CAN driver");
     return;
   }
 
@@ -805,7 +853,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   state = OBTAINSERIAL;
   DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
   requestSdoElement(SDO_INDEX_SERIAL, 0);
-  DBG_OUTPUT_PORT.println("Initialized CAN");
+  DBG_OUTPUT_PORT.println("Connected to device");
 }
 
 void Loop() {
@@ -839,6 +887,9 @@ void Loop() {
 
   // Process continuous scanning
   ProcessContinuousScan();
+
+  // Process heartbeat to check device status
+  ProcessHeartbeat();
 
 }
 
@@ -1085,7 +1136,16 @@ void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback) {
 }
 
 void ProcessContinuousScan() {
-  if (!continuousScanActive || state != IDLE) {
+  if (!continuousScanActive) {
+    return;
+  }
+
+  if (state != IDLE) {
+    static unsigned long lastDebug = 0;
+    if (millis() - lastDebug > 5000) { // Only log every 5 seconds
+      DBG_OUTPUT_PORT.printf("Scan paused: state=%d (not IDLE)\n", state);
+      lastDebug = millis();
+    }
     return;
   }
 
@@ -1187,6 +1247,175 @@ void ProcessContinuousScan() {
 
   // Restore previous node ID
   _nodeId = prevNodeId;
+}
+
+// Heartbeat implementation
+static unsigned long lastHeartbeatTime = 0;
+static const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // Base interval: 5 seconds
+static const unsigned long MAX_HEARTBEAT_INTERVAL_MS = 60000; // Max backoff: 60 seconds
+static int heartbeatDeviceIndex = 0;
+
+// Per-device heartbeat backoff state (serial -> next heartbeat time)
+static std::map<String, unsigned long> deviceNextHeartbeat;
+static std::map<String, int> deviceFailureCount;
+
+void ProcessHeartbeat() {
+  // Don't send heartbeats if we're scanning or not in IDLE state
+  if (continuousScanActive || state != IDLE) {
+    return;
+  }
+
+  unsigned long currentTime = millis();
+  if (currentTime - lastHeartbeatTime < HEARTBEAT_INTERVAL_MS) {
+    return; // Not time for heartbeat yet
+  }
+
+  lastHeartbeatTime = currentTime;
+
+  // Load saved devices
+  JsonDocument savedDoc;
+  if (!LittleFS.exists("/devices.json")) {
+    return; // No devices to heartbeat
+  }
+
+  File file = LittleFS.open("/devices.json", "r");
+  if (!file) {
+    return;
+  }
+
+  deserializeJson(savedDoc, file);
+  file.close();
+
+  if (!savedDoc.containsKey("devices")) {
+    return;
+  }
+
+  JsonObject devices = savedDoc["devices"].as<JsonObject>();
+
+  // Get list of device serials
+  std::vector<String> deviceSerials;
+  for (JsonPair kv : devices) {
+    deviceSerials.push_back(kv.key().c_str());
+  }
+
+  if (deviceSerials.empty()) {
+    return;
+  }
+
+  // Cycle through devices, one per heartbeat interval
+  if (heartbeatDeviceIndex >= deviceSerials.size()) {
+    heartbeatDeviceIndex = 0;
+  }
+
+  String serial = deviceSerials[heartbeatDeviceIndex];
+  JsonObject device = devices[serial].as<JsonObject>();
+
+  if (!device.containsKey("nodeId")) {
+    heartbeatDeviceIndex++;
+    return;
+  }
+
+  uint8_t nodeId = device["nodeId"].as<uint8_t>();
+
+  // Don't send heartbeat to the currently active device
+  if (nodeId == _nodeId) {
+    heartbeatDeviceIndex++;
+    return;
+  }
+
+  // Check if it's time to heartbeat this device (exponential backoff)
+  if (deviceNextHeartbeat.count(serial) > 0 && currentTime < deviceNextHeartbeat[serial]) {
+    heartbeatDeviceIndex++;
+    return; // Not time yet for this device
+  }
+
+  // Save current node ID
+  uint8_t prevNodeId = _nodeId;
+  _nodeId = nodeId;
+
+  // Send a simple request to check if device is alive
+  // Request first part of serial number as a lightweight ping
+  requestSdoElement(SDO_INDEX_SERIAL, 0);
+
+  twai_message_t rxframe;
+  bool deviceResponded = false;
+
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
+    if (rxframe.identifier == (0x580 | nodeId) &&
+        rxframe.data[0] != SDO_ABORT) {
+      deviceResponded = true;
+
+      // Device responded! Update lastSeen
+      UpdateDeviceLastSeen(serial.c_str(), currentTime);
+
+      DBG_OUTPUT_PORT.printf("Heartbeat: Device %s (node %d) is alive\n", serial.c_str(), nodeId);
+
+      // Reset failure count and backoff
+      deviceFailureCount[serial] = 0;
+      deviceNextHeartbeat[serial] = currentTime + HEARTBEAT_INTERVAL_MS;
+    }
+  }
+
+  if (!deviceResponded) {
+    // Device didn't respond - apply exponential backoff
+    int failures = deviceFailureCount[serial];
+    deviceFailureCount[serial] = failures + 1;
+
+    // Calculate backoff: base_interval * 2^failures, capped at max
+    unsigned long backoffInterval = HEARTBEAT_INTERVAL_MS * (1 << failures);
+    if (backoffInterval > MAX_HEARTBEAT_INTERVAL_MS) {
+      backoffInterval = MAX_HEARTBEAT_INTERVAL_MS;
+    }
+
+    deviceNextHeartbeat[serial] = currentTime + backoffInterval;
+
+    DBG_OUTPUT_PORT.printf("Heartbeat: Device %s (node %d) not responding (failures: %d, next try in %lums)\n",
+                           serial.c_str(), nodeId, failures + 1, (unsigned long)backoffInterval);
+  }
+
+  // Restore previous node ID
+  _nodeId = prevNodeId;
+
+  // Move to next device
+  heartbeatDeviceIndex++;
+}
+
+void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen) {
+  // Update devices.json
+  JsonDocument savedDoc;
+  if (LittleFS.exists("/devices.json")) {
+    File file = LittleFS.open("/devices.json", "r");
+    if (file) {
+      deserializeJson(savedDoc, file);
+      file.close();
+    }
+  }
+
+  if (!savedDoc.containsKey("devices")) {
+    savedDoc.createNestedObject("devices");
+  }
+
+  JsonObject devices = savedDoc["devices"].as<JsonObject>();
+
+  if (!devices.containsKey(serial)) {
+    devices.createNestedObject(serial);
+  }
+
+  JsonObject device = devices[serial].as<JsonObject>();
+  device["lastSeen"] = lastSeen;
+
+  // Save back to file
+  File file = LittleFS.open("/devices.json", "w");
+  if (file) {
+    serializeJson(savedDoc, file);
+    file.close();
+  }
+
+  // Notify via callback (will broadcast to WebSocket clients)
+  if (discoveryCallback) {
+    uint8_t nodeId = device["nodeId"] | 0;
+    discoveryCallback(nodeId, serial, lastSeen);
+  }
 }
 
 }

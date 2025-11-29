@@ -1,4 +1,4 @@
-import { t, type DeclarationContent } from 'intlayer'
+import { t, insert, type DeclarationContent } from 'intlayer'
 
 const deviceScannerContent = {
   key: 'device-scanner',
@@ -19,17 +19,13 @@ const deviceScannerContent = {
       en: 'Scanning CAN bus (nodes 0-255)...',
       de: 'CAN-Bus wird gescannt (Knoten 0-255)...',
     }),
-    foundDevices: t({
-      en: 'Found',
-      de: 'Gefunden',
+    foundDevicesCount: insert({
+      en: 'Found {{count}} device',
+      de: 'Gefunden {{count}} Gerät',
     }),
-    device: t({
-      en: 'device',
-      de: 'Gerät',
-    }),
-    devices: t({
-      en: 'devices',
-      de: 'Geräte',
+    foundDevicesCountPlural: insert({
+      en: 'Found {{count}} devices',
+      de: 'Gefunden {{count}} Geräte',
     }),
   },
 } satisfies DeclarationContent

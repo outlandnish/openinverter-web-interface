@@ -51,6 +51,10 @@ const systemOverviewContent = {
       en: 'Online',
       de: 'Online',
     }),
+    offline: t({
+      en: 'Offline',
+      de: 'Offline',
+    }),
   },
 } satisfies DeclarationContent
 
