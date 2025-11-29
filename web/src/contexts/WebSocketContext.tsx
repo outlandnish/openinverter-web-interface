@@ -61,6 +61,7 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
       ws.onerror = (error) => {
         console.error('WebSocket error:', error)
         setIsConnecting(false)
+        setIsConnected(false)
       }
 
       ws.onmessage = (event) => {
