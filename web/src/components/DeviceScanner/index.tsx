@@ -1,14 +1,35 @@
-import { useIntlayer } from 'preact-intlayer'
+import { useIntlayer } from 'react-intlayer'
 
 interface DeviceScannerProps {
   scanning: boolean
   onScan: () => void
   deviceCount: number
   disabled?: boolean
+  currentScanNode?: number | null
+  scanRange?: { start: number; end: number } | null
 }
 
-export default function DeviceScanner({ scanning, onScan, deviceCount, disabled = false }: DeviceScannerProps) {
+export default function DeviceScanner({
+  scanning,
+  onScan,
+  disabled = false,
+  currentScanNode,
+  scanRange
+}: DeviceScannerProps) {
   const content = useIntlayer('device-scanner')
+
+  const getScanMessage = () => {
+    if (!scanRange) {
+      return content.scanningCanBus.value
+    }
+
+    if (currentScanNode !== null && currentScanNode !== undefined) {
+      return `Scanning CAN bus (${scanRange.start}-${scanRange.end}): Node ${currentScanNode}...`
+    }
+
+    return `Scanning CAN bus (${scanRange.start}-${scanRange.end})...`
+  }
+
   return (
     <div class="scan-controls-inline">
       <div class="scan-buttons">
@@ -16,7 +37,7 @@ export default function DeviceScanner({ scanning, onScan, deviceCount, disabled 
           <button
             class="scan-icon-only scanning"
             onClick={onScan}
-            title={content.stopScanning}
+            title={content.stopScanning.value}
             disabled={disabled}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -27,7 +48,7 @@ export default function DeviceScanner({ scanning, onScan, deviceCount, disabled 
           <button
             class="scan-icon-only"
             onClick={onScan}
-            title={disabled ? content.cannotScanDisconnected : content.scanCanBus}
+            title={disabled ? content.cannotScanDisconnected.value : content.scanCanBus.value}
             disabled={disabled}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -40,17 +61,7 @@ export default function DeviceScanner({ scanning, onScan, deviceCount, disabled 
       {scanning && (
         <div class="scan-status-inline">
           <div class="spinner"></div>
-          <span>{content.scanningCanBus}</span>
-        </div>
-      )}
-
-      {!scanning && deviceCount > 0 && (
-        <div class="scan-result-inline">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9 12l2 2 4-4"></path>
-          </svg>
-          <span>{deviceCount !== 1 ? content.foundDevicesCountPlural({ count: deviceCount }) : content.foundDevicesCount({ count: deviceCount })}</span>
+          <span>{getScanMessage()}</span>
         </div>
       )}
     </div>

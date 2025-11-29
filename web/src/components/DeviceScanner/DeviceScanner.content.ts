@@ -19,14 +19,6 @@ const deviceScannerContent = {
       en: 'Scanning CAN bus (nodes 0-255)...',
       de: 'CAN-Bus wird gescannt (Knoten 0-255)...',
     }),
-    foundDevicesCount: insert({
-      en: 'Found {{count}} device',
-      de: 'Gefunden {{count}} Gerät',
-    }),
-    foundDevicesCountPlural: insert({
-      en: 'Found {{count}} devices',
-      de: 'Gefunden {{count}} Geräte',
-    }),
   },
 } satisfies DeclarationContent
 

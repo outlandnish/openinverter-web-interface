@@ -1,17 +1,19 @@
-import { useState } from 'preact/hooks'
+import { useState, useEffect } from 'preact/hooks'
 import { useLocation } from 'wouter'
-import { useIntlayer } from 'preact-intlayer'
+import { useIntlayer } from 'react-intlayer'
 import DeviceScanner from '@components/DeviceScanner'
 import DeviceNaming from '@components/DeviceNaming'
 import DisconnectedState from '@components/DisconnectedState'
 import Layout from '@components/Layout'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceContext, type MergedDevice } from '@contexts/DeviceContext'
+import { api } from '@api/inverter'
 
 export default function SystemOverview() {
   const [, setLocation] = useLocation()
   const content = useIntlayer('system-overview')
   const [namingDevice, setNamingDevice] = useState<MergedDevice | null>(null)
+  const [configuredScanRange, setConfiguredScanRange] = useState({ start: 1, end: 32 })
 
   // Use shared WebSocket connection
   const { isConnected, isConnecting } = useWebSocketContext()
@@ -25,8 +27,27 @@ export default function SystemOverview() {
     startScan,
     stopScan,
     setDeviceName,
-    connectToDevice
+    connectToDevice,
+    currentScanNode,
+    scanRange: activeScanRange
   } = useDeviceContext()
+
+  // Load scan range from settings
+  useEffect(() => {
+    const loadScanRange = async () => {
+      try {
+        const settings = await api.getSettings()
+        setConfiguredScanRange({
+          start: settings.scanStartNode,
+          end: settings.scanEndNode
+        })
+      } catch (error) {
+        console.error('Failed to load scan range settings:', error)
+        // Keep defaults if loading fails
+      }
+    }
+    loadScanRange()
+  }, [])
 
   // Reconnect handler (WebSocket auto-reconnects, this just reloads the page)
   const handleReconnect = () => {
@@ -39,15 +60,12 @@ export default function SystemOverview() {
       return
     }
 
-    const start = 0
-    const end = 255
-
     if (scanning) {
       // Stop scan
       stopScan()
     } else {
-      // Start continuous scan
-      startScan(start, end)
+      // Start continuous scan with configured range
+      startScan(configuredScanRange.start, configuredScanRange.end)
     }
   }
 
@@ -99,6 +117,8 @@ export default function SystemOverview() {
           onScan={handleScan}
           deviceCount={mergedDevices.length}
           disabled={!isConnected}
+          currentScanNode={currentScanNode}
+          scanRange={activeScanRange}
         />
 
         {mergedDevices.length === 0 ? (
