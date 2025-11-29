@@ -75,6 +75,30 @@ const settingsContent = {
       en: 'Failed to save settings',
       de: 'Fehler beim Speichern der Einstellungen',
     }),
+    scanConfiguration: t({
+      en: 'Scan Configuration',
+      de: 'Scan-Konfiguration',
+    }),
+    scanConfigurationInfo: t({
+      en: 'Configure the default node ID range for CAN bus scanning.',
+      de: 'Konfigurieren Sie den Standard-Node-ID-Bereich für das Scannen des CAN-Bus.',
+    }),
+    scanStartNode: t({
+      en: 'Scan Start Node',
+      de: 'Scan-Startknoten',
+    }),
+    scanStartNodeHint: t({
+      en: 'First node ID to scan (0-255, default: 1)',
+      de: 'Erste zu scannende Knoten-ID (0-255, Standard: 1)',
+    }),
+    scanEndNode: t({
+      en: 'Scan End Node',
+      de: 'Scan-Endknoten',
+    }),
+    scanEndNodeHint: t({
+      en: 'Last node ID to scan (0-255, default: 32)',
+      de: 'Letzte zu scannende Knoten-ID (0-255, Standard: 32)',
+    }),
   },
 } satisfies DeclarationContent
 

@@ -158,6 +158,14 @@ class InverterAPI {
   }
 
   /**
+   * Get device settings as JSON
+   */
+  async getSettings(): Promise<DeviceSettings> {
+    const response = await fetch('/settings')
+    return response.json()
+  }
+
+  /**
    * Update device settings
    */
   async updateSettings(settings: DeviceSettings): Promise<string> {
@@ -166,6 +174,8 @@ class InverterAPI {
       canTXPin: settings.canTXPin.toString(),
       canEnablePin: settings.canEnablePin.toString(),
       canSpeed: settings.canSpeed.toString(),
+      scanStartNode: settings.scanStartNode.toString(),
+      scanEndNode: settings.scanEndNode.toString(),
     })
     const response = await fetch(`/settings?${params}`)
     return response.text()
@@ -241,6 +251,8 @@ export interface DeviceSettings {
   canTXPin: number
   canEnablePin: number
   canSpeed: number
+  scanStartNode: number
+  scanEndNode: number
 }
 
 export const api = new InverterAPI()
