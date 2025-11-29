@@ -55,6 +55,10 @@ const systemOverviewContent = {
       en: 'Offline',
       de: 'Offline',
     }),
+    scanningNode: t({
+      en: 'Scanning node:',
+      de: 'Scanne Knoten:',
+    }),
   },
 } satisfies DeclarationContent
 

@@ -465,6 +465,35 @@ button:active {
   font-size: 0.9rem;
 }
 
+.scan-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--oi-light-blue);
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.scan-info-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.scan-info-value {
+  font-weight: 700;
+  color: var(--oi-blue);
+  font-size: 1rem;
+}
+
+.scan-info-range {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-left: 0.25rem;
+}
+
 .scan-result-inline {
   display: flex;
   align-items: center;
