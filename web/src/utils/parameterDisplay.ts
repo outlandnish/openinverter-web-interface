@@ -27,7 +27,6 @@ export function formatParameterValue(
   if (param.enums && Object.keys(param.enums).length > 0) {
     const enumValue = String(Math.round(Number(value)))
     const label = param.enums[enumValue]
-    console.log('Enum conversion:', { value, enumValue, label, enums: param.enums })
     return label || String(value)
   }
 

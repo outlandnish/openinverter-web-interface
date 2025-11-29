@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks'
-import { useIntlayer } from 'preact-intlayer'
+import { useIntlayer } from 'react-intlayer'
 
 interface DeviceNamingProps {
   serial: string

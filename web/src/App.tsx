@@ -1,5 +1,5 @@
 import { Route, Switch } from 'wouter'
-import { useIntlayer } from 'preact-intlayer'
+import { useIntlayer } from 'react-intlayer'
 import SystemOverview from '@pages/SystemOverview'
 import DeviceDetails from '@pages/DeviceDetails'
 import Settings from '@pages/Settings'

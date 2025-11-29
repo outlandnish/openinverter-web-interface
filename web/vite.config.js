@@ -24,6 +24,9 @@ export default defineConfig({
       '@utils': path.resolve(__dirname, './src/utils'),
       '@styles': path.resolve(__dirname, './src/styles'),
       '@contexts': path.resolve(__dirname, './src/contexts'),
+      // React compatibility for react-intlayer
+      'react': 'preact/compat',
+      'react-dom': 'preact/compat',
     },
   },
 

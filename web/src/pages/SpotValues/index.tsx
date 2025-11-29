@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'preact/hooks'
 import { useLocation, useRoute } from 'wouter'
-import { useIntlayer } from 'preact-intlayer'
+import { useIntlayer } from 'react-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocket } from '@hooks/useWebSocket'
 import { getParameterDisplayName } from '@utils/paramStorage'

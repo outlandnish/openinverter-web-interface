@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'preact/hooks'
 import { useLocation } from 'wouter'
-import { useIntlayer } from 'preact-intlayer'
+import { useIntlayer } from 'react-intlayer'
 import { SavedDevice } from '@api/inverter'
 import ConnectionStatus from '@components/ConnectionStatus'
 

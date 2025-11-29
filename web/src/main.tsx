@@ -1,5 +1,5 @@
 import { render } from 'preact'
-import { IntlayerProvider } from 'preact-intlayer'
+import { IntlayerProvider } from 'react-intlayer'
 import { App } from './App'
 import { ToastProvider } from '@components/Toast/ToastContainer'
 import { WebSocketProvider } from '@contexts/WebSocketContext'
