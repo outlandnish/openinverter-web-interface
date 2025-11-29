@@ -11,6 +11,10 @@ const layoutContent = {
       en: 'Connection lost',
       de: 'Verbindung verloren',
     }),
+    connecting: t({
+      en: 'Connecting...',
+      de: 'Verbinden...',
+    }),
     attemptingReconnect: t({
       en: 'Connection lost. Attempting to reconnect...',
       de: 'Verbindung verloren. Versuche erneut zu verbinden...',

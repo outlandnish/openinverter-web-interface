@@ -63,5 +63,9 @@ void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback);
 void ProcessHeartbeat(); // Call this in Loop() to send periodic heartbeats
 void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen); // Update lastSeen and notify clients
 
+// Device list management
+void LoadDevices(); // Load devices from file into memory at startup
+void AddOrUpdateDevice(const char* serial, uint8_t nodeId, const char* name = nullptr, uint32_t lastSeen = 0); // Add/update device in memory
+
 }
 #endif

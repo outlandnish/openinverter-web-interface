@@ -7,6 +7,10 @@ const connectionStatusContent = {
       en: 'Connected',
       de: 'Verbunden',
     }),
+    connecting: t({
+      en: 'Connecting...',
+      de: 'Verbinden...',
+    }),
     disconnected: t({
       en: 'Disconnected',
       de: 'Getrennt',

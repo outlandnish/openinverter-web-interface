@@ -809,9 +809,42 @@ button:active {
   color: #155724;
 }
 
+.connection-status.connecting {
+  background: #fff3cd;
+  color: #856404;
+}
+
 .connection-status.disconnected {
   background: #f8d7da;
   color: #721c24;
+}
+
+/* Spinner animation for connecting state */
+.connection-status .spinner {
+  animation: spin 1s linear infinite;
+}
+
+.connection-spinner-large,
+.connection-error-icon-large {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 1.5rem;
+  color: var(--oi-orange);
+}
+
+.connection-spinner-large .spinner-large {
+  width: 100%;
+  height: 100%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .connection-status .status-indicator {

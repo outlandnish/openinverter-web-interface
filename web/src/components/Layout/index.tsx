@@ -21,7 +21,7 @@ export default function Layout({ children, currentSerial, onQuickScan }: LayoutP
   const hasConnectedOnceRef = useRef<boolean>(false)
 
   // Use shared WebSocket connection
-  const { isConnected } = useWebSocketContext()
+  const { isConnected, isConnecting } = useWebSocketContext()
 
   // Use shared Device context
   const { savedDevices, scanning } = useDeviceContext()
@@ -38,11 +38,15 @@ export default function Layout({ children, currentSerial, onQuickScan }: LayoutP
         }
       } else if (hasConnectedOnceRef.current) {
         showWarning(content.connectionLost)
-        showError(content.attemptingReconnect)
+        if (isConnecting) {
+          showInfo(content.connecting)
+        } else {
+          showError(content.attemptingReconnect)
+        }
       }
       prevConnectedRef.current = isConnected
     }
-  }, [isConnected])
+  }, [isConnected, isConnecting])
 
   // Auto-open sidebar on desktop
   useEffect(() => {
@@ -99,6 +103,7 @@ export default function Layout({ children, currentSerial, onQuickScan }: LayoutP
         onQuickScan={onQuickScan}
         scanning={scanning}
         wsConnected={isConnected}
+        wsConnecting={isConnecting}
         scanDisabled={!isConnected}
       />
 

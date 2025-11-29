@@ -15,6 +15,7 @@ export interface WebSocketOptions {
 
 export function useWebSocket(url: string, options: WebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
@@ -29,16 +30,19 @@ export function useWebSocket(url: string, options: WebSocketOptions = {}) {
       const wsUrl = `${protocol}//${host}:${port}${url}`
 
       console.log('Connecting to WebSocket:', wsUrl)
+      setIsConnecting(true)
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
         console.log('WebSocket connected')
+        setIsConnecting(false)
         setIsConnected(true)
         if (options.onOpen) options.onOpen()
       }
 
       ws.onclose = () => {
         console.log('WebSocket disconnected')
+        setIsConnecting(false)
         setIsConnected(false)
         if (options.onClose) options.onClose()
 
@@ -51,6 +55,7 @@ export function useWebSocket(url: string, options: WebSocketOptions = {}) {
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error)
+        setIsConnecting(false)
         if (options.onError) options.onError(error)
       }
 
@@ -103,6 +108,7 @@ export function useWebSocket(url: string, options: WebSocketOptions = {}) {
 
   return {
     isConnected,
+    isConnecting,
     lastMessage,
     sendMessage,
     disconnect,

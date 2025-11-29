@@ -8,6 +8,7 @@ export interface WebSocketMessage {
 
 export interface WebSocketContextValue {
   isConnected: boolean
+  isConnecting: boolean
   sendMessage: (action: string, data?: any) => void
   subscribe: (handler: (message: WebSocketMessage) => void) => () => void
 }
@@ -21,6 +22,7 @@ interface WebSocketProviderProps {
 
 export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
   const subscribersRef = useRef<Set<(message: WebSocketMessage) => void>>(new Set())
@@ -35,15 +37,18 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
       const wsUrl = `${protocol}//${host}:${port}${url}`
 
       console.log('Connecting to WebSocket:', wsUrl)
+      setIsConnecting(true)
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
         console.log('WebSocket connected')
+        setIsConnecting(false)
         setIsConnected(true)
       }
 
       ws.onclose = () => {
         console.log('WebSocket disconnected')
+        setIsConnecting(false)
         setIsConnected(false)
 
         // Attempt to reconnect
@@ -55,6 +60,7 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error)
+        setIsConnecting(false)
       }
 
       ws.onmessage = (event) => {
@@ -120,6 +126,7 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
 
   const value: WebSocketContextValue = {
     isConnected,
+    isConnecting,
     sendMessage,
     subscribe,
   }

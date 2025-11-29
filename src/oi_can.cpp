@@ -90,6 +90,15 @@ static unsigned long lastScanTime = 0;
 static const unsigned long SCAN_DELAY_MS = 50; // Delay between node probes
 static DeviceDiscoveryCallback discoveryCallback = nullptr;
 
+// In-memory device list
+struct Device {
+  String serial;
+  uint8_t nodeId;
+  String name;
+  uint32_t lastSeen;
+};
+static std::map<String, Device> deviceList; // Key: serial number
+
 // CAN debug helpers
 static void printCanTx(const twai_message_t* frame) {
   // Debug output disabled
@@ -109,9 +118,9 @@ static void printCanRx(const twai_message_t* frame) {
   // DBG_OUTPUT_PORT.println();
 }
 
-static void requestSdoElement(uint16_t index, uint8_t subIndex) {
+static void requestSdoElement(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
   tx_frame.extd = false;
-  tx_frame.identifier = 0x600 | _nodeId;
+  tx_frame.identifier = 0x600 | nodeId;
   tx_frame.data_length_code = 8;
   tx_frame.data[0] = SDO_READ;
   tx_frame.data[1] = index & 0xFF;
@@ -126,9 +135,9 @@ static void requestSdoElement(uint16_t index, uint8_t subIndex) {
   printCanTx(&tx_frame);
 }
 
-static void setValueSdo(uint16_t index, uint8_t subIndex, uint32_t value) {
+static void setValueSdo(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value) {
   tx_frame.extd = false;
-  tx_frame.identifier = 0x600 | _nodeId;
+  tx_frame.identifier = 0x600 | nodeId;
   tx_frame.data_length_code = 8;
   tx_frame.data[0] = SDO_WRITE;
   tx_frame.data[1] = index & 0xFF;
@@ -175,7 +184,7 @@ static void handleSdoResponse(twai_message_t *rxframe) {
         serial[rxframe->data[3]] = *(uint32_t*)&rxframe->data[4];
 
         if (rxframe->data[3] < 3) {
-          requestSdoElement(SDO_INDEX_SERIAL, rxframe->data[3] + 1);
+          requestSdoElement(_nodeId, SDO_INDEX_SERIAL, rxframe->data[3] + 1);
         }
         else {
           sprintf(jsonFileName, "/%" PRIx32 ".json", serial[3]);
@@ -365,7 +374,7 @@ static void handleUpdate(twai_message_t *rxframe) {
 int StartUpdate(String fileName) {
   updateFile = LittleFS.open(fileName, "r");
   //Reset host processor
-  setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
   updstate = SEND_MAGIC;
   currentPage = 0;
   DBG_OUTPUT_PORT.println("Starting Update");
@@ -388,7 +397,7 @@ String GetRawJson() {
   jsonBuffer = ""; // Clear buffer
   paramJson.clear(); // Clear parsed JSON
   DBG_OUTPUT_PORT.println("Downloading parameter JSON from device...");
-  requestSdoElement(SDO_INDEX_STRINGS, 0);
+  requestSdoElement(_nodeId, SDO_INDEX_STRINGS, 0);
 
   // Wait for download to complete (with timeout)
   unsigned long startTime = millis();
@@ -426,7 +435,7 @@ bool SendJson(WiFiClient client) {
     int id = kv.value()["id"].as<int>();
 
     if (id > 0) {
-      requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xff);
+      requestSdoElement(_nodeId, SDO_INDEX_PARAM_UID | (id >> 8), id & 0xff);
 
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK && rxframe.data[3] == (id & 0xFF)) {
         printCanRx(&rxframe);
@@ -463,7 +472,7 @@ void SendCanMapping(WiFiClient client) {
   while (DONE != reqMapStt) {
     switch (reqMapStt) {
     case START:
-      requestSdoElement(index, 0); //request COB ID
+      requestSdoElement(_nodeId, index, 0); //request COB ID
       reqMapStt = COBID;
       cobid = 0;
       pos = 0;
@@ -476,7 +485,7 @@ void SendCanMapping(WiFiClient client) {
         if (rxframe.data[0] != SDO_ABORT) {
           cobid = *(int32_t*)&rxframe.data[4]; //convert bytes to word
           subIndex++;
-          requestSdoElement(index, subIndex); //request parameter id, position and length
+          requestSdoElement(_nodeId, index, subIndex); //request parameter id, position and length
           reqMapStt = DATAPOSLEN;
         }
         else if (!rx) { //after receiving tx item collect rx items
@@ -499,7 +508,7 @@ void SendCanMapping(WiFiClient client) {
           pos = rxframe.data[6];
           len = (int8_t)rxframe.data[7];
           subIndex++;
-          requestSdoElement(index, subIndex); //gain and offset
+          requestSdoElement(_nodeId, index, subIndex); //gain and offset
           reqMapStt = GAINOFS;
         }
         else { //all items of this message collected, move to next message
@@ -536,7 +545,7 @@ void SendCanMapping(WiFiClient client) {
           subIndex++;
 
           if (subIndex < 100) { //limit maximum items in case there is a bug ;)
-            requestSdoElement(index, subIndex); //request next item
+            requestSdoElement(_nodeId, index, subIndex); //request next item
             reqMapStt = DATAPOSLEN;
           }
           else {
@@ -574,16 +583,16 @@ SetResult AddCanMapping(String json) {
 
   int index = doc["isrx"] ? SDO_INDEX_MAP_RX : SDO_INDEX_MAP_TX;
 
-  setValueSdo(index, 0, (uint32_t)doc["id"]); //Send CAN Id
+  setValueSdo(_nodeId, index, 0, (uint32_t)doc["id"]); //Send CAN Id
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
     DBG_OUTPUT_PORT.println("Sent COB Id");
-    setValueSdo(index, 1, doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) | (doc["length"].as<int32_t>() << 24)); //data item, position and length
+    setValueSdo(_nodeId, index, 1, doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) | (doc["length"].as<int32_t>() << 24)); //data item, position and length
     if (rxframe.data[0] != SDO_ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
       printCanRx(&rxframe);
       DBG_OUTPUT_PORT.println("Sent position and length");
-      setValueSdo(index, 2, (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) | doc["offset"].as<int32_t>() << 24); //gain and offset
+      setValueSdo(_nodeId, index, 2, (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) | doc["offset"].as<int32_t>() << 24); //gain and offset
 
       if (rxframe.data[0] != SDO_ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
@@ -614,7 +623,7 @@ SetResult RemoveCanMapping(String json){
     return UnknownIndex;
   }
 
-  setValueSdo(doc["index"].as<uint32_t>(), doc["subindex"].as<uint8_t>(), 0U); //Writing 0 to map index removes the mapping
+  setValueSdo(_nodeId, doc["index"].as<uint32_t>(), doc["subindex"].as<uint8_t>(), 0U); //Writing 0 to map index removes the mapping
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -636,7 +645,7 @@ SetResult SetValue(int paramId, double value) {
 
   twai_message_t rxframe;
 
-  setValueSdo(SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF, (uint32_t)(value * 32));
+  setValueSdo(_nodeId, SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF, (uint32_t)(value * 32));
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -657,7 +666,7 @@ bool SaveToFlash() {
 
   twai_message_t rxframe;
 
-  setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_SAVE, 0U);
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_SAVE, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -685,7 +694,7 @@ String StreamValues(String paramIds, int samples) {
   for (int i = 0; i < samples; i++) {
     for (int item = 0; item < numItems; item++) {
       int id = ids[item];
-      requestSdoElement(SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
+      requestSdoElement(_nodeId, SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
     }
 
     int item = 0;
@@ -714,7 +723,7 @@ double GetValue(int paramId) {
 
   twai_message_t rxframe;
 
-  requestSdoElement(SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF);
+  requestSdoElement(_nodeId, SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -791,6 +800,9 @@ void InitCAN(BaudRate baud, int txPin, int rxPin) {
   _nodeId = 0; // No specific device connected yet
   state = IDLE;
   DBG_OUTPUT_PORT.println("CAN bus initialized (no device connected)");
+
+  // Load saved devices into memory
+  LoadDevices();
 }
 
 // Initialize CAN and connect to a specific device
@@ -852,7 +864,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   _nodeId = nodeId;
   state = OBTAINSERIAL;
   DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
-  requestSdoElement(SDO_INDEX_SERIAL, 0);
+  requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
   DBG_OUTPUT_PORT.println("Connected to device");
 }
 
@@ -880,7 +892,7 @@ void Loop() {
     if (recvdResponse || retries < 0)
       updstate = UPD_IDLE; //if request was successful
     else
-      requestSdoElement(SDO_INDEX_SERIAL, 0);
+      requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
 
      delay(100);
   }
@@ -904,7 +916,7 @@ bool ReloadJson() {
 
   // Trigger JSON download
   state = OBTAINSERIAL;
-  requestSdoElement(SDO_INDEX_SERIAL, 0);
+  requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
 
   DBG_OUTPUT_PORT.println("Reloading JSON from device");
   return true;
@@ -914,7 +926,7 @@ bool ResetDevice() {
   if (state != IDLE) return false;
 
   // Send reset command to the device
-  setValueSdo(SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
 
   DBG_OUTPUT_PORT.println("Device reset command sent");
 
@@ -971,7 +983,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
     // Request serial number parts
     for (uint8_t part = 0; part < 4; part++) {
-      requestSdoElement(SDO_INDEX_SERIAL, part);
+      requestSdoElement(_nodeId, SDO_INDEX_SERIAL, part);
 
       if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
         printCanRx(&rxframe);
@@ -1038,21 +1050,20 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 }
 
 String GetSavedDevices() {
-  if (!LittleFS.exists("/devices.json")) {
-    DBG_OUTPUT_PORT.println("No saved devices file");
-    return "{\"devices\":{}}";
+  JsonDocument doc;
+  JsonObject devices = doc["devices"].to<JsonObject>();
+
+  // Build JSON from in-memory device list
+  for (auto& kv : deviceList) {
+    const Device& dev = kv.second;
+    JsonObject deviceObj = devices[dev.serial].to<JsonObject>();
+    deviceObj["nodeId"] = dev.nodeId;
+    deviceObj["name"] = dev.name;
+    deviceObj["lastSeen"] = dev.lastSeen;
   }
 
-  File file = LittleFS.open("/devices.json", "r");
-  if (!file) {
-    DBG_OUTPUT_PORT.println("Failed to open devices file");
-    return "{\"devices\":{}}";
-  }
-
-  String result = file.readString();
-  file.close();
-
-  DBG_OUTPUT_PORT.println("Loaded saved devices");
+  String result;
+  serializeJson(doc, result);
   return result;
 }
 
@@ -1099,7 +1110,10 @@ bool SaveDeviceName(String serial, String name, int nodeId) {
   serializeJson(doc, file);
   file.close();
 
-  DBG_OUTPUT_PORT.println("Saved devices file");
+  // Also update in-memory list
+  AddOrUpdateDevice(serial.c_str(), nodeId >= 0 ? nodeId : 0, name.c_str(), 0);
+
+  DBG_OUTPUT_PORT.println("Saved devices file and updated in-memory list");
   return true;
 }
 
@@ -1156,12 +1170,8 @@ void ProcessContinuousScan() {
 
   lastScanTime = currentTime;
 
-  // Save current state
-  uint8_t prevNodeId = _nodeId;
-  _nodeId = currentScanNode;
-
-  // Request serial number part
-  requestSdoElement(SDO_INDEX_SERIAL, scanSerialPart);
+  // Request serial number part from current scan node
+  requestSdoElement(currentScanNode, SDO_INDEX_SERIAL, scanSerialPart);
 
   twai_message_t rxframe;
   if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
@@ -1183,40 +1193,10 @@ void ProcessContinuousScan() {
 
         DBG_OUTPUT_PORT.printf("Continuous scan found device at node %d: %s\n", currentScanNode, serialStr);
 
-        // Update devices.json with new nodeId and lastSeen
-        JsonDocument savedDoc;
-        if (LittleFS.exists("/devices.json")) {
-          File file = LittleFS.open("/devices.json", "r");
-          if (file) {
-            deserializeJson(savedDoc, file);
-            file.close();
-          }
-        }
+        // Update in-memory device list (not saved to file until user names it)
+        AddOrUpdateDevice(serialStr, currentScanNode, nullptr, currentTime);
 
-        // Ensure devices object exists
-        if (!savedDoc.containsKey("devices")) {
-          savedDoc.createNestedObject("devices");
-        }
-
-        JsonObject devices = savedDoc["devices"].as<JsonObject>();
-
-        // Get or create device object
-        if (!devices.containsKey(serialStr)) {
-          devices.createNestedObject(serialStr);
-        }
-
-        JsonObject device = devices[serialStr].as<JsonObject>();
-        device["nodeId"] = currentScanNode;
-        device["lastSeen"] = currentTime;
-
-        // Save back to file
-        File file = LittleFS.open("/devices.json", "w");
-        if (file) {
-          serializeJson(savedDoc, file);
-          file.close();
-        }
-
-        // Notify via callback
+        // Notify via callback (will broadcast to WebSocket clients)
         if (discoveryCallback) {
           discoveryCallback(currentScanNode, serialStr, currentTime);
         }
@@ -1244,9 +1224,78 @@ void ProcessContinuousScan() {
       currentScanNode = scanStartNode; // Wrap around to start
     }
   }
+}
 
-  // Restore previous node ID
-  _nodeId = prevNodeId;
+// Device list management functions
+void LoadDevices() {
+  deviceList.clear();
+
+  if (!LittleFS.exists("/devices.json")) {
+    DBG_OUTPUT_PORT.println("No devices.json file, starting with empty device list");
+    return;
+  }
+
+  File file = LittleFS.open("/devices.json", "r");
+  if (!file) {
+    DBG_OUTPUT_PORT.println("Failed to open devices.json for reading");
+    return;
+  }
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (error) {
+    DBG_OUTPUT_PORT.printf("Failed to parse devices.json: %s\n", error.c_str());
+    return;
+  }
+
+  if (!doc.containsKey("devices")) {
+    DBG_OUTPUT_PORT.println("No 'devices' key in devices.json");
+    return;
+  }
+
+  JsonObject devices = doc["devices"].as<JsonObject>();
+  int count = 0;
+
+  for (JsonPair kv : devices) {
+    Device dev;
+    dev.serial = kv.key().c_str();
+
+    JsonObject deviceObj = kv.value().as<JsonObject>();
+    dev.nodeId = deviceObj["nodeId"] | 0;
+    dev.name = deviceObj["name"] | "";
+    dev.lastSeen = deviceObj["lastSeen"] | 0;
+
+    deviceList[dev.serial] = dev;
+    count++;
+  }
+
+  DBG_OUTPUT_PORT.printf("Loaded %d devices from file\n", count);
+}
+
+void AddOrUpdateDevice(const char* serial, uint8_t nodeId, const char* name, uint32_t lastSeen) {
+  Device dev;
+
+  // Check if device already exists
+  if (deviceList.count(serial) > 0) {
+    dev = deviceList[serial];
+  } else {
+    dev.serial = serial;
+  }
+
+  // Update fields
+  if (nodeId > 0) {
+    dev.nodeId = nodeId;
+  }
+  if (name != nullptr && strlen(name) > 0) {
+    dev.name = name;
+  }
+  if (lastSeen > 0) {
+    dev.lastSeen = lastSeen;
+  }
+
+  deviceList[serial] = dev;
 }
 
 // Heartbeat implementation
@@ -1272,34 +1321,15 @@ void ProcessHeartbeat() {
 
   lastHeartbeatTime = currentTime;
 
-  // Load saved devices
-  JsonDocument savedDoc;
-  if (!LittleFS.exists("/devices.json")) {
+  // Use in-memory device list
+  if (deviceList.empty()) {
     return; // No devices to heartbeat
   }
 
-  File file = LittleFS.open("/devices.json", "r");
-  if (!file) {
-    return;
-  }
-
-  deserializeJson(savedDoc, file);
-  file.close();
-
-  if (!savedDoc.containsKey("devices")) {
-    return;
-  }
-
-  JsonObject devices = savedDoc["devices"].as<JsonObject>();
-
-  // Get list of device serials
+  // Build vector of device serials from in-memory list
   std::vector<String> deviceSerials;
-  for (JsonPair kv : devices) {
-    deviceSerials.push_back(kv.key().c_str());
-  }
-
-  if (deviceSerials.empty()) {
-    return;
+  for (auto& kv : deviceList) {
+    deviceSerials.push_back(kv.first);
   }
 
   // Cycle through devices, one per heartbeat interval
@@ -1308,14 +1338,14 @@ void ProcessHeartbeat() {
   }
 
   String serial = deviceSerials[heartbeatDeviceIndex];
-  JsonObject device = devices[serial].as<JsonObject>();
+  Device& device = deviceList[serial];
 
-  if (!device.containsKey("nodeId")) {
+  if (device.nodeId == 0) {
     heartbeatDeviceIndex++;
     return;
   }
 
-  uint8_t nodeId = device["nodeId"].as<uint8_t>();
+  uint8_t nodeId = device.nodeId;
 
   // Don't send heartbeat to the currently active device
   if (nodeId == _nodeId) {
@@ -1329,13 +1359,9 @@ void ProcessHeartbeat() {
     return; // Not time yet for this device
   }
 
-  // Save current node ID
-  uint8_t prevNodeId = _nodeId;
-  _nodeId = nodeId;
-
   // Send a simple request to check if device is alive
   // Request first part of serial number as a lightweight ping
-  requestSdoElement(SDO_INDEX_SERIAL, 0);
+  requestSdoElement(nodeId, SDO_INDEX_SERIAL, 0);
 
   twai_message_t rxframe;
   bool deviceResponded = false;
@@ -1373,48 +1399,20 @@ void ProcessHeartbeat() {
                            serial.c_str(), nodeId, failures + 1, (unsigned long)backoffInterval);
   }
 
-  // Restore previous node ID
-  _nodeId = prevNodeId;
-
   // Move to next device
   heartbeatDeviceIndex++;
 }
 
 void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen) {
-  // Update devices.json
-  JsonDocument savedDoc;
-  if (LittleFS.exists("/devices.json")) {
-    File file = LittleFS.open("/devices.json", "r");
-    if (file) {
-      deserializeJson(savedDoc, file);
-      file.close();
+  // Update in-memory device list only (not saved to file)
+  if (deviceList.count(serial) > 0) {
+    deviceList[serial].lastSeen = lastSeen;
+
+    // Notify via callback (will broadcast to WebSocket clients)
+    if (discoveryCallback) {
+      uint8_t nodeId = deviceList[serial].nodeId;
+      discoveryCallback(nodeId, serial, lastSeen);
     }
-  }
-
-  if (!savedDoc.containsKey("devices")) {
-    savedDoc.createNestedObject("devices");
-  }
-
-  JsonObject devices = savedDoc["devices"].as<JsonObject>();
-
-  if (!devices.containsKey(serial)) {
-    devices.createNestedObject(serial);
-  }
-
-  JsonObject device = devices[serial].as<JsonObject>();
-  device["lastSeen"] = lastSeen;
-
-  // Save back to file
-  File file = LittleFS.open("/devices.json", "w");
-  if (file) {
-    serializeJson(savedDoc, file);
-    file.close();
-  }
-
-  // Notify via callback (will broadcast to WebSocket clients)
-  if (discoveryCallback) {
-    uint8_t nodeId = device["nodeId"] | 0;
-    discoveryCallback(nodeId, serial, lastSeen);
   }
 }
 

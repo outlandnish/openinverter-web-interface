@@ -1,46 +1,3 @@
-/*
-  FSWebServer - Example WebServer with LittleFS backend for esp8266
-  Copyright (c) 2015 Hristo Gochkov. All rights reserved.
-  This file is part of the ESP8266WebServer library for Arduino environment.
-
-  This library is free software; you can redistribute it and/or
-  modify it under the terms of the GNU Lesser General Public
-  License as published by the Free Software Foundation; either
-  version 2.1 of the License, or (at your option) any later version.
-  This library is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-  Lesser General Public License for more details.
-  You should have received a copy of the GNU Lesser General Public
-  License along with this library; if not, write to the Free Software
-  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
-
-  upload the contents of the data folder with PlatformIO uploadfs command
-  or you can upload the contents of a folder if you CD in that folder and run the following command:
-  for file in `ls -A1`; do curl -F "file=@$PWD/$file" esp8266fs.local/edit; done
-
-  access the sample web page at http://esp8266fs.local
-  edit the page by going to http://esp8266fs.local/edit
-*/
-/*
- * This file is part of the esp32 web interface
- *
- * Copyright (C) 2023 Johannes Huebner <dev@johanneshuebner.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- */
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <SmartLeds.h>
@@ -331,125 +288,120 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
       if (action == "startScan") {
         uint8_t start = doc["start"] | 1;
         uint8_t end = doc["end"] | 32;
-        OICan::StartContinuousScan(start, end);
 
-        JsonDocument response;
-        response["event"] = "scanStatus";
-        response["data"]["active"] = true;
-        String output;
-        serializeJson(response, output);
-        ws.textAll(output);
+        CANCommand cmd;
+        cmd.type = CMD_START_SCAN;
+        cmd.data.scan.start = start;
+        cmd.data.scan.end = end;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Scan start command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan start command");
+        }
 
       } else if (action == "stopScan") {
-        OICan::StopContinuousScan();
+        CANCommand cmd;
+        cmd.type = CMD_STOP_SCAN;
 
-        JsonDocument response;
-        response["event"] = "scanStatus";
-        response["data"]["active"] = false;
-        String output;
-        serializeJson(response, output);
-        ws.textAll(output);
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Scan stop command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan stop command");
+        }
 
       } else if (action == "connect") {
         uint8_t nodeId = doc["nodeId"];
         String serial = doc["serial"] | "";
 
-        OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
-        OICan::Init(nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
+        CANCommand cmd;
+        cmd.type = CMD_CONNECT;
+        cmd.data.connect.nodeId = nodeId;
+        strncpy(cmd.data.connect.serial, serial.c_str(), sizeof(cmd.data.connect.serial) - 1);
 
-        JsonDocument response;
-        response["event"] = "connected";
-        response["data"]["nodeId"] = nodeId;
-        response["data"]["serial"] = serial;
-        String output;
-        serializeJson(response, output);
-        ws.textAll(output);
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Connect command queued (node %d)\n", nodeId);
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue connect command");
+        }
 
       } else if (action == "setDeviceName") {
         String serial = doc["serial"];
         String name = doc["name"];
         int nodeId = doc["nodeId"] | -1;
 
-        bool success = OICan::SaveDeviceName(serial, name, nodeId);
+        CANCommand cmd;
+        cmd.type = CMD_SET_DEVICE_NAME;
+        strncpy(cmd.data.setDeviceName.serial, serial.c_str(), sizeof(cmd.data.setDeviceName.serial) - 1);
+        strncpy(cmd.data.setDeviceName.name, name.c_str(), sizeof(cmd.data.setDeviceName.name) - 1);
+        cmd.data.setDeviceName.nodeId = nodeId;
 
-        JsonDocument response;
-        response["event"] = "deviceNameSet";
-        response["data"]["success"] = success;
-        response["data"]["serial"] = serial;
-        response["data"]["name"] = name;
-        String output;
-        serializeJson(response, output);
-        client->text(output);
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Set device name command queued (%s)\n", serial.c_str());
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set device name command");
+        }
 
       } else if (action == "getNodeId") {
-        JsonDocument response;
-        response["event"] = "nodeIdInfo";
-        response["data"]["id"] = OICan::GetNodeId();
-        response["data"]["speed"] = OICan::GetBaudRate();
-        String output;
-        serializeJson(response, output);
-        client->text(output);
+        CANCommand cmd;
+        cmd.type = CMD_GET_NODE_ID;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Get node ID command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue get node ID command");
+        }
 
       } else if (action == "setNodeId") {
         int id = doc["id"];
-        OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
-        OICan::Init(id, baud, config.getCanTXPin(), config.getCanRXPin());
 
-        JsonDocument response;
-        response["event"] = "nodeIdSet";
-        response["data"]["id"] = OICan::GetNodeId();
-        response["data"]["speed"] = OICan::GetBaudRate();
-        String output;
-        serializeJson(response, output);
-        client->text(output);
+        CANCommand cmd;
+        cmd.type = CMD_SET_NODE_ID;
+        cmd.data.setNodeId.nodeId = id;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Set node ID command queued (node %d)\n", id);
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set node ID command");
+        }
 
       } else if (action == "startSpotValues") {
-        // Extract parameter IDs array and interval
-        spotValuesParamIds.clear();
+        CANCommand cmd;
+        cmd.type = CMD_START_SPOT_VALUES;
 
         if (doc.containsKey("paramIds")) {
           JsonArray paramIds = doc["paramIds"].as<JsonArray>();
+          cmd.data.spotValues.paramCount = 0;
           for (JsonVariant id : paramIds) {
-            spotValuesParamIds.push_back(id.as<int>());
+            if (cmd.data.spotValues.paramCount < 100) {
+              cmd.data.spotValues.paramIds[cmd.data.spotValues.paramCount++] = id.as<int>();
+            }
           }
         }
 
         if (doc.containsKey("interval")) {
-          spotValuesInterval = doc["interval"].as<uint32_t>();
-          if (spotValuesInterval < 100) spotValuesInterval = 100; // Min 100ms
-          if (spotValuesInterval > 10000) spotValuesInterval = 10000; // Max 10s
+          cmd.data.spotValues.interval = doc["interval"].as<uint32_t>();
+          if (cmd.data.spotValues.interval < 100) cmd.data.spotValues.interval = 100;
+          if (cmd.data.spotValues.interval > 10000) cmd.data.spotValues.interval = 10000;
+        } else {
+          cmd.data.spotValues.interval = 1000;
         }
 
-        spotValuesActive = true;
-
-        // Start periodic timer
-        spotValuesTicker.attach_ms(spotValuesInterval, broadcastSpotValues);
-
-        JsonDocument response;
-        response["event"] = "spotValuesStatus";
-        response["data"]["active"] = true;
-        response["data"]["interval"] = spotValuesInterval;
-        response["data"]["paramCount"] = spotValuesParamIds.size();
-        String output;
-        serializeJson(response, output);
-        client->text(output);
-
-        DBG_OUTPUT_PORT.printf("Started spot values streaming: %zu params, %lums interval\n",
-                               spotValuesParamIds.size(), (unsigned long)spotValuesInterval);
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Start spot values command queued (%d params)\n", cmd.data.spotValues.paramCount);
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start spot values command");
+        }
 
       } else if (action == "stopSpotValues") {
-        spotValuesActive = false;
-        spotValuesTicker.detach();
-        spotValuesParamIds.clear();
+        CANCommand cmd;
+        cmd.type = CMD_STOP_SPOT_VALUES;
 
-        JsonDocument response;
-        response["event"] = "spotValuesStatus";
-        response["data"]["active"] = false;
-        String output;
-        serializeJson(response, output);
-        client->text(output);
-
-        DBG_OUTPUT_PORT.println("Stopped spot values streaming");
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Stop spot values command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop spot values command");
+        }
       }
     }
   }
@@ -830,8 +782,70 @@ void setup(void){
   OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
   OICan::InitCAN(baud, config.getCanTXPin(), config.getCanRXPin());
 
-  // Set device discovery callback for continuous scanning
-  OICan::SetDeviceDiscoveryCallback(broadcastDeviceDiscovery);
+  // Create FreeRTOS queues
+  canCommandQueue = xQueueCreate(10, sizeof(CANCommand));
+  canEventQueue = xQueueCreate(20, sizeof(CANEvent));
+
+  if (canCommandQueue == nullptr || canEventQueue == nullptr) {
+    DBG_OUTPUT_PORT.println("ERROR: Failed to create queues!");
+    return;
+  }
+
+  DBG_OUTPUT_PORT.println("Queues created successfully");
+
+  // Update device discovery callback to post events
+  OICan::SetDeviceDiscoveryCallback([](uint8_t nodeId, const char* serial, uint32_t lastSeen) {
+    CANEvent evt;
+    evt.type = EVT_DEVICE_DISCOVERED;
+    evt.data.deviceDiscovered.nodeId = nodeId;
+    strncpy(evt.data.deviceDiscovered.serial, serial, sizeof(evt.data.deviceDiscovered.serial) - 1);
+    evt.data.deviceDiscovered.lastSeen = lastSeen;
+    evt.data.deviceDiscovered.name[0] = '\0'; // Will be filled from devices.json
+
+    // Look up name from devices.json
+    if (LittleFS.exists("/devices.json")) {
+      File file = LittleFS.open("/devices.json", "r");
+      if (file) {
+        JsonDocument doc;
+        deserializeJson(doc, file);
+        file.close();
+        if (doc.containsKey("devices") && doc["devices"].containsKey(serial)) {
+          const char* name = doc["devices"][serial]["name"];
+          if (name) {
+            strncpy(evt.data.deviceDiscovered.name, name, sizeof(evt.data.deviceDiscovered.name) - 1);
+          }
+        }
+      }
+    }
+
+    xQueueSend(canEventQueue, &evt, 0);
+  });
+
+  // Spawn CAN task
+  // On dual-core ESP32: Pin to Core 0 (WiFi/WebSocket runs on Core 1)
+  // On single-core ESP32-C3: FreeRTOS will time-slice both tasks on Core 0
+#if CONFIG_FREERTOS_UNICORE
+  xTaskCreate(
+    canTask,           // Task function
+    "CAN_Task",        // Name
+    8192,              // Stack size (bytes)
+    nullptr,           // Parameters
+    1,                 // Priority (1 = low, higher than idle)
+    nullptr            // Task handle
+  );
+  DBG_OUTPUT_PORT.println("CAN task spawned (single-core mode)");
+#else
+  xTaskCreatePinnedToCore(
+    canTask,           // Task function
+    "CAN_Task",        // Name
+    8192,              // Stack size (bytes)
+    nullptr,           // Parameters
+    1,                 // Priority (1 = low, higher than idle)
+    nullptr,           // Task handle
+    0                  // Core 0
+  );
+  DBG_OUTPUT_PORT.println("CAN task spawned on Core 0 (dual-core mode)");
+#endif
 
   // WebSocket setup
   ws.onEvent(onWebSocketEvent);
@@ -864,10 +878,83 @@ void setup(void){
   MDNS.addService("http", "tcp", 80);
 }
 
+// Process events from CAN task and broadcast to WebSocket
+void processCANEvents() {
+  CANEvent evt;
+
+  // Process all pending events (non-blocking)
+  while (xQueueReceive(canEventQueue, &evt, 0) == pdTRUE) {
+    JsonDocument doc;
+    doc["event"] = "";
+    JsonObject data = doc["data"].to<JsonObject>();
+
+    switch(evt.type) {
+      case EVT_DEVICE_DISCOVERED:
+        doc["event"] = "deviceDiscovered";
+        data["nodeId"] = evt.data.deviceDiscovered.nodeId;
+        data["serial"] = evt.data.deviceDiscovered.serial;
+        data["lastSeen"] = evt.data.deviceDiscovered.lastSeen;
+        if (evt.data.deviceDiscovered.name[0] != '\0') {
+          data["name"] = evt.data.deviceDiscovered.name;
+        }
+        break;
+
+      case EVT_SCAN_STATUS:
+        doc["event"] = "scanStatus";
+        data["active"] = evt.data.scanStatus.active;
+        break;
+
+      case EVT_CONNECTED:
+        doc["event"] = "connected";
+        data["nodeId"] = evt.data.connected.nodeId;
+        data["serial"] = evt.data.connected.serial;
+        break;
+
+      case EVT_NODE_ID_INFO:
+        doc["event"] = "nodeIdInfo";
+        data["id"] = evt.data.nodeIdInfo.id;
+        data["speed"] = evt.data.nodeIdInfo.speed;
+        break;
+
+      case EVT_NODE_ID_SET:
+        doc["event"] = "nodeIdSet";
+        data["id"] = evt.data.nodeIdSet.id;
+        data["speed"] = evt.data.nodeIdSet.speed;
+        break;
+
+      case EVT_SPOT_VALUES_STATUS:
+        doc["event"] = "spotValuesStatus";
+        data["active"] = evt.data.spotValuesStatus.active;
+        if (evt.data.spotValuesStatus.active) {
+          data["interval"] = evt.data.spotValuesStatus.interval;
+          data["paramCount"] = evt.data.spotValuesStatus.paramCount;
+        }
+        break;
+
+      case EVT_DEVICE_NAME_SET:
+        doc["event"] = "deviceNameSet";
+        data["success"] = evt.data.deviceNameSet.success;
+        data["serial"] = evt.data.deviceNameSet.serial;
+        data["name"] = evt.data.deviceNameSet.name;
+        break;
+
+      default:
+        continue; // Unknown event, skip
+    }
+
+    String output;
+    serializeJson(doc, output);
+    ws.textAll(output);
+  }
+}
+
 void loop(void){
   // note: ArduinoOTA.handle() calls MDNS.update();
   ws.cleanupClients();
   ArduinoOTA.handle();
 
-  OICan::Loop();
+  // Process events from CAN task
+  processCANEvents();
+
+  // NOTE: OICan::Loop() now runs in CAN task, don't call here
 }

@@ -14,7 +14,7 @@ export default function SystemOverview() {
   const [namingDevice, setNamingDevice] = useState<MergedDevice | null>(null)
 
   // Use shared WebSocket connection
-  const { isConnected } = useWebSocketContext()
+  const { isConnected, isConnecting } = useWebSocketContext()
 
   // Use shared Device context
   const {
@@ -103,7 +103,7 @@ export default function SystemOverview() {
 
         {mergedDevices.length === 0 ? (
           !isConnected ? (
-            <DisconnectedState onReconnect={handleReconnect} />
+            <DisconnectedState onReconnect={handleReconnect} isConnecting={isConnecting} />
           ) : (
             <div class="empty-state-centered">
               {scanning ? (

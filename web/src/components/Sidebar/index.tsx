@@ -12,10 +12,11 @@ interface SidebarProps {
   onQuickScan?: () => void
   scanning?: boolean
   wsConnected?: boolean
+  wsConnecting?: boolean
   scanDisabled?: boolean
 }
 
-export default function Sidebar({ devices, isOpen, onToggle, currentSerial, onQuickScan, scanning, wsConnected, scanDisabled = false }: SidebarProps) {
+export default function Sidebar({ devices, isOpen, onToggle, currentSerial, onQuickScan, scanning, wsConnected, wsConnecting, scanDisabled = false }: SidebarProps) {
   const [location, setLocation] = useLocation()
   const content = useIntlayer('sidebar')
 
@@ -66,7 +67,7 @@ export default function Sidebar({ devices, isOpen, onToggle, currentSerial, onQu
             <div class="sidebar-ws-status">
               <ConnectionStatus
                 connected={wsConnected ?? false}
-                label={wsConnected ? content.connected : content.disconnected}
+                connecting={wsConnecting ?? false}
               />
             </div>
           </div>

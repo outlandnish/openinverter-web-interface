@@ -25,7 +25,7 @@ export default function Settings() {
   })
 
   // WebSocket connection
-  const { isConnected, reconnect } = useWebSocket('/ws')
+  const { isConnected, isConnecting, reconnect } = useWebSocket('/ws')
 
   useEffect(() => {
     loadSettings()
@@ -75,7 +75,7 @@ export default function Settings() {
         </div>
 
         {!isConnected ? (
-          <DisconnectedState onReconnect={reconnect} />
+          <DisconnectedState onReconnect={reconnect} isConnecting={isConnecting} />
         ) : (
           <section class="card">
         <h2>{content.canBusConfiguration}</h2>
