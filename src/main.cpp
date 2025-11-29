@@ -49,12 +49,14 @@ enum CANCommandType {
 enum CANEventType {
   EVT_DEVICE_DISCOVERED,
   EVT_SCAN_STATUS,
+  EVT_SCAN_PROGRESS,
   EVT_CONNECTED,
   EVT_NODE_ID_INFO,
   EVT_NODE_ID_SET,
   EVT_SPOT_VALUES_STATUS,
   EVT_SPOT_VALUES,
-  EVT_DEVICE_NAME_SET
+  EVT_DEVICE_NAME_SET,
+  EVT_ERROR
 };
 
 // Command message structure
@@ -99,6 +101,11 @@ struct CANEvent {
       bool active;
     } scanStatus;
     struct {
+      uint8_t currentNode;
+      uint8_t startNode;
+      uint8_t endNode;
+    } scanProgress;
+    struct {
       uint8_t nodeId;
       char serial[50];
     } connected;
@@ -124,6 +131,9 @@ struct CANEvent {
       char serial[50];
       char name[50];
     } deviceNameSet;
+    struct {
+      char message[200];
+    } error;
   } data;
 };
 
@@ -557,14 +567,23 @@ void canTask(void* parameter) {
       switch(cmd.type) {
         case CMD_START_SCAN:
           DBG_OUTPUT_PORT.printf("[CAN Task] Starting scan %d-%d\n", cmd.data.scan.start, cmd.data.scan.end);
-          OICan::StartContinuousScan(cmd.data.scan.start, cmd.data.scan.end);
-
-          // Send scan status event
           {
-            CANEvent evt;
-            evt.type = EVT_SCAN_STATUS;
-            evt.data.scanStatus.active = true;
-            xQueueSend(canEventQueue, &evt, 0);
+            bool scanStarted = OICan::StartContinuousScan(cmd.data.scan.start, cmd.data.scan.end);
+
+            if (scanStarted) {
+              // Send scan status event if scan actually started
+              CANEvent evt;
+              evt.type = EVT_SCAN_STATUS;
+              evt.data.scanStatus.active = true;
+              xQueueSend(canEventQueue, &evt, 0);
+            } else {
+              // Send error event if scan failed to start
+              DBG_OUTPUT_PORT.println("[CAN Task] Scan failed to start - device busy");
+              CANEvent evt;
+              evt.type = EVT_ERROR;
+              strncpy(evt.data.error.message, "Cannot start scan - device is busy. Please wait or disconnect from the current device.", sizeof(evt.data.error.message) - 1);
+              xQueueSend(canEventQueue, &evt, 0);
+            }
           }
           break;
 
@@ -821,6 +840,16 @@ void setup(void){
     xQueueSend(canEventQueue, &evt, 0);
   });
 
+  // Setup scan progress callback to post events
+  OICan::SetScanProgressCallback([](uint8_t currentNode, uint8_t startNode, uint8_t endNode) {
+    CANEvent evt;
+    evt.type = EVT_SCAN_PROGRESS;
+    evt.data.scanProgress.currentNode = currentNode;
+    evt.data.scanProgress.startNode = startNode;
+    evt.data.scanProgress.endNode = endNode;
+    xQueueSend(canEventQueue, &evt, 0);
+  });
+
   // Spawn CAN task
   // On dual-core ESP32: Pin to Core 0 (WiFi/WebSocket runs on Core 1)
   // On single-core ESP32-C3: FreeRTOS will time-slice both tasks on Core 0
@@ -870,6 +899,49 @@ void setup(void){
     request->send(200, "application/json", json);
   });
 
+  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
+    // If query parameters are provided, update settings
+    if (request->hasArg("canRXPin") || request->hasArg("canTXPin") ||
+        request->hasArg("canSpeed") || request->hasArg("scanStartNode") ||
+        request->hasArg("scanEndNode")) {
+
+      if (request->hasArg("canRXPin")) {
+        config.setCanRXPin(request->arg("canRXPin").toInt());
+      }
+      if (request->hasArg("canTXPin")) {
+        config.setCanTXPin(request->arg("canTXPin").toInt());
+      }
+      if (request->hasArg("canEnablePin")) {
+        config.setCanEnablePin(request->arg("canEnablePin").toInt());
+      }
+      if (request->hasArg("canSpeed")) {
+        config.setCanSpeed(request->arg("canSpeed").toInt());
+      }
+      if (request->hasArg("scanStartNode")) {
+        config.setScanStartNode(request->arg("scanStartNode").toInt());
+      }
+      if (request->hasArg("scanEndNode")) {
+        config.setScanEndNode(request->arg("scanEndNode").toInt());
+      }
+
+      config.saveSettings();
+      request->send(200, "text/plain", "Settings saved successfully");
+    } else {
+      // Return current settings as JSON
+      JsonDocument doc;
+      doc["canRXPin"] = config.getCanRXPin();
+      doc["canTXPin"] = config.getCanTXPin();
+      doc["canEnablePin"] = config.getCanEnablePin();
+      doc["canSpeed"] = config.getCanSpeed();
+      doc["scanStartNode"] = config.getScanStartNode();
+      doc["scanEndNode"] = config.getScanEndNode();
+
+      String output;
+      serializeJson(doc, output);
+      request->send(200, "application/json", output);
+    }
+  });
+
   // Serve files - catch all handler
   server.onNotFound(handleFileRequest);
 
@@ -904,6 +976,13 @@ void processCANEvents() {
         data["active"] = evt.data.scanStatus.active;
         break;
 
+      case EVT_SCAN_PROGRESS:
+        doc["event"] = "scanProgress";
+        data["currentNode"] = evt.data.scanProgress.currentNode;
+        data["startNode"] = evt.data.scanProgress.startNode;
+        data["endNode"] = evt.data.scanProgress.endNode;
+        break;
+
       case EVT_CONNECTED:
         doc["event"] = "connected";
         data["nodeId"] = evt.data.connected.nodeId;
@@ -936,6 +1015,11 @@ void processCANEvents() {
         data["success"] = evt.data.deviceNameSet.success;
         data["serial"] = evt.data.deviceNameSet.serial;
         data["name"] = evt.data.deviceNameSet.name;
+        break;
+
+      case EVT_ERROR:
+        doc["event"] = "error";
+        data["message"] = evt.data.error.message;
         break;
 
       default:

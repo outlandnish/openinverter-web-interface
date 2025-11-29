@@ -87,8 +87,13 @@ static uint8_t currentScanNode = 1;
 static uint8_t scanSerialPart = 0; // Which part of serial we're reading (0-3)
 static uint32_t scanDeviceSerial[4];
 static unsigned long lastScanTime = 0;
+
+// State timeout tracking
+static unsigned long stateStartTime = 0;
+static const unsigned long OBTAINSERIAL_TIMEOUT_MS = 5000; // 5 second timeout
 static const unsigned long SCAN_DELAY_MS = 50; // Delay between node probes
 static DeviceDiscoveryCallback discoveryCallback = nullptr;
+static ScanProgressCallback scanProgressCallback = nullptr;
 
 // In-memory device list
 struct Device {
@@ -863,6 +868,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 
   _nodeId = nodeId;
   state = OBTAINSERIAL;
+  stateStartTime = millis(); // Track when we entered OBTAINSERIAL state
   DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
   requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
   DBG_OUTPUT_PORT.println("Connected to device");
@@ -871,6 +877,12 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 void Loop() {
   bool recvdResponse = false;
   twai_message_t rxframe;
+
+  // Check for OBTAINSERIAL timeout
+  if (state == OBTAINSERIAL && (millis() - stateStartTime > OBTAINSERIAL_TIMEOUT_MS)) {
+    DBG_OUTPUT_PORT.println("OBTAINSERIAL timeout - resetting to IDLE");
+    state = IDLE;
+  }
 
   if (twai_receive(&rxframe, 0) == ESP_OK) {
     printCanRx(&rxframe);
@@ -1120,10 +1132,10 @@ bool SaveDeviceName(String serial, String name, int nodeId) {
 
 // Continuous scanning implementation
 
-void StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
+bool StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
   if (state != IDLE) {
-    DBG_OUTPUT_PORT.println("Cannot start continuous scan - device busy");
-    return;
+    DBG_OUTPUT_PORT.printf("Cannot start continuous scan - device busy: %d\n", state);
+    return false;
   }
 
   continuousScanActive = true;
@@ -1134,6 +1146,7 @@ void StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
   lastScanTime = 0;
 
   DBG_OUTPUT_PORT.printf("Started continuous CAN scan (nodes %d-%d)\n", startNodeId, endNodeId);
+  return true;
 }
 
 void StopContinuousScan() {
@@ -1147,6 +1160,10 @@ bool IsContinuousScanActive() {
 
 void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback) {
   discoveryCallback = callback;
+}
+
+void SetScanProgressCallback(ScanProgressCallback callback) {
+  scanProgressCallback = callback;
 }
 
 void ProcessContinuousScan() {
@@ -1172,6 +1189,11 @@ void ProcessContinuousScan() {
 
   // Request serial number part from current scan node
   requestSdoElement(currentScanNode, SDO_INDEX_SERIAL, scanSerialPart);
+
+  // Notify scan progress when starting a new node (first serial part)
+  if (scanSerialPart == 0 && scanProgressCallback) {
+    scanProgressCallback(currentScanNode, scanStartNode, scanEndNode);
+  }
 
   twai_message_t rxframe;
   if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
