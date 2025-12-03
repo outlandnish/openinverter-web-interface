@@ -16,7 +16,7 @@ export default function SystemOverview() {
   const [configuredScanRange, setConfiguredScanRange] = useState({ start: 1, end: 32 })
 
   // Use shared WebSocket connection
-  const { isConnected, isConnecting } = useWebSocketContext()
+  const { isConnected, isConnecting, isRetrying } = useWebSocketContext()
 
   // Use shared Device context
   const {
@@ -123,7 +123,7 @@ export default function SystemOverview() {
 
         {mergedDevices.length === 0 ? (
           !isConnected ? (
-            <DisconnectedState onReconnect={handleReconnect} isConnecting={isConnecting} />
+            <DisconnectedState onReconnect={handleReconnect} isConnecting={isConnecting} isRetrying={isRetrying} />
           ) : (
             <div class="empty-state-centered">
               {scanning ? (

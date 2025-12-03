@@ -19,6 +19,14 @@ const disconnectedStateContent = {
       en: 'Establishing connection to the device...',
       de: 'Verbindung zum Gerät wird hergestellt...',
     }),
+    reconnecting: t({
+      en: 'Reconnecting to ESP32',
+      de: 'Verbindung zum ESP32 wird wiederhergestellt',
+    }),
+    reconnectingMessage: t({
+      en: 'Connection lost. Attempting to reconnect to the device...',
+      de: 'Verbindung verloren. Versuche, die Verbindung zum Gerät wiederherzustellen...',
+    }),
     reconnect: t({
       en: 'Reconnect',
       de: 'Erneut verbinden',

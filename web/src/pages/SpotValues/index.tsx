@@ -2,7 +2,7 @@ import { useState, useEffect } from 'preact/hooks'
 import { useLocation, useRoute } from 'wouter'
 import { useIntlayer } from 'react-intlayer'
 import { useParams } from '@hooks/useParams'
-import { useWebSocket } from '@hooks/useWebSocket'
+import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { getParameterDisplayName } from '@utils/paramStorage'
 import MultiLineChart, { COLORS, type DataSeries, type DataPoint } from '@components/MultiLineChart'
 
@@ -27,8 +27,11 @@ export default function SpotValues() {
   const { params, loading: paramsLoading, getDisplayName } = useParams(routeParams?.serial)
 
   // WebSocket connection
-  const { isConnected, sendMessage } = useWebSocket('/ws', {
-    onMessage: (message) => {
+  const { isConnected, sendMessage, subscribe } = useWebSocketContext()
+
+  // Subscribe to WebSocket messages
+  useEffect(() => {
+    const unsubscribe = subscribe((message) => {
       console.log('WebSocket event:', message.event, message.data)
 
       switch (message.event) {
@@ -72,8 +75,10 @@ export default function SpotValues() {
           })
           break
       }
-    }
-  })
+    })
+
+    return unsubscribe
+  }, [subscribe])
 
   // Auto-select all spot values (non-params) on load
   useEffect(() => {

@@ -3,10 +3,25 @@ import { useIntlayer } from 'react-intlayer'
 interface DisconnectedStateProps {
   onReconnect: () => void
   isConnecting?: boolean
+  isRetrying?: boolean
 }
 
-export default function DisconnectedState({ onReconnect, isConnecting = false }: DisconnectedStateProps) {
+export default function DisconnectedState({ onReconnect, isConnecting = false, isRetrying = false }: DisconnectedStateProps) {
   const content = useIntlayer('disconnected-state')
+
+  // Determine which message to show based on state
+  const getTitle = () => {
+    if (isConnecting && isRetrying) return content.reconnecting.value
+    if (isConnecting) return content.connecting.value
+    return content.title.value
+  }
+
+  const getMessage = () => {
+    if (isConnecting && isRetrying) return content.reconnectingMessage.value
+    if (isConnecting) return content.connectingMessage.value
+    return content.message.value
+  }
+
   return (
     <div class="disconnected-state-wrapper">
       <div class="disconnected-state-content">
@@ -26,9 +41,9 @@ export default function DisconnectedState({ onReconnect, isConnecting = false }:
             </svg>
           </div>
         )}
-        <p class="empty-state-text">{isConnecting ? content.connecting : content.title}</p>
+        <p class="empty-state-text">{getTitle()}</p>
         <p class="empty-state-hint">
-          {isConnecting ? content.connectingMessage : content.message}
+          {getMessage()}
         </p>
         {!isConnecting && (
           <button class="btn-with-icon" onClick={onReconnect}>

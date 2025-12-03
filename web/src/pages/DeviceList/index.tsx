@@ -4,7 +4,7 @@ import { useIntlayer } from 'react-intlayer'
 import { api, SavedDevice } from '@api/inverter'
 import DeviceScanner from '@components/DeviceScanner'
 import DeviceNaming from '@components/DeviceNaming'
-import { useWebSocket } from '@hooks/useWebSocket'
+import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { saveLastDevice, getLastDevice } from '@utils/lastDevice'
 
 interface MergedDevice {
@@ -23,8 +23,11 @@ export default function DeviceList() {
   const [lastConnectedSerial, setLastConnectedSerial] = useState<string | null>(null)
 
   // WebSocket connection for real-time device updates
-  const { isConnected, sendMessage } = useWebSocket('/ws', {
-    onMessage: (message) => {
+  const { isConnected, sendMessage, subscribe } = useWebSocketContext()
+
+  // Subscribe to WebSocket messages
+  useEffect(() => {
+    const unsubscribe = subscribe((message) => {
       console.log('WebSocket event:', message.event, message.data)
 
       switch (message.event) {
@@ -59,12 +62,18 @@ export default function DeviceList() {
           console.log('Connected to device:', message.data)
           break
       }
-    },
-    onOpen: () => {
+    })
+
+    return unsubscribe
+  }, [subscribe])
+
+  // Load devices when connected
+  useEffect(() => {
+    if (isConnected) {
       console.log('WebSocket connected, loading devices...')
       loadDevices()
     }
-  })
+  }, [isConnected])
 
   useEffect(() => {
     loadDevices()

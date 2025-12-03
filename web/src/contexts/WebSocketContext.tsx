@@ -9,6 +9,7 @@ export interface WebSocketMessage {
 export interface WebSocketContextValue {
   isConnected: boolean
   isConnecting: boolean
+  isRetrying: boolean
   sendMessage: (action: string, data?: any) => void
   subscribe: (handler: (message: WebSocketMessage) => void) => () => void
 }
@@ -22,7 +23,8 @@ interface WebSocketProviderProps {
 
 export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
   const [isConnected, setIsConnected] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(true) // Start as connecting on mount
+  const [isRetrying, setIsRetrying] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
   const subscribersRef = useRef<Set<(message: WebSocketMessage) => void>>(new Set())
@@ -38,30 +40,39 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
 
       console.log('Connecting to WebSocket:', wsUrl)
       setIsConnecting(true)
+      setIsConnected(false)
+
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
         console.log('WebSocket connected')
         setIsConnecting(false)
         setIsConnected(true)
+        setIsRetrying(false) // Reset retry flag on successful connection
       }
 
-      ws.onclose = () => {
-        console.log('WebSocket disconnected')
-        setIsConnecting(false)
-        setIsConnected(false)
+      ws.onclose = (event) => {
+        console.log('WebSocket disconnected', event.code, event.reason)
 
-        // Attempt to reconnect
-        reconnectTimeoutRef.current = window.setTimeout(() => {
-          console.log('Attempting to reconnect...')
-          connect()
-        }, reconnectInterval)
+        // Only set to disconnected state after a small delay to ensure UI updates
+        setTimeout(() => {
+          setIsConnecting(false)
+          setIsConnected(false)
+
+          // Mark as retrying for subsequent connection attempts
+          setIsRetrying(true)
+
+          // Attempt to reconnect after showing error state
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            console.log('Attempting to reconnect...')
+            connect()
+          }, reconnectInterval)
+        }, 100)
       }
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error)
-        setIsConnecting(false)
-        setIsConnected(false)
+        // Don't set states here - let onclose handle it
       }
 
       ws.onmessage = (event) => {
@@ -128,6 +139,7 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
   const value: WebSocketContextValue = {
     isConnected,
     isConnecting,
+    isRetrying,
     sendMessage,
     subscribe,
   }

@@ -4,7 +4,7 @@ import { useIntlayer } from 'react-intlayer'
 import { api, DeviceSettings } from '@api/inverter'
 import Layout from '@components/Layout'
 import DisconnectedState from '@components/DisconnectedState'
-import { useWebSocket } from '@hooks/useWebSocket'
+import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useToast } from '@hooks/useToast'
 
 const CAN_SPEEDS = [
@@ -28,7 +28,11 @@ export default function Settings() {
   })
 
   // WebSocket connection
-  const { isConnected, isConnecting, reconnect } = useWebSocket('/ws')
+  const { isConnected, isConnecting, isRetrying } = useWebSocketContext()
+
+  const handleReconnect = () => {
+    window.location.reload()
+  }
 
   // Toast notifications
   const { showSuccess, showError } = useToast()
@@ -82,7 +86,7 @@ export default function Settings() {
         </div>
 
         {!isConnected ? (
-          <DisconnectedState onReconnect={reconnect} isConnecting={isConnecting} />
+          <DisconnectedState onReconnect={handleReconnect} isConnecting={isConnecting} isRetrying={isRetrying} />
         ) : (
           <>
             <section class="card">
