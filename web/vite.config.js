@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import preact from '@preact/preset-vite'
 import { intlayerPlugin } from 'vite-intlayer'
+import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 // Use simulator when VITE_USE_SIMULATOR=true or when running dev:sim
@@ -12,7 +13,82 @@ const wsTarget = useSimulator ? 'ws://localhost:4000' : 'ws://inverter.local'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [preact(), intlayerPlugin()],
+  plugins: [
+    preact(), 
+    intlayerPlugin(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['openinverter-logo.png', 'icon-192.png', 'icon-512.png'],
+      manifest: {
+        name: 'OpenInverter Web Interface',
+        short_name: 'OpenInverter',
+        description: 'Web interface for OpenInverter ESP32 controller',
+        theme_color: '#646cff',
+        background_color: '#1a1a1a',
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        icons: [
+          {
+            src: '/openinverter-logo.png',
+            sizes: 'any',
+            type: 'image/png',
+            purpose: 'any maskable'
+          },
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any maskable'
+          },
+          {
+            src: '/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable'
+          }
+        ]
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,png}'],
+        navigateFallback: null,
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-cache',
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 1 year
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          {
+            urlPattern: /\/(cmd|canmap|nodeid)/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'api-cache',
+              networkTimeoutSeconds: 10,
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 60 * 5 // 5 minutes
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          }
+        ]
+      },
+      devOptions: {
+        enabled: true,
+        type: 'module'
+      }
+    })
+  ],
 
   resolve: {
     alias: {
@@ -24,9 +100,6 @@ export default defineConfig({
       '@utils': path.resolve(__dirname, './src/utils'),
       '@styles': path.resolve(__dirname, './src/styles'),
       '@contexts': path.resolve(__dirname, './src/contexts'),
-      // React compatibility for react-intlayer
-      'react': 'preact/compat',
-      'react-dom': 'preact/compat',
     },
   },
 
