@@ -11,6 +11,7 @@ web/yarn-error.log*
 web/package-lock.json
 web/yarn.lock
 web/pnpm-lock.yaml
+web/dev-dist/
 
 # Intlayer
 web/.intlayer/
@@ -27,3 +28,5 @@ data/*.json
 # Development
 .vscode/
 dist/
+
+compile_commands.json
