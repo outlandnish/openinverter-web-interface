@@ -82,13 +82,13 @@ export default function DeviceParameters({
     .filter(([_, param]) => param.isparam)
     .sort((a, b) => {
       // Sort by category, then by name
-      const catA = a[1].category || 'Other'
-      const catB = b[1].category || 'Other'
+      const catA = a[1].category || 'Spot Values'
+      const catB = b[1].category || 'Spot Values'
       if (catA !== catB) return catA.localeCompare(catB)
       return getDisplayName(a[0]).localeCompare(getDisplayName(b[0]))
     })
     .reduce((acc, [key, param]) => {
-      const category = param.category || 'Other'
+      const category = param.category || 'Spot Values'
       if (!acc[category]) acc[category] = []
       acc[category].push([key, param])
       return acc
