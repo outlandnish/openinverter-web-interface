@@ -1,4 +1,4 @@
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 
 interface DisconnectedStateProps {
   onReconnect: () => void

@@ -1,6 +1,6 @@
 import { ComponentChildren } from 'preact'
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 import Sidebar from '@components/Sidebar'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceContext } from '@contexts/DeviceContext'

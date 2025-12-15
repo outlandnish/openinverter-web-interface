@@ -1,5 +1,5 @@
 import { useLocation } from 'wouter'
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 import { SavedDevice } from '@api/inverter'
 import ConnectionStatus from '@components/ConnectionStatus'
 

@@ -7,18 +7,22 @@ const deviceScannerContent = {
       en: 'Stop scanning',
       de: 'Scannen stoppen',
     }),
-    scanCanBus: t({
-      en: 'Scan CAN bus (Nodes 0-255)',
-      de: 'CAN-Bus scannen (Knoten 0-255)',
-    }),
+    scanCanBus: insert(
+      t({
+        en: 'Scan CAN bus (Nodes {{start}}-{{end}})',
+        de: 'CAN-Bus scannen (Knoten {{start}}-{{end}})',
+      })
+    ),
     cannotScanDisconnected: t({
       en: 'Cannot scan: ESP32 disconnected',
       de: 'Scannen nicht möglich: ESP32 getrennt',
     }),
-    scanningCanBus: t({
-      en: 'Scanning CAN bus (nodes 0-255)...',
-      de: 'CAN-Bus wird gescannt (Knoten 0-255)...',
-    }),
+    scanningCanBus: insert(
+      t({
+        en: 'Scanning CAN bus (nodes {{start}}-{{end}}): Node {{current}}',
+        de: 'CAN-Bus wird gescannt (Knoten {{start}}-{{end}}): Node {{current}}',
+      })
+    ),
   },
 } satisfies DeclarationContent
 

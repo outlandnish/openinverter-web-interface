@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'preact/hooks'
 import { useLocation } from 'wouter'
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 import DeviceScanner from '@components/DeviceScanner'
 import DeviceNaming from '@components/DeviceNaming'
 import DisconnectedState from '@components/DisconnectedState'
@@ -118,7 +118,7 @@ export default function SystemOverview() {
           deviceCount={mergedDevices.length}
           disabled={!isConnected}
           currentScanNode={currentScanNode}
-          scanRange={activeScanRange}
+          {...(activeScanRange && { scanRange: activeScanRange })}
         />
 
         {mergedDevices.length === 0 ? (

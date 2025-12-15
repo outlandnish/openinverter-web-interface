@@ -1,4 +1,4 @@
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 
 interface DeviceScannerProps {
   scanning: boolean
@@ -6,7 +6,7 @@ interface DeviceScannerProps {
   deviceCount: number
   disabled?: boolean
   currentScanNode?: number | null
-  scanRange?: { start: number; end: number } | null
+  scanRange?: { start: number; end: number }
 }
 
 export default function DeviceScanner({
@@ -14,21 +14,9 @@ export default function DeviceScanner({
   onScan,
   disabled = false,
   currentScanNode,
-  scanRange
+  scanRange = { start: 0, end: 255 }
 }: DeviceScannerProps) {
   const content = useIntlayer('device-scanner')
-
-  const getScanMessage = () => {
-    if (!scanRange) {
-      return content.scanningCanBus.value
-    }
-
-    if (currentScanNode !== null && currentScanNode !== undefined) {
-      return `Scanning CAN bus (${scanRange.start}-${scanRange.end}): Node ${currentScanNode}...`
-    }
-
-    return `Scanning CAN bus (${scanRange.start}-${scanRange.end})...`
-  }
 
   return (
     <div class="scan-controls-inline">
@@ -37,7 +25,7 @@ export default function DeviceScanner({
           <button
             class="scan-icon-only scanning"
             onClick={onScan}
-            title={content.stopScanning.value}
+            title={content.stopScanning}
             disabled={disabled}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -48,7 +36,7 @@ export default function DeviceScanner({
           <button
             class="scan-icon-only"
             onClick={onScan}
-            title={disabled ? content.cannotScanDisconnected.value : content.scanCanBus.value}
+            title={disabled ? content.cannotScanDisconnected : (scanRange ? content.scanCanBus({ start: scanRange.start, end: scanRange.end }) : 'Scan CAN bus')}
             disabled={disabled}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -61,7 +49,7 @@ export default function DeviceScanner({
       {scanning && (
         <div class="scan-status-inline">
           <div class="spinner"></div>
-          <span>{getScanMessage()}</span>
+          <span>{content.scanningCanBus({ start: scanRange.start, end: scanRange.end, current: currentScanNode ?? '' })}</span>
         </div>
       )}
     </div>

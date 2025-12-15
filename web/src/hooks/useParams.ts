@@ -53,61 +53,24 @@ interface UseParamsResult {
   refresh: () => Promise<void>
   getParamId: (paramName: string) => number | null
   getDisplayName: (paramName: string) => string
+  downloadProgress: number // 0-100 percentage of download complete
 }
 
 /**
  * Hook for managing device parameters with localStorage caching
+ * @param deviceSerial - Device serial number for cache key
+ * @param nodeId - Node ID to fetch parameters from (required for multi-client support)
  */
-export function useParams(deviceSerial: string | undefined): UseParamsResult {
+export function useParams(deviceSerial: string | undefined, nodeId: number | undefined): UseParamsResult {
+  const explicitNodeId = nodeId
   const [params, setParams] = useState<ParameterList | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  const loadParams = async (forceRefresh = false) => {
-    if (!deviceSerial) {
-      setParams(null)
-      setLoading(false)
-      return
-    }
-
-    try {
-      setLoading(true)
-      setError(null)
-
-      // Check localStorage first
-      if (!forceRefresh) {
-        const cached = ParamStorage.getParams(deviceSerial)
-        if (cached) {
-          console.log('Using cached parameters from localStorage')
-          // Process cached parameters to ensure enums are parsed
-          const processedCached = processParameters(cached)
-          setParams(processedCached)
-          setLoading(false)
-          return
-        }
-      }
-
-      // Download from device
-      console.log('Downloading parameters from device...')
-      const rawParams = await api.getParamsJson()
-
-      // Process parameters to parse enums from unit strings
-      const processedParams = processParameters(rawParams)
-
-      // Save to localStorage
-      ParamStorage.saveParams(deviceSerial, processedParams)
-
-      setParams(processedParams)
-    } catch (err) {
-      console.error('Failed to load parameters:', err)
-      setError(err instanceof Error ? err.message : 'Failed to load parameters')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [downloadProgress, setDownloadProgress] = useState(0)
 
   const refresh = async () => {
-    await loadParams(true)
+    setRefreshTrigger(prev => prev + 1)
   }
 
   const getParamId = (paramName: string): number | null => {
@@ -121,8 +84,92 @@ export function useParams(deviceSerial: string | undefined): UseParamsResult {
   }
 
   useEffect(() => {
+    // Create AbortController for this effect
+    const abortController = new AbortController()
+    const forceRefresh = refreshTrigger > 0
+
+    const loadParams = async () => {
+      if (!deviceSerial) {
+        setParams(null)
+        setLoading(false)
+        return
+      }
+
+      try {
+        setLoading(true)
+        setError(null)
+
+        // Skip cache when we have a nodeId - always fetch fresh to ensure correctness
+        // This prevents issues where cached params from one device are used for another
+        if (!forceRefresh && explicitNodeId === undefined) {
+          const cached = ParamStorage.getParams(deviceSerial)
+          if (cached) {
+            console.log('Using cached parameters from localStorage for device:', deviceSerial)
+            // Process cached parameters to ensure enums are parsed
+            const processedCached = processParameters(cached)
+
+            // Check if aborted before setting state
+            if (!abortController.signal.aborted) {
+              setParams(processedCached)
+              setLoading(false)
+            }
+            return
+          }
+        }
+
+        // Download from device - nodeId is required
+        if (explicitNodeId === undefined) {
+          console.error('Cannot download parameters: nodeId is required')
+          setError('nodeId is required to fetch parameters')
+          return
+        }
+        
+        console.log(`Downloading parameters from nodeId ${explicitNodeId} for serial:`, deviceSerial)
+        setDownloadProgress(0)
+        
+        const rawParams = await api.getParamsJson(explicitNodeId, abortController.signal, (progress) => {
+          setDownloadProgress(progress)
+        })
+
+        // Check if request was aborted
+        if (abortController.signal.aborted) {
+          console.log('Parameter fetch aborted for device:', deviceSerial)
+          return
+        }
+
+        // Process parameters to parse enums from unit strings
+        const processedParams = processParameters(rawParams)
+
+        // Save to localStorage
+        ParamStorage.saveParams(deviceSerial, processedParams)
+
+        setParams(processedParams)
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === 'AbortError') {
+          console.log('Parameter fetch was aborted')
+          return
+        }
+
+        if (!abortController.signal.aborted) {
+          console.error('Failed to load parameters:', err)
+          setError(err instanceof Error ? err.message : 'Failed to load parameters')
+        }
+      } finally {
+        if (!abortController.signal.aborted) {
+          setLoading(false)
+          setDownloadProgress(0)
+        }
+      }
+    }
+
     loadParams()
-  }, [deviceSerial])
+
+    // Cleanup: abort the request when component unmounts or deviceSerial/refreshTrigger/nodeId changes
+    return () => {
+      abortController.abort()
+    }
+  }, [deviceSerial, refreshTrigger, explicitNodeId])
 
   return {
     params,
@@ -131,5 +178,6 @@ export function useParams(deviceSerial: string | undefined): UseParamsResult {
     refresh,
     getParamId,
     getDisplayName,
+    downloadProgress,
   }
 }

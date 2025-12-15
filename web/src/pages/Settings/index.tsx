@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'preact/hooks'
 import { useLocation } from 'wouter'
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 import { api, DeviceSettings } from '@api/inverter'
 import Layout from '@components/Layout'
 import DisconnectedState from '@components/DisconnectedState'
