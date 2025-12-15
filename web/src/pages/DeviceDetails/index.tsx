@@ -1,51 +1,35 @@
 import { useState, useEffect } from 'preact/hooks'
 import { useLocation, useRoute } from 'wouter'
-import { useIntlayer } from 'react-intlayer'
+import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
-import MultiLineChart, { COLORS, type DataPoint } from '@components/MultiLineChart'
 import Layout from '@components/Layout'
 import ConnectionStatus from '@components/ConnectionStatus'
+import SpotValuesMonitor from '@components/SpotValuesMonitor'
+import OTAUpdate from '@components/OTAUpdate'
+import DeviceParameters from '@components/DeviceParameters'
 import { useToast } from '@hooks/useToast'
-import { api } from '@api/inverter'
-import { formatParameterValue, normalizeEnumValue } from '@utils/parameterDisplay'
-
-type HistoricalData = Record<string, DataPoint[]>
-const MAX_HISTORY_POINTS = 100
+import { formatParameterValue } from '@/utils/parameterDisplay'
+import { api } from '@/api/inverter'
 
 export default function DeviceDetails() {
   const [, setLocation] = useLocation()
   const [, routeParams] = useRoute('/devices/:serial')
-  const appContent = useIntlayer('app')
   const content = useIntlayer('device-details')
   const { showError, showSuccess, showWarning } = useToast()
 
   const [loading, setLoading] = useState(true)
   const [nodeId, setNodeId] = useState('')
-  const [firmwareVersion] = useState('')
+  const [savedNodeId, setSavedNodeId] = useState<number>(0)
+  const [firmwareVersion, setFirmwareVersion] = useState('')
   const [deviceConnected, setDeviceConnected] = useState(false)
   const [deviceName, setDeviceName] = useState<string>('')
 
-  // Spot values state
-  const [streaming, setStreaming] = useState(false)
-  const [updateInterval, setUpdateInterval] = useState(1000)
-  const [spotValues, setSpotValues] = useState<Record<string, number>>({})
-  const [historicalData, setHistoricalData] = useState<HistoricalData>({})
-  const [selectedParams, setSelectedParams] = useState<Set<string>>(new Set())
-  const [chartParams, setChartParams] = useState<Set<string>>(new Set())
-  const [viewMode, setViewMode] = useState<'table' | 'chart'>('table')
-
-  // OTA update state
-  const [otaFile, setOtaFile] = useState<File | null>(null)
-  const [otaProgress, setOtaProgress] = useState<number>(0)
-  const [otaStatus, setOtaStatus] = useState<'idle' | 'uploading' | 'updating' | 'success' | 'error'>('idle')
-  const [otaError, setOtaError] = useState<string>('')
-
-  // Collapsed sections state for parameters
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
-
-  // Load device parameters
-  const { params, loading: paramsLoading, error: paramsError, refresh: refreshParams, getDisplayName } = useParams(routeParams?.serial)
+  // Load device parameters (only when savedNodeId is available)
+  const { params } = useParams(
+    routeParams?.serial, 
+    savedNodeId > 0 ? savedNodeId : undefined
+  )
 
   // Use shared WebSocket connection
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
@@ -77,96 +61,44 @@ export default function DeviceDetails() {
           setNodeId(message.data.id.toString())
           showSuccess(content.nodeIdSaved)
           break
-
-        case 'spotValuesStatus':
-          setStreaming(message.data.active)
-          if (message.data.interval) {
-            setUpdateInterval(message.data.interval)
-          }
-          if (!message.data.active) {
-            setHistoricalData({})
-          }
-          break
-
-        case 'spotValues':
-          const timestamp = message.data.timestamp
-          const values = message.data.values
-
-          setSpotValues(values)
-
-          // Update historical data
-          setHistoricalData(prev => {
-            const updated = { ...prev }
-
-            Object.entries(values).forEach(([paramId, value]) => {
-              if (!updated[paramId]) {
-                updated[paramId] = []
-              }
-
-              updated[paramId].push({ timestamp, value: value as number })
-
-              if (updated[paramId].length > MAX_HISTORY_POINTS) {
-                updated[paramId] = updated[paramId].slice(-MAX_HISTORY_POINTS)
-              }
-            })
-
-            return updated
-          })
-          break
-
-        case 'otaProgress':
-          setOtaProgress(message.data.progress)
-          setOtaStatus('updating')
-          break
-
-        case 'otaSuccess':
-          setOtaProgress(100)
-          setOtaStatus('success')
-          showSuccess(content.updateSuccessful)
-          break
-
-        case 'otaError':
-          const otaErrorMsg = message.data.error || 'Unknown error occurred'
-          setOtaStatus('error')
-          setOtaError(otaErrorMsg)
-          showError(content.otaUpdateFailedWithError({ error: otaErrorMsg }))
-          break
       }
     })
-
-    // Load settings after subscription is set up and WebSocket is connected
-    if (isConnected) {
-      console.log('WebSocket connected, loading settings...')
-      loadSettings()
-    }
 
     return unsubscribe
   }, [isConnected])
 
-  // Load device name from saved devices
+  // Load settings when WebSocket is connected AND savedNodeId is available
   useEffect(() => {
-    const loadDeviceName = async () => {
+    if (isConnected && savedNodeId > 0) {
+      console.log('WebSocket connected and nodeId loaded, loading settings...')
+      loadSettings()
+    }
+  }, [isConnected, savedNodeId])
+
+  // Load device name and nodeId from saved devices
+  useEffect(() => {
+    const loadDeviceInfo = async () => {
       try {
         const response = await api.getSavedDevices()
         const serial = routeParams?.serial
         if (serial && response.devices && response.devices[serial]) {
           setDeviceName(response.devices[serial].name || '')
+          setSavedNodeId(response.devices[serial].nodeId || 0)
         }
       } catch (error) {
-        console.error('Failed to load device name:', error)
+        console.error('Failed to load device info:', error)
       }
     }
-    
+
     if (routeParams?.serial) {
-      loadDeviceName()
+      loadDeviceInfo()
     }
   }, [routeParams?.serial])
 
-  // Auto-select all spot values on load
+  // Update firmware version from params
   useEffect(() => {
-    if (params && selectedParams.size === 0) {
-      const spotParamKeys = Object.keys(params).filter(key => !params[key].isparam)
-      setSelectedParams(new Set(spotParamKeys))
+    if (params && params['version']) {
+      setFirmwareVersion(formatParameterValue(params['version'], params['version'].value))
     }
   }, [params])
 
@@ -175,13 +107,13 @@ export default function DeviceDetails() {
 
     // First connect to the device, then get node ID
     if (routeParams?.serial) {
-      // Try to connect to the device with the serial
-      // The nodeId might not be known yet, so we'll get it from the response
+      // Connect to the device with the serial and saved nodeId
       sendMessage('connect', {
-        serial: routeParams.serial
+        serial: routeParams.serial,
+        nodeId: savedNodeId
       })
 
-      // Also request the node ID
+      // Also request the node ID to verify/update it
       sendMessage('getNodeId')
     }
   }
@@ -194,154 +126,6 @@ export default function DeviceDetails() {
     }
     sendMessage('setNodeId', { id })
   }
-
-  // Cleanup when component unmounts
-  useEffect(() => {
-    return () => {
-      // Only stop if currently streaming when component unmounts
-      sendMessage('stopSpotValues')
-    }
-  }, [])
-
-  const handleRefreshParams = async () => {
-    await refreshParams()
-    alert('Parameters refreshed from device')
-  }
-
-  // Spot values handlers
-  const handleStartStop = () => {
-    if (streaming) {
-      sendMessage('stopSpotValues')
-    } else {
-      if (selectedParams.size === 0) {
-        alert('Please select at least one parameter to monitor')
-        return
-      }
-
-      const paramIds = Array.from(selectedParams)
-        .map(key => params?.[key]?.id)
-        .filter(id => id !== undefined) as number[]
-
-      sendMessage('startSpotValues', {
-        paramIds,
-        interval: updateInterval
-      })
-    }
-  }
-
-  const handleParamToggle = (paramKey: string) => {
-    const newSelected = new Set(selectedParams)
-    if (newSelected.has(paramKey)) {
-      newSelected.delete(paramKey)
-    } else {
-      newSelected.add(paramKey)
-    }
-    setSelectedParams(newSelected)
-  }
-
-  const handleSelectAll = () => {
-    if (params) {
-      const allKeys = Object.keys(params).filter(key => !params[key].isparam)
-      setSelectedParams(new Set(allKeys))
-    }
-  }
-
-  const handleSelectNone = () => {
-    setSelectedParams(new Set())
-  }
-
-  const handleChartParamToggle = (paramKey: string) => {
-    const newChartParams = new Set(chartParams)
-    if (newChartParams.has(paramKey)) {
-      newChartParams.delete(paramKey)
-    } else {
-      newChartParams.add(paramKey)
-    }
-    setChartParams(newChartParams)
-  }
-
-  // OTA update handlers
-  const handleOtaFileSelect = (e: Event) => {
-    const target = e.target as HTMLInputElement
-    const file = target.files?.[0]
-    if (file && file.name.endsWith('.bin')) {
-      setOtaFile(file)
-      setOtaError('')
-    } else if (file) {
-      setOtaError('Please select a .bin file')
-      setOtaFile(null)
-    }
-  }
-
-  const handleOtaUpload = async () => {
-    if (!otaFile) {
-      setOtaError('Please select a firmware file first')
-      return
-    }
-
-    // Stop streaming if active
-    if (streaming) {
-      sendMessage('stopSpotValues')
-    }
-
-    try {
-      setOtaStatus('uploading')
-      setOtaProgress(0)
-      setOtaError('')
-
-      // Create form data for file upload
-      const formData = new FormData()
-      formData.append('firmware', otaFile)
-
-      // Upload firmware file
-      const response = await fetch('/ota/upload', {
-        method: 'POST',
-        body: formData
-      })
-
-      if (!response.ok) {
-        throw new Error('Upload failed')
-      }
-
-      // The backend will send progress updates via WebSocket
-      setOtaStatus('updating')
-    } catch (error) {
-      console.error('OTA upload error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Upload failed'
-      setOtaStatus('error')
-      setOtaError(errorMessage)
-      showError(content.otaUpdateFailedWithError({ error: errorMessage }))
-    }
-  }
-
-  const handleOtaReset = () => {
-    setOtaFile(null)
-    setOtaProgress(0)
-    setOtaStatus('idle')
-    setOtaError('')
-  }
-
-  const toggleSection = (category: string) => {
-    const newCollapsed = new Set(collapsedSections)
-    if (newCollapsed.has(category)) {
-      newCollapsed.delete(category)
-    } else {
-      newCollapsed.add(category)
-    }
-    setCollapsedSections(newCollapsed)
-  }
-
-  // Organize parameters by category
-  const spotParams = params ? Object.entries(params).filter(([_, param]) => !param.isparam) : []
-  const categories = new Map<string, Array<[string, any]>>()
-
-  spotParams.forEach(([key, param]) => {
-    const category = param.category || 'Other'
-    if (!categories.has(category)) {
-      categories.set(category, [])
-    }
-    categories.get(category)!.push([key, param])
-  })
 
   return (
     <Layout currentSerial={routeParams?.serial}>
@@ -393,430 +177,23 @@ export default function DeviceDetails() {
               </div>
             </div>
 
-      {/* Spot Values Monitoring Card */}
-      <section id="live-monitoring" class="card">
-        <h2 class="section-header" onClick={(e) => {
-          const target = e.currentTarget.parentElement
-          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }}>
-          {content.liveMonitoring}
-        </h2>
+      {/* Spot Values Monitoring */}
+      {savedNodeId > 0 && routeParams?.serial && (
+        <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
+      )}
 
-        <div class="spot-values-controls">
-          <div class="form-group">
-            <label>{content.updateInterval}</label>
-            <input
-              type="number"
-              value={updateInterval}
-              onInput={(e) => setUpdateInterval(parseInt((e.target as HTMLInputElement).value))}
-              min="100"
-              max="10000"
-              step="100"
-              disabled={streaming}
-            />
-          </div>
+      {/* Device Parameters */}
+      {routeParams?.serial && nodeId && (
+        <DeviceParameters
+          serial={routeParams.serial}
+          nodeId={nodeId}
+          onNodeIdChange={setNodeId}
+          onSaveNodeId={handleSaveNodeId}
+        />
+      )}
 
-          <div class="button-group">
-            <button
-              class={streaming ? "btn-secondary" : "btn-primary"}
-              onClick={handleStartStop}
-              disabled={!isConnected || !params}
-            >
-              {streaming ? <>⏸ {content.stopMonitoring}</> : <>▶ {content.startMonitoring}</>}
-            </button>
-            {!streaming && (
-              <>
-                <button class="btn-secondary" onClick={handleSelectAll}>
-                  {content.selectAll}
-                </button>
-                <button class="btn-secondary" onClick={handleSelectNone}>
-                  {content.selectNone}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {streaming && (
-          <div class="streaming-indicator">
-            <span class="pulse-dot"></span>
-            {content.streamingStatus({ count: selectedParams.size, interval: updateInterval })}
-          </div>
-        )}
-
-        <div class="view-mode-tabs">
-          <button
-            class={viewMode === 'table' ? 'tab-active' : 'tab'}
-            onClick={() => setViewMode('table')}
-          >
-            {content.tableView}
-          </button>
-          <button
-            class={viewMode === 'chart' ? 'tab-active' : 'tab'}
-            onClick={() => setViewMode('chart')}
-            disabled={!streaming && Object.keys(historicalData).length === 0}
-          >
-            {content.chartView}
-          </button>
-        </div>
-
-        {viewMode === 'table' && params && (
-          <div class="spot-values-grid">
-            {Array.from(categories.entries()).map(([category, categoryParams]) => (
-              <div key={category} class="category-section">
-                <h3>{category}</h3>
-                <table class="spot-values-table">
-                  <thead>
-                    <tr>
-                      <th>{content.parameter}</th>
-                      <th>{content.value}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {categoryParams.map(([key, param]) => {
-                      const paramId = param.id?.toString()
-                      const value = paramId && spotValues[paramId] !== undefined
-                        ? spotValues[paramId]
-                        : param.value
-
-                      // Use utility function to format the display value
-                      const displayValue = formatParameterValue(param, value)
-
-                      return (
-                        <tr
-                          key={key}
-                          class={selectedParams.has(key) ? 'selected' : ''}
-                          onClick={() => !streaming && handleParamToggle(key)}
-                          style={{ cursor: streaming ? 'default' : 'pointer' }}
-                        >
-                          <td>{getDisplayName(key)}</td>
-                          <td class="value-cell">{displayValue}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {viewMode === 'chart' && params && (
-          <div class="chart-view">
-            <div class="chart-param-selector">
-              <h3>{content.selectParametersToChart}</h3>
-              <div class="param-checkboxes">
-                {Array.from(selectedParams).map(key => {
-                  const param = params[key]
-                  const paramId = param?.id?.toString()
-                  const hasData = paramId && historicalData[paramId] && historicalData[paramId].length > 0
-
-                  return (
-                    <label key={key} class="chart-param-option">
-                      <input
-                        type="checkbox"
-                        checked={chartParams.has(key)}
-                        onChange={() => handleChartParamToggle(key)}
-                        disabled={!hasData}
-                      />
-                      <span style={{ color: hasData ? COLORS[Array.from(chartParams).indexOf(key) % COLORS.length] : '#999' }}>
-                        {getDisplayName(key)}
-                        {!hasData && <> ({content.noData})</>}
-                      </span>
-                    </label>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div class="chart-container">
-              {chartParams.size > 0 ? (
-                <MultiLineChart
-                  series={Array.from(chartParams).map((key, index) => {
-                    const param = params[key]
-                    const paramId = param?.id?.toString()
-                    return {
-                      label: getDisplayName(key),
-                      unit: param.unit,
-                      color: COLORS[index % COLORS.length],
-                      data: (paramId && historicalData[paramId]) || []
-                    }
-                  })}
-                  width={Math.min(typeof window !== 'undefined' ? window.innerWidth - 100 : 1000, 1000)}
-                  height={500}
-                />
-              ) : (
-                <div class="chart-placeholder">
-                  <p>{content.chartPlaceholder}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* Device Parameters - All Updatable Parameters */}
-      <section id="device-parameters" class="card">
-        <h2 class="section-header" onClick={(e) => {
-          const target = e.currentTarget.parentElement
-          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }}>
-          {content.deviceParameters}
-        </h2>
-
-        {params && (() => {
-          // Group parameters by category
-          const categorizedParams = Object.entries(params)
-            .filter(([_, param]) => param.isparam)
-            .sort((a, b) => {
-              // Sort by category, then by name
-              const catA = a[1].category || 'Other'
-              const catB = b[1].category || 'Other'
-              if (catA !== catB) return catA.localeCompare(catB)
-              return getDisplayName(a[0]).localeCompare(getDisplayName(b[0]))
-            })
-            .reduce((acc, [key, param]) => {
-              const category = param.category || 'Other'
-              if (!acc[category]) acc[category] = []
-              acc[category].push([key, param])
-              return acc
-            }, {} as Record<string, Array<[string, any]>>)
-
-          return (
-            <div class="parameters-grid">
-              {Object.entries(categorizedParams).map(([category, categoryParams]) => {
-                const isCollapsed = collapsedSections.has(category)
-                return (
-                  <div key={category} class={`parameter-category${isCollapsed ? ' collapsed' : ''}`}>
-                    <h3 class="category-title" onClick={() => toggleSection(category)} style={{ cursor: 'pointer' }}>
-                      <span class="collapse-icon">{isCollapsed ? '▶' : '▼'}</span>
-                      {category}
-                      <span class="param-count">({categoryParams.length})</span>
-                    </h3>
-                    {!isCollapsed && (
-                      <div class="parameters-list">
-                    {categoryParams.map(([key, param]) => {
-                      const paramId = param.id
-                      const hasEnum = param.enums && Object.keys(param.enums).length > 0
-
-                      return (
-                        <div key={key} class="parameter-item">
-                          <div class="parameter-header">
-                            <label class="parameter-label">
-                              {getDisplayName(key)}
-                              {param.unit && <span class="parameter-unit"> ({param.unit})</span>}
-                            </label>
-                          </div>
-                          
-                          <div class="parameter-input-group">
-                            {hasEnum ? (
-                              <select
-                                value={normalizeEnumValue(param.value)}
-                                onChange={async (e) => {
-                                  const newValue = (e.target as HTMLSelectElement).value
-                                  try {
-                                    await api.setParamById(paramId, newValue)
-                                    showSuccess(content.parameterUpdatedSuccess({ paramName: getDisplayName(key) }))
-                                    // Refresh params to show new value
-                                    await refreshParams()
-                                  } catch (error) {
-                                    showError(content.failedToUpdateParam({ paramName: getDisplayName(key) }))
-                                  }
-                                }}
-                                disabled={!isConnected}
-                              >
-                                {Object.entries(param.enums).map(([value, label]) => (
-                                  <option key={value} value={value}>
-                                    {String(label)}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              <input
-                                type="number"
-                                value={param.value}
-                                min={param.minimum}
-                                max={param.maximum}
-                                step={param.unit === 'Hz' || param.unit === 'A' ? '0.1' : '1'}
-                                onBlur={async (e) => {
-                                  const target = e.target as HTMLInputElement
-                                  const newValue = parseFloat(target.value)
-                                  if (isNaN(newValue)) return
-                                  
-                                  // Validate range
-                                  if (param.minimum !== undefined && newValue < param.minimum) {
-                                    showError(content.valueMustBeAtLeast({ min: param.minimum }))
-                                    target.value = param.value.toString()
-                                    return
-                                  }
-                                  if (param.maximum !== undefined && newValue > param.maximum) {
-                                    showError(content.valueMustBeAtMost({ max: param.maximum }))
-                                    target.value = param.value.toString()
-                                    return
-                                  }
-
-                                  if (newValue !== param.value) {
-                                    try {
-                                      await api.setParamById(paramId, newValue)
-                                      showSuccess(content.parameterUpdatedSuccess({ paramName: getDisplayName(key) }))
-                                      // Refresh params to show new value
-                                      await refreshParams()
-                                    } catch (error) {
-                                      showError(content.failedToUpdateParam({ paramName: getDisplayName(key) }))
-                                      target.value = param.value.toString()
-                                    }
-                                  }
-                                }}
-                                disabled={!isConnected}
-                              />
-                            )}
-                            
-                            {param.minimum !== undefined && param.maximum !== undefined && !hasEnum && (
-                              <small class="parameter-hint">
-                                {content.range} {param.minimum} - {param.maximum}
-                                {param.default !== undefined && <> ({content.default} {param.default})</>}
-                              </small>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )
-        })()}
-
-        <div class="form-group" style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid #ddd' }}>
-          <label>{content.nodeId}</label>
-          <input
-            type="text"
-            value={nodeId}
-            onInput={(e) => setNodeId((e.target as HTMLInputElement).value)}
-            placeholder="Enter Node ID"
-          />
-          <small class="hint">{content.canSpeedNote}</small>
-        </div>
-
-        <div class="button-group">
-          <button class="btn-primary" onClick={handleSaveNodeId} disabled={!isConnected}>
-            {content.saveNodeId}
-          </button>
-          <button class="btn-secondary" onClick={async () => {
-            try {
-              await api.saveParams()
-              showSuccess(content.parametersSaved)
-            } catch (error) {
-              showError(content.saveParametersFailed)
-            }
-          }} disabled={!isConnected}>
-            {content.saveAllToFlash}
-          </button>
-        </div>
-      </section>
-
-      {/* OTA Firmware Update Card */}
-      <section id="firmware-update" class="card">
-        <h2 class="section-header" onClick={(e) => {
-          const target = e.currentTarget.parentElement
-          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }}>
-          {content.firmwareUpdate}
-        </h2>
-
-        {otaStatus === 'idle' && (
-          <div class="ota-upload-section">
-            <p class="info">{content.otaInfo}</p>
-
-            <div class="form-group">
-              <label>{content.firmwareFile}</label>
-              <input
-                type="file"
-                accept=".bin"
-                onChange={handleOtaFileSelect}
-                disabled={streaming}
-              />
-              {otaFile && (
-                <div class="file-info">
-                  {content.selected} {otaFile.name} ({(otaFile.size / 1024).toFixed(2)} KB)
-                </div>
-              )}
-            </div>
-
-            {otaError && (
-              <div class="error-message">{otaError}</div>
-            )}
-
-            <div class="button-group">
-              <button
-                class="btn-primary"
-                onClick={handleOtaUpload}
-                disabled={!otaFile || streaming}
-              >
-                {content.startFirmwareUpdate}
-              </button>
-            </div>
-
-            {streaming && (
-              <div class="warning-message">
-                {content.monitoringWarning}
-              </div>
-            )}
-          </div>
-        )}
-
-        {(otaStatus === 'uploading' || otaStatus === 'updating') && (
-          <div class="ota-progress-section">
-            <div class="progress-info">
-              <h3>
-                {otaStatus === 'uploading' ? content.uploadingFirmware : content.updatingDevice}
-              </h3>
-              <p>{content.updateProgress}</p>
-            </div>
-
-            <div class="progress-bar-container">
-              <div class="progress-bar" style={{ width: `${otaProgress}%` }}>
-                <span class="progress-text">{otaProgress}%</span>
-              </div>
-            </div>
-
-            <div class="progress-status">
-              {otaStatus === 'uploading' && content.transferringFirmware}
-              {otaStatus === 'updating' && content.installingFirmware}
-            </div>
-          </div>
-        )}
-
-        {otaStatus === 'success' && (
-          <div class="ota-success-section">
-            <div class="success-message">
-              <h3>{content.updateSuccessful}</h3>
-              <p>{content.updateSuccessInfo}</p>
-              <p>{content.reconnectInfo}</p>
-            </div>
-
-            <button class="btn-secondary" onClick={handleOtaReset}>
-              {content.uploadAnother}
-            </button>
-          </div>
-        )}
-
-        {otaStatus === 'error' && (
-          <div class="ota-error-section">
-            <div class="error-message">
-              <h3>{content.updateFailed}</h3>
-              <p>{otaError}</p>
-            </div>
-
-            <button class="btn-secondary" onClick={handleOtaReset}>
-              {content.tryAgain}
-            </button>
-          </div>
-        )}
-      </section>
+      {/* OTA Firmware Update */}
+      <OTAUpdate />
           </>
         )}
       </div>

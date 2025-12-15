@@ -63,10 +63,12 @@ const deviceDetailsContent = {
       en: 'Select None',
       de: 'Keine auswählen',
     }),
-    streamingStatus: insert({
-      en: 'Streaming {{count}} parameters every {{interval}}ms',
-      de: 'Streaming {{count}} Parameter alle {{interval}}ms',
-    }),
+    streamingStatus: insert(
+      t({
+        en: 'Streaming {{count}} parameters every {{interval}}ms',
+        de: 'Streaming {{count}} Parameter alle {{interval}}ms',
+      })
+    ),
     tableView: t({
       en: '📊 Table View',
       de: '📊 Tabellenansicht',
@@ -123,14 +125,18 @@ const deviceDetailsContent = {
       en: 'Failed to save parameters',
       de: 'Fehler beim Speichern der Parameter',
     }),
-    parameterUpdatedSuccess: insert({
-      en: '{{paramName}} updated',
-      de: '{{paramName}} aktualisiert',
-    }),
-    failedToUpdateParam: insert({
-      en: 'Failed to update {{paramName}}',
-      de: 'Fehler beim Aktualisieren {{paramName}}',
-    }),
+    parameterUpdatedSuccess: insert(
+      t({
+        en: '{{paramName}} updated',
+        de: '{{paramName}} aktualisiert',
+      })
+    ),
+    failedToUpdateParam: insert(
+      t({
+        en: 'Failed to update {{paramName}}',
+        de: 'Fehler beim Aktualisieren {{paramName}}',
+      })
+    ),
     range: t({
       en: 'Range:',
       de: 'Bereich:',
@@ -139,14 +145,18 @@ const deviceDetailsContent = {
       en: 'default:',
       de: 'Standard:',
     }),
-    valueMustBeAtLeast: insert({
-      en: 'Value must be at least {{min}}',
-      de: 'Wert muss mindestens {{min}} sein',
-    }),
-    valueMustBeAtMost: insert({
-      en: 'Value must be at most {{max}}',
-      de: 'Wert darf höchstens {{max}} sein',
-    }),
+    valueMustBeAtLeast: insert(
+      t({
+        en: 'Value must be at least {{min}}',
+        de: 'Wert muss mindestens {{min}} sein',
+      })
+    ),
+    valueMustBeAtMost: insert(
+      t({
+        en: 'Value must be at most {{max}}',
+        de: 'Wert darf höchstens {{max}} sein',
+      })
+    ),
     firmwareUpdate: t({
       en: 'Firmware Update (OTA)',
       de: 'Firmware-Update (OTA)',
@@ -215,9 +225,27 @@ const deviceDetailsContent = {
       en: 'Try Again',
       de: 'Erneut versuchen',
     }),
-    otaUpdateFailedWithError: insert({
-      en: 'OTA Update Failed: {{error}}',
-      de: 'OTA-Update fehlgeschlagen: {{error}}',
+    otaUpdateFailedWithError: insert(
+      t({
+        en: 'OTA Update Failed: {{error}}',
+        de: 'OTA-Update fehlgeschlagen: {{error}}',
+      })
+    ),
+    reloadParameters: t({
+      en: 'Reload Parameters',
+      de: 'Parameter neu laden',
+    }),
+    reloadingParameters: t({
+      en: 'Reloading...',
+      de: 'Wird neu geladen...',
+    }),
+    parametersReloaded: t({
+      en: 'Parameters reloaded successfully',
+      de: 'Parameter erfolgreich neu geladen',
+    }),
+    reloadParametersFailed: t({
+      en: 'Failed to reload parameters',
+      de: 'Fehler beim Neuladen der Parameter',
     }),
   },
 } satisfies DeclarationContent
