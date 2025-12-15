@@ -29,19 +29,24 @@ void InitCAN(BaudRate baud, int txPin, int rxPin); // Initialize CAN bus only
 void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin); // Initialize and connect to device
 void Loop();
 bool SendJson(WiFiClient c);
-String GetRawJson(); // Get parameter JSON directly from device
+String GetRawJson(); // Get parameter JSON from currently connected device
+String GetRawJson(uint8_t nodeId); // Get parameter JSON from specific device by nodeId
 void SendCanMapping(WiFiClient c);
 SetResult AddCanMapping(String json);
 SetResult RemoveCanMapping(String json);
 SetResult SetValue(int paramId, double value);
 double GetValue(int paramId);
+void RequestValue(int paramId); // Send SDO request without waiting (async)
+bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs); // Try to receive response (async)
+bool IsIdle(); // Check if CAN state machine is idle
 bool SaveToFlash();
 String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
 int GetCurrentUpdatePage();
 int GetNodeId();
 BaudRate GetBaudRate();
-bool ReloadJson();
+bool ReloadJson(); // Reload JSON for currently connected device
+bool ReloadJson(uint8_t nodeId); // Reload JSON for specific device by nodeId
 bool ResetDevice();
 
 // Device management functions
@@ -63,9 +68,14 @@ void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback);
 typedef void (*ScanProgressCallback)(uint8_t currentNode, uint8_t startNode, uint8_t endNode);
 void SetScanProgressCallback(ScanProgressCallback callback);
 
+// Callback type for when connection is fully established (state = IDLE)
+typedef void (*ConnectionReadyCallback)(uint8_t nodeId, const char* serial);
+void SetConnectionReadyCallback(ConnectionReadyCallback callback);
+
 // Heartbeat functions to check device status
-void ProcessHeartbeat(); // Call this in Loop() to send periodic heartbeats
+void ProcessHeartbeat(); // Legacy - may be removed in future (now using passive heartbeats)
 void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen); // Update lastSeen and notify clients
+void UpdateDeviceLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen); // Update lastSeen by nodeId (passive heartbeat)
 
 // Device list management
 void LoadDevices(); // Load devices from file into memory at startup

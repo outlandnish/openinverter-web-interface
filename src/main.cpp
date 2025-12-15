@@ -11,6 +11,7 @@
 #include <StreamString.h>
 #include <LittleFS.h>
 #include <time.h>
+#include <map>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -157,6 +158,10 @@ uint32_t spotValuesInterval = 1000; // Default 1000ms
 Ticker spotValuesTicker;
 std::vector<int> spotValuesParamIds; // Parameter IDs to monitor
 
+// Device locking for multi-client support
+std::map<uint8_t, uint32_t> deviceLocks; // nodeId -> WebSocket client ID
+std::map<uint32_t, uint8_t> clientDevices; // WebSocket client ID -> nodeId
+
 // NeoPixel status LED
 SmartLed statusLED(LED_WS2812B, STATUS_LED_COUNT, STATUS_LED_PIN, STATUS_LED_CHANNEL, DoubleBuffer);
 
@@ -231,19 +236,68 @@ void broadcastDeviceDiscovery(uint8_t nodeId, const char* serial, uint32_t lastS
 // Broadcast spot values to all websocket clients
 void broadcastSpotValues() {
   if (!spotValuesActive || spotValuesParamIds.empty()) return;
+  
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[SpotValues] Skipping - CAN not idle");
+    return;
+  }
 
+  // Use batched approach: send a few requests, collect responses, repeat
+  // This prevents overwhelming the CAN bus while still being faster than fully sequential
+  std::map<int, double> receivedValues;
+  const int BATCH_SIZE = 3; // Send 3 requests at a time (reduced to avoid overwhelming)
+  
+  for (size_t batchStart = 0; batchStart < spotValuesParamIds.size(); batchStart += BATCH_SIZE) {
+    size_t batchEnd = min(batchStart + BATCH_SIZE, spotValuesParamIds.size());
+    
+    // PHASE 1: Send batch of requests
+    for (size_t i = batchStart; i < batchEnd; i++) {
+      OICan::RequestValue(spotValuesParamIds[i]);
+      delay(2); // 2ms delay between requests to give device time to process
+    }
+    
+    // PHASE 2: Collect responses for this batch
+    unsigned long batchStartTime = millis();
+    const unsigned long BATCH_TIMEOUT_MS = 150; // Increased timeout per batch
+    size_t batchReceived = 0;
+    
+    while (batchReceived < (batchEnd - batchStart) && (millis() - batchStartTime) < BATCH_TIMEOUT_MS) {
+      double value;
+      int paramId;
+      
+      if (OICan::TryGetValueResponse(paramId, value, 15)) {
+        // Only count if it's from the current batch
+        if (receivedValues.find(paramId) == receivedValues.end()) {
+          receivedValues[paramId] = value;
+          batchReceived++;
+        }
+      }
+    }
+  }
+  
+  // Log only if there were significant failures
+  if (receivedValues.size() < spotValuesParamIds.size() * 0.9) {
+    DBG_OUTPUT_PORT.printf("[SpotValues] Retrieved %d/%d values (%d missing)\n", 
+                          receivedValues.size(), spotValuesParamIds.size(), 
+                          spotValuesParamIds.size() - receivedValues.size());
+  }
+
+  // PHASE 3: Build JSON response with received values
   JsonDocument doc;
   doc["event"] = "spotValues";
   JsonObject data = doc["data"].to<JsonObject>();
-
-  // Add timestamp (milliseconds since boot)
   data["timestamp"] = millis();
 
-  // Request each parameter value from device
   JsonObject values = data["values"].to<JsonObject>();
+  
   for (int paramId : spotValuesParamIds) {
-    double value = OICan::GetValue(paramId);
-    values[String(paramId)] = value;
+    if (receivedValues.find(paramId) != receivedValues.end()) {
+      values[String(paramId)] = receivedValues[paramId];
+    } else {
+      // Use 0 for timeout/missing values
+      values[String(paramId)] = 0.0;
+    }
   }
 
   String output;
@@ -277,6 +331,23 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
 
   } else if (type == WS_EVT_DISCONNECT) {
     DBG_OUTPUT_PORT.printf("WebSocket client #%lu disconnected\n", (unsigned long)client->id());
+
+    // Release any device lock held by this client
+    uint32_t clientId = client->id();
+    if (clientDevices.count(clientId) > 0) {
+      uint8_t nodeId = clientDevices[clientId];
+      deviceLocks.erase(nodeId);
+      clientDevices.erase(clientId);
+      DBG_OUTPUT_PORT.printf("Released device lock for node %d (client #%lu disconnected)\n", nodeId, (unsigned long)clientId);
+      
+      // Notify other clients that the device is now available
+      JsonDocument doc;
+      doc["event"] = "deviceUnlocked";
+      doc["data"]["nodeId"] = nodeId;
+      String output;
+      serializeJson(doc, output);
+      ws.textAll(output);
+    }
 
   } else if (type == WS_EVT_DATA) {
     AwsFrameInfo* info = (AwsFrameInfo*)arg;
@@ -323,6 +394,35 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
       } else if (action == "connect") {
         uint8_t nodeId = doc["nodeId"];
         String serial = doc["serial"] | "";
+        uint32_t clientId = client->id();
+
+        // Check if device is already locked by another client
+        if (deviceLocks.count(nodeId) > 0 && deviceLocks[nodeId] != clientId) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] ERROR: Node %d is already connected by client #%lu\n", nodeId, (unsigned long)deviceLocks[nodeId]);
+          
+          JsonDocument errorDoc;
+          errorDoc["event"] = "error";
+          errorDoc["data"]["message"] = String("Device ") + serial + " (node " + String(nodeId) + ") is already connected by another client. Please wait for the other client to disconnect.";
+          errorDoc["data"]["nodeId"] = nodeId;
+          errorDoc["data"]["serial"] = serial;
+          errorDoc["data"]["type"] = "device_locked";
+          String errorOutput;
+          serializeJson(errorDoc, errorOutput);
+          client->text(errorOutput);
+          return;
+        }
+
+        // Release any previous device lock held by this client
+        if (clientDevices.count(clientId) > 0) {
+          uint8_t oldNodeId = clientDevices[clientId];
+          deviceLocks.erase(oldNodeId);
+          DBG_OUTPUT_PORT.printf("Released previous device lock for node %d (client switching devices)\n", oldNodeId);
+        }
+
+        // Acquire lock for new device
+        deviceLocks[nodeId] = clientId;
+        clientDevices[clientId] = nodeId;
+        DBG_OUTPUT_PORT.printf("Client #%lu acquired lock for node %d\n", (unsigned long)clientId, nodeId);
 
         CANCommand cmd;
         cmd.type = CMD_CONNECT;
@@ -333,6 +433,9 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
           DBG_OUTPUT_PORT.printf("[WebSocket] Connect command queued (node %d)\n", nodeId);
         } else {
           DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue connect command");
+          // Release lock on failure
+          deviceLocks.erase(nodeId);
+          clientDevices.erase(clientId);
         }
 
       } else if (action == "setDeviceName") {
@@ -605,13 +708,7 @@ void canTask(void* parameter) {
           {
             OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
             OICan::Init(cmd.data.connect.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
-
-            // Send connected event
-            CANEvent evt;
-            evt.type = EVT_CONNECTED;
-            evt.data.connected.nodeId = cmd.data.connect.nodeId;
-            strcpy(evt.data.connected.serial, cmd.data.connect.serial);
-            xQueueSend(canEventQueue, &evt, 0);
+            // Connected event will be sent via ConnectionReadyCallback when device reaches IDLE state
           }
           break;
 
@@ -850,6 +947,17 @@ void setup(void){
     xQueueSend(canEventQueue, &evt, 0);
   });
 
+  // Setup connection ready callback to post events when device is truly connected (IDLE state)
+  OICan::SetConnectionReadyCallback([](uint8_t nodeId, const char* serial) {
+    DBG_OUTPUT_PORT.printf("[Callback] Connection ready - node %d, serial %s\n", nodeId, serial);
+    CANEvent evt;
+    evt.type = EVT_CONNECTED;
+    evt.data.connected.nodeId = nodeId;
+    strncpy(evt.data.connected.serial, serial, sizeof(evt.data.connected.serial) - 1);
+    evt.data.connected.serial[sizeof(evt.data.connected.serial) - 1] = '\0';
+    xQueueSend(canEventQueue, &evt, 0);
+  });
+
   // Spawn CAN task
   // On dual-core ESP32: Pin to Core 0 (WiFi/WebSocket runs on Core 1)
   // On single-core ESP32-C3: FreeRTOS will time-slice both tasks on Core 0
@@ -895,8 +1003,50 @@ void setup(void){
   });
 
   server.on("/params/json", HTTP_GET, [](AsyncWebServerRequest *request){
-    String json = OICan::GetRawJson();
-    request->send(200, "application/json", json);
+    DBG_OUTPUT_PORT.println("[HTTP] /params/json request received");
+    
+    // Require nodeId parameter for all requests (multi-client support)
+    if (!request->hasParam("nodeId")) {
+      DBG_OUTPUT_PORT.println("[HTTP] Sending 400 - nodeId parameter required");
+      request->send(400, "application/json", "{\"error\":\"nodeId parameter is required\"}");
+      return;
+    }
+    
+    int nodeId = request->getParam("nodeId")->value().toInt();
+    DBG_OUTPUT_PORT.printf("[HTTP] Fetching params for nodeId: %d\n", nodeId);
+    String json = OICan::GetRawJson(nodeId);
+    
+    DBG_OUTPUT_PORT.printf("[HTTP] GetRawJson returned %d bytes\n", json.length());
+
+    if (json.isEmpty() || json == "{}") {
+      // Device is busy or error occurred
+      DBG_OUTPUT_PORT.println("[HTTP] Sending 503 - device busy");
+      request->send(503, "application/json", "{\"error\":\"Device busy or not connected\"}");
+    } else {
+      DBG_OUTPUT_PORT.printf("[HTTP] Sending 200 OK with %d bytes of JSON\n", json.length());
+      request->send(200, "application/json", json);
+    }
+  });
+
+  server.on("/reloadjson", HTTP_GET, [](AsyncWebServerRequest *request){
+    DBG_OUTPUT_PORT.println("[HTTP] /reloadjson request received");
+    
+    // Require nodeId parameter for multi-client support
+    if (!request->hasParam("nodeId")) {
+      DBG_OUTPUT_PORT.println("[HTTP] Sending 400 - nodeId parameter required");
+      request->send(400, "application/json", "{\"error\":\"nodeId parameter is required\"}");
+      return;
+    }
+    
+    int nodeId = request->getParam("nodeId")->value().toInt();
+    DBG_OUTPUT_PORT.printf("[HTTP] Reloading JSON for nodeId: %d\n", nodeId);
+    
+    bool success = OICan::ReloadJson(nodeId);
+    if (success) {
+      request->send(200, "text/plain", "Cached JSON cleared, will reload from device");
+    } else {
+      request->send(503, "text/plain", "Device busy, cannot reload");
+    }
   });
 
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
