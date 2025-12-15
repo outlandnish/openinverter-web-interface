@@ -515,6 +515,31 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         } else {
           DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop spot values command");
         }
+
+      } else if (action == "disconnect") {
+        // Release device lock when explicitly disconnecting
+        uint32_t clientId = client->id();
+        if (clientDevices.count(clientId) > 0) {
+          uint8_t nodeId = clientDevices[clientId];
+          deviceLocks.erase(nodeId);
+          clientDevices.erase(clientId);
+          DBG_OUTPUT_PORT.printf("[WebSocket] Released device lock for node %d (client #%lu disconnected)\n", nodeId, (unsigned long)clientId);
+
+          // Notify other clients that the device is now available
+          JsonDocument doc;
+          doc["event"] = "deviceUnlocked";
+          doc["data"]["nodeId"] = nodeId;
+          String output;
+          serializeJson(doc, output);
+          ws.textAll(output);
+
+          // Send disconnected event to the client
+          JsonDocument disconnectDoc;
+          disconnectDoc["event"] = "disconnected";
+          String disconnectOutput;
+          serializeJson(disconnectDoc, disconnectOutput);
+          client->text(disconnectOutput);
+        }
       }
     }
   }

@@ -99,9 +99,9 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         setLoading(true)
         setError(null)
 
-        // Skip cache when we have a nodeId - always fetch fresh to ensure correctness
-        // This prevents issues where cached params from one device are used for another
-        if (!forceRefresh && explicitNodeId === undefined) {
+        // Check cache first (unless force refresh is requested)
+        // Cache is keyed by deviceSerial, so it's safe to use cached params
+        if (!forceRefresh) {
           const cached = ParamStorage.getParams(deviceSerial)
           if (cached) {
             console.log('Using cached parameters from localStorage for device:', deviceSerial)

@@ -32,6 +32,16 @@ export default function SystemOverview() {
     scanRange: activeScanRange
   } = useDeviceContext()
 
+  // Stop scanning when component unmounts (navigating away)
+  useEffect(() => {
+    return () => {
+      if (scanning) {
+        stopScan()
+        console.log('[SystemOverview] Stopped scanning on unmount')
+      }
+    }
+  }, [scanning, stopScan])
+
   // Load scan range from settings
   useEffect(() => {
     const loadScanRange = async () => {

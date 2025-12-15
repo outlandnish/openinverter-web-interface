@@ -34,6 +34,15 @@ export default function DeviceDetails() {
   // Use shared WebSocket connection
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
 
+  // Disconnect from device when component unmounts (navigating away)
+  useEffect(() => {
+    return () => {
+      // Send disconnect message when leaving the page
+      sendMessage('disconnect')
+      console.log('[DeviceDetails] Sent disconnect message on unmount')
+    }
+  }, [sendMessage])
+
   // Subscribe to WebSocket messages and load settings when ready
   useEffect(() => {
     const unsubscribe = subscribe((message: any) => {
