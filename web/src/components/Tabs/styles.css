@@ -1,0 +1,130 @@
+.tabs-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-bottom: 2rem;
+}
+
+.tabs-header {
+  background: white;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  /* Hide scrollbar but keep functionality */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.tabs-header::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+.tabs-nav {
+  display: flex;
+  gap: 0;
+  min-width: min-content;
+  position: relative;
+}
+
+.tab-button {
+  flex: 1;
+  min-width: 120px;
+  padding: 1rem 1.5rem;
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  position: relative;
+  /* Better touch targets on mobile */
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.tab-button:hover:not(.disabled) {
+  background: var(--oi-blue-light);
+  color: var(--oi-blue-dark);
+}
+
+.tab-button.active {
+  color: var(--oi-blue);
+  border-bottom-color: var(--oi-blue);
+  font-weight: 600;
+}
+
+.tab-button.active:hover {
+  background: var(--oi-blue-light);
+}
+
+.tab-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tab-icon {
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+}
+
+.tab-label {
+  display: inline-block;
+}
+
+.tabs-content {
+  background: var(--bg-secondary);
+  border-radius: 0 0 8px 8px;
+  padding: 0;
+  min-height: 200px;
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .tab-button {
+    min-width: 100px;
+    padding: 0.875rem 1rem;
+    font-size: 0.875rem;
+  }
+
+  .tab-label {
+    /* Hide labels on very small screens, show only icons */
+    display: inline-block;
+  }
+
+  .tab-icon {
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .tab-button {
+    min-width: 80px;
+    padding: 0.75rem 0.75rem;
+    font-size: 0.8rem;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .tab-icon {
+    font-size: 1.2rem;
+  }
+
+  .tab-label {
+    font-size: 0.75rem;
+  }
+}
+
+/* Smooth scroll behavior for tab navigation on mobile */
+.tabs-nav {
+  scroll-behavior: smooth;
+}

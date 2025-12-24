@@ -765,6 +765,121 @@ bool SendJson(WiFiClient client) {
   return failed < 5;
 }
 
+String GetCanMapping() {
+  if (state != IDLE) {
+    DBG_OUTPUT_PORT.println("GetCanMapping called while not IDLE, ignoring");
+    return "[]";
+  }
+
+  enum ReqMapStt { START, COBID, DATAPOSLEN, GAINOFS, DONE };
+
+  twai_message_t rxframe;
+  int index = SDO_INDEX_MAP_RD, subIndex = 0;
+  int cobid = 0, pos = 0, len = 0, paramid = 0;
+  bool rx = false;
+  ReqMapStt reqMapStt = START;
+
+  JsonDocument doc;
+
+  while (DONE != reqMapStt) {
+    switch (reqMapStt) {
+    case START:
+      requestSdoElement(_nodeId, index, 0); //request COB ID
+      reqMapStt = COBID;
+      cobid = 0;
+      pos = 0;
+      len = 0;
+      paramid = 0;
+      break;
+    case COBID:
+      if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
+        if (rxframe.data[0] != SDO_ABORT) {
+          cobid = *(int32_t*)&rxframe.data[4]; //convert bytes to word
+          subIndex++;
+          requestSdoElement(_nodeId, index, subIndex); //request parameter id, position and length
+          reqMapStt = DATAPOSLEN;
+        }
+        else if (!rx) { //after receiving tx item collect rx items
+          rx = true;
+          index = SDO_INDEX_MAP_RD + 0x80;
+          reqMapStt = START;
+          DBG_OUTPUT_PORT.println("Getting RX items");
+        }
+        else //no more items, we are done
+          reqMapStt = DONE;
+      }
+      else
+        reqMapStt = DONE; //don't lock up when not receiving
+      break;
+    case DATAPOSLEN:
+      if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
+        if (rxframe.data[0] != SDO_ABORT) {
+          paramid = *(uint16_t*)&rxframe.data[4];
+          pos = rxframe.data[6];
+          len = (int8_t)rxframe.data[7];
+          subIndex++;
+          requestSdoElement(_nodeId, index, subIndex); //gain and offset
+          reqMapStt = GAINOFS;
+        }
+        else { //all items of this message collected, move to next message
+          index++;
+          subIndex = 0;
+          reqMapStt = START;
+          DBG_OUTPUT_PORT.println("Mapping received, moving to next");
+        }
+      }
+      else
+        reqMapStt = DONE; //don't lock up when not receiving
+      break;
+    case GAINOFS:
+      if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+        printCanRx(&rxframe);
+        if (rxframe.data[0] != SDO_ABORT) {
+          int32_t gainFixedPoint = ((*(uint32_t*)&rxframe.data[4]) & 0xFFFFFF) << (32-24);
+          gainFixedPoint >>= (32-24);
+          float gain = gainFixedPoint / 1000.0f;
+          int offset = (int8_t)rxframe.data[7];
+          DBG_OUTPUT_PORT.printf("can %s %d %d %d %d %f %d\r\n", rx ? "rx" : "tx", paramid, cobid, pos, len, gain, offset);
+          JsonDocument subdoc;
+          JsonObject object = subdoc.to<JsonObject>();
+          object["isrx"] = rx;
+          object["id"] = cobid;
+          object["paramid"] = paramid;
+          object["position"] = pos;
+          object["length"] = len;
+          object["gain"] = gain;
+          object["offset"] = offset;
+          object["index"] = index;
+          object["subindex"] = subIndex;
+          doc.add(object);
+          subIndex++;
+
+          if (subIndex < 100) { //limit maximum items in case there is a bug ;)
+            requestSdoElement(_nodeId, index, subIndex); //request next item
+            reqMapStt = DATAPOSLEN;
+          }
+          else {
+            reqMapStt = DONE;
+          }
+        }
+        else //should never get here
+          reqMapStt = DONE;
+      }
+      else
+        reqMapStt = DONE; //don't lock up when not receiving
+      break;
+    case DONE:
+      break;
+    }
+  }
+
+  String result;
+  serializeJson(doc, result);
+  return result;
+}
+
 void SendCanMapping(WiFiClient client) {
   if (state != IDLE) {
     DBG_OUTPUT_PORT.println("SendCanMapping called while not IDLE, ignoring");

@@ -10,8 +10,16 @@ void Config::load() {
     if (settings.version != EEPROM_VERSION) {
         //defaults
         settings.version = EEPROM_VERSION;
+        #ifdef CAN0_RX_PIN
+        settings.canRXPin = CAN0_RX_PIN; // CAN0 RX pin for canipulator (GPIO 16)
+        #else
         settings.canRXPin = GPIO_NUM_4;
+        #endif
+        #ifdef CAN0_TX_PIN
+        settings.canTXPin = CAN0_TX_PIN; // CAN0 TX pin for canipulator (GPIO 17)
+        #else
         settings.canTXPin = GPIO_NUM_5;
+        #endif
         settings.canEnablePin = 0;
         settings.canSpeed = 2; // Default to 500k (Baud500k = 2)
         settings.scanStartNode = 1;

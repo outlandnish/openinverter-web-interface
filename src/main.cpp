@@ -662,6 +662,143 @@ void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
+void handleGetCanMappings(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Get CAN mappings request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot get mappings - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "canMappingsError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Get CAN mappings
+  String mappingsJson = OICan::GetCanMapping();
+
+  JsonDocument responseDoc;
+  responseDoc["event"] = "canMappingsData";
+
+  // Parse the mappings JSON array
+  JsonDocument mappingsArrayDoc;
+  deserializeJson(mappingsArrayDoc, mappingsJson);
+  responseDoc["data"]["mappings"] = mappingsArrayDoc;
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+  DBG_OUTPUT_PORT.printf("[WebSocket] Sent CAN mappings data (%d bytes)\n", output.length());
+}
+
+void handleAddCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Add CAN mapping request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot add mapping - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "canMappingError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Extract mapping data and convert to JSON string
+  JsonDocument mappingDoc;
+  mappingDoc["isrx"] = doc["isrx"];
+  mappingDoc["id"] = doc["id"];
+  mappingDoc["paramid"] = doc["paramid"];
+  mappingDoc["position"] = doc["position"];
+  mappingDoc["length"] = doc["length"];
+  mappingDoc["gain"] = doc["gain"];
+  mappingDoc["offset"] = doc["offset"];
+
+  String mappingJson;
+  serializeJson(mappingDoc, mappingJson);
+
+  // Add the mapping
+  OICan::SetResult result = OICan::AddCanMapping(mappingJson);
+
+  JsonDocument responseDoc;
+  if (result == OICan::Ok) {
+    responseDoc["event"] = "canMappingAdded";
+    responseDoc["data"]["success"] = true;
+    DBG_OUTPUT_PORT.println("[WebSocket] CAN mapping added successfully");
+  } else {
+    responseDoc["event"] = "canMappingError";
+    responseDoc["data"]["success"] = false;
+
+    if (result == OICan::UnknownIndex) {
+      responseDoc["data"]["error"] = "Invalid mapping parameters";
+    } else if (result == OICan::CommError) {
+      responseDoc["data"]["error"] = "Communication error";
+    } else {
+      responseDoc["data"]["error"] = "Unknown error";
+    }
+    DBG_OUTPUT_PORT.printf("[WebSocket] CAN mapping add failed: %d\n", result);
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
+void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Remove CAN mapping request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot remove mapping - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "canMappingError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Extract index and subindex
+  JsonDocument mappingDoc;
+  mappingDoc["index"] = doc["index"];
+  mappingDoc["subindex"] = doc["subindex"];
+
+  String mappingJson;
+  serializeJson(mappingDoc, mappingJson);
+
+  // Remove the mapping
+  OICan::SetResult result = OICan::RemoveCanMapping(mappingJson);
+
+  JsonDocument responseDoc;
+  if (result == OICan::Ok) {
+    responseDoc["event"] = "canMappingRemoved";
+    responseDoc["data"]["success"] = true;
+    DBG_OUTPUT_PORT.println("[WebSocket] CAN mapping removed successfully");
+  } else {
+    responseDoc["event"] = "canMappingError";
+    responseDoc["data"]["success"] = false;
+
+    if (result == OICan::UnknownIndex) {
+      responseDoc["data"]["error"] = "Invalid index or subindex";
+    } else if (result == OICan::CommError) {
+      responseDoc["data"]["error"] = "Communication error";
+    } else {
+      responseDoc["data"]["error"] = "Unknown error";
+    }
+    DBG_OUTPUT_PORT.printf("[WebSocket] CAN mapping remove failed: %d\n", result);
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
 // WebSocket event handler
 void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
   if (type == WS_EVT_CONNECT) {
@@ -752,6 +889,12 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleReloadParams(client, doc);
       } else if (action == "disconnect") {
         handleDisconnect(client, doc);
+      } else if (action == "getCanMappings") {
+        handleGetCanMappings(client, doc);
+      } else if (action == "addCanMapping") {
+        handleAddCanMapping(client, doc);
+      } else if (action == "removeCanMapping") {
+        handleRemoveCanMapping(client, doc);
       } else {
         DBG_OUTPUT_PORT.printf("[WebSocket] Unknown action: %s\n", action.c_str());
       }

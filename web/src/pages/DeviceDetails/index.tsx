@@ -8,6 +8,8 @@ import ConnectionStatus from '@components/ConnectionStatus'
 import SpotValuesMonitor from '@components/SpotValuesMonitor'
 import OTAUpdate from '@components/OTAUpdate'
 import DeviceParameters from '@components/DeviceParameters'
+import CanMappingEditor from '@components/CanMappingEditor'
+import Tabs from '@components/Tabs'
 import { useToast } from '@hooks/useToast'
 import { formatParameterValue } from '@/utils/parameterDisplay'
 import { api } from '@/api/inverter'
@@ -186,23 +188,62 @@ export default function DeviceDetails() {
               </div>
             </div>
 
-      {/* Spot Values Monitoring */}
-      {savedNodeId > 0 && routeParams?.serial && (
-        <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
-      )}
-
-      {/* Device Parameters */}
-      {routeParams?.serial && nodeId && (
-        <DeviceParameters
-          serial={routeParams.serial}
-          nodeId={nodeId}
-          onNodeIdChange={setNodeId}
-          onSaveNodeId={handleSaveNodeId}
-        />
-      )}
-
-      {/* OTA Firmware Update */}
-      <OTAUpdate />
+      {/* Tabbed Interface */}
+      <Tabs
+        tabs={[
+          {
+            id: 'overview',
+            label: 'Overview',
+            icon: '📊',
+            content: savedNodeId > 0 && routeParams?.serial ? (
+              <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
+            ) : (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                {content.noDataAvailable || 'No data available'}
+              </div>
+            ),
+            disabled: !savedNodeId || savedNodeId === 0
+          },
+          {
+            id: 'parameters',
+            label: 'Parameters',
+            icon: '⚙️',
+            content: routeParams?.serial && nodeId ? (
+              <DeviceParameters
+                serial={routeParams.serial}
+                nodeId={nodeId}
+                onNodeIdChange={setNodeId}
+                onSaveNodeId={handleSaveNodeId}
+              />
+            ) : (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                {content.noDataAvailable || 'No data available'}
+              </div>
+            ),
+            disabled: !nodeId
+          },
+          {
+            id: 'can-mappings',
+            label: 'CAN Mappings',
+            icon: '🔌',
+            content: routeParams?.serial && savedNodeId > 0 ? (
+              <CanMappingEditor serial={routeParams.serial} nodeId={savedNodeId} />
+            ) : (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                {content.noDataAvailable || 'No data available'}
+              </div>
+            ),
+            disabled: !savedNodeId || savedNodeId === 0
+          },
+          {
+            id: 'ota-update',
+            label: 'OTA Update',
+            icon: '🔄',
+            content: <OTAUpdate />
+          }
+        ]}
+        defaultTab="overview"
+      />
           </>
         )}
       </div>

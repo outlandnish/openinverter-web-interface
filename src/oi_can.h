@@ -32,6 +32,7 @@ bool SendJson(WiFiClient c);
 String GetRawJson(); // Get parameter JSON from currently connected device
 String GetRawJson(uint8_t nodeId); // Get parameter JSON from specific device by nodeId
 void SendCanMapping(WiFiClient c);
+String GetCanMapping(); // Get CAN mappings as JSON string
 SetResult AddCanMapping(String json);
 SetResult RemoveCanMapping(String json);
 SetResult SetValue(int paramId, double value);
