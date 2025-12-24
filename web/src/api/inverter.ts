@@ -110,10 +110,18 @@ class InverterAPI {
   }
 
   /**
-   * Save parameters to flash
+   * Save parameters to flash via WebSocket
    */
   async saveParams(): Promise<string> {
-    return this.sendCommand('save')
+    if (!this.wsSendMessage) {
+      throw new Error('WebSocket not initialized. Call setWebSocketSender() first.')
+    }
+
+    // Send via WebSocket - response will be handled by WebSocket event listeners
+    this.wsSendMessage('saveToFlash', {})
+
+    // Return a success message (actual result will come through WebSocket events)
+    return 'Save to flash requested'
   }
 
   /**

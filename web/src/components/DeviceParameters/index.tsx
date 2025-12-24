@@ -22,7 +22,7 @@ export default function DeviceParameters({
 }: DeviceParametersProps) {
   const content = useIntlayer('device-details')
   const { showError, showSuccess } = useToast()
-  const { isConnected } = useWebSocketContext()
+  const { isConnected, subscribe } = useWebSocketContext()
   // Parse nodeId to number for fetching params from specific device
   const numericNodeId = parseInt(nodeId)
   const { params, loading, getDisplayName, downloadProgress, downloadTotal } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
@@ -34,6 +34,19 @@ export default function DeviceParameters({
   useEffect(() => {
     setLocalParams(params)
   }, [params])
+
+  // Subscribe to WebSocket events for save to flash responses
+  useEffect(() => {
+    const unsubscribe = subscribe((message) => {
+      if (message.event === 'saveToFlashSuccess') {
+        showSuccess(content.parametersSaved)
+      } else if (message.event === 'saveToFlashError') {
+        showError(content.saveParametersFailed)
+      }
+    })
+
+    return unsubscribe
+  }, [subscribe, showSuccess, showError, content])
 
   const toggleSection = (category: string) => {
     const newCollapsed = new Set(collapsedSections)
@@ -63,10 +76,10 @@ export default function DeviceParameters({
     setLocalParams(updatedParams)
   }
 
-  const handleSaveToFlash = async () => {
+  const handleSaveToFlash = () => {
     try {
-      await api.saveParams()
-      showSuccess(content.parametersSaved)
+      api.saveParams()
+      // Success/error will be shown via WebSocket event handlers
     } catch (error) {
       showError(content.saveParametersFailed)
     }

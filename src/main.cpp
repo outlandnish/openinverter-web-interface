@@ -799,6 +799,40 @@ void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
+void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Save to flash request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot save to flash - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "saveToFlashError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Save parameters to flash
+  bool success = OICan::SaveToFlash();
+
+  JsonDocument responseDoc;
+  if (success) {
+    responseDoc["event"] = "saveToFlashSuccess";
+    responseDoc["data"]["message"] = "Parameters saved to flash";
+    DBG_OUTPUT_PORT.println("[WebSocket] Parameters saved to flash successfully");
+  } else {
+    responseDoc["event"] = "saveToFlashError";
+    responseDoc["data"]["error"] = "Failed to save parameters";
+    DBG_OUTPUT_PORT.println("[WebSocket] Failed to save parameters to flash");
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
 // WebSocket event handler
 void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
   if (type == WS_EVT_CONNECT) {
@@ -895,6 +929,8 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleAddCanMapping(client, doc);
       } else if (action == "removeCanMapping") {
         handleRemoveCanMapping(client, doc);
+      } else if (action == "saveToFlash") {
+        handleSaveToFlash(client, doc);
       } else {
         DBG_OUTPUT_PORT.printf("[WebSocket] Unknown action: %s\n", action.c_str());
       }
