@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useState, useEffect } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
@@ -25,9 +25,15 @@ export default function DeviceParameters({
   const { isConnected } = useWebSocketContext()
   // Parse nodeId to number for fetching params from specific device
   const numericNodeId = parseInt(nodeId)
-  const { params, loading, refresh: refreshParams, getDisplayName, downloadProgress, downloadTotal } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
+  const { params, loading, getDisplayName, downloadProgress, downloadTotal } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [localParams, setLocalParams] = useState(params)
+
+  // Sync localParams with params when params changes (e.g., on initial load or refresh)
+  useEffect(() => {
+    setLocalParams(params)
+  }, [params])
 
   const toggleSection = (category: string) => {
     const newCollapsed = new Set(collapsedSections)
@@ -37,6 +43,24 @@ export default function DeviceParameters({
       newCollapsed.add(category)
     }
     setCollapsedSections(newCollapsed)
+  }
+
+  // Update a single parameter locally without full reload
+  const handleParamUpdate = (paramId: number, newValue: number) => {
+    if (!localParams) return
+
+    // Find and update the parameter by ID
+    const updatedParams = { ...localParams }
+    for (const key in updatedParams) {
+      if (updatedParams[key].id === paramId) {
+        updatedParams[key] = {
+          ...updatedParams[key],
+          value: newValue
+        }
+        break
+      }
+    }
+    setLocalParams(updatedParams)
   }
 
   const handleSaveToFlash = async () => {
@@ -73,7 +97,7 @@ export default function DeviceParameters({
     )
   }
 
-  if (!params) {
+  if (!localParams) {
     return (
       <section id="device-parameters" class="card">
         <h2 class="section-header">{content.deviceParameters}</h2>
@@ -83,7 +107,7 @@ export default function DeviceParameters({
   }
 
   // Group parameters by category
-  const categorizedParams = Object.entries(params)
+  const categorizedParams = Object.entries(localParams)
     .filter(([_, param]) => param.isparam)
     .sort((a, b) => {
       // Sort by category, then by name
@@ -121,7 +145,7 @@ export default function DeviceParameters({
             onToggle={toggleSection}
             getDisplayName={getDisplayName}
             isConnected={isConnected}
-            onUpdate={refreshParams}
+            onUpdate={handleParamUpdate}
           />
         ))}
       </div>

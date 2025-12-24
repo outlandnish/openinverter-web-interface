@@ -1,6 +1,8 @@
 import { useIntlayer } from 'preact-intlayer'
+import { useEffect, useState } from 'preact/hooks'
 import { api } from '@api/inverter'
 import { useToast } from '@hooks/useToast'
+import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { normalizeEnumValue } from '@utils/parameterDisplay'
 
 interface ParameterInputProps {
@@ -8,7 +10,7 @@ interface ParameterInputProps {
   param: any
   displayName: string
   isConnected: boolean
-  onUpdate: () => Promise<void>
+  onUpdate: (paramId: number, newValue: number) => void
 }
 
 export default function ParameterInput({
@@ -20,18 +22,42 @@ export default function ParameterInput({
 }: ParameterInputProps) {
   const content = useIntlayer('device-details')
   const { showError, showSuccess } = useToast()
+  const { subscribe } = useWebSocketContext()
+  const [pendingUpdate, setPendingUpdate] = useState<number | null>(null)
 
   const paramId = param.id
   const hasEnum = param.enums && Object.keys(param.enums).length > 0
 
+  // Subscribe to WebSocket events for parameter update responses
+  useEffect(() => {
+    const unsubscribe = subscribe((message) => {
+      if (message.event === 'paramUpdateSuccess') {
+        if (message.data.paramId === paramId && pendingUpdate !== null) {
+          showSuccess(content.parameterUpdatedSuccess({ paramName: displayName }))
+          // Update local parameter value without full reload
+          onUpdate(paramId, pendingUpdate)
+          setPendingUpdate(null)
+        }
+      } else if (message.event === 'paramUpdateError') {
+        if (message.data.paramId === paramId && pendingUpdate !== null) {
+          showError(content.failedToUpdateParam({ paramName: displayName }) + ': ' + message.data.error)
+          setPendingUpdate(null)
+        }
+      }
+    })
+
+    return unsubscribe
+  }, [subscribe, paramId, pendingUpdate, displayName, showSuccess, showError, onUpdate])
+
   const handleEnumChange = async (e: Event) => {
-    const newValue = (e.target as HTMLSelectElement).value
+    const newValue = parseFloat((e.target as HTMLSelectElement).value)
     try {
+      setPendingUpdate(newValue)
       await api.setParamById(paramId, newValue)
-      showSuccess(content.parameterUpdatedSuccess({ paramName: displayName }))
-      await onUpdate()
+      // Response will be handled by WebSocket event listener
     } catch (error) {
       showError(content.failedToUpdateParam({ paramName: displayName }))
+      setPendingUpdate(null)
     }
   }
 
@@ -55,12 +81,13 @@ export default function ParameterInput({
 
     if (newValue !== param.value) {
       try {
+        setPendingUpdate(newValue)
         await api.setParamById(paramId, newValue)
-        showSuccess(content.parameterUpdatedSuccess({ paramName: displayName }))
-        await onUpdate()
+        // Response will be handled by WebSocket event listener
       } catch (error) {
         showError(content.failedToUpdateParam({ paramName: displayName }))
         target.value = param.value.toString()
+        setPendingUpdate(null)
       }
     }
   }

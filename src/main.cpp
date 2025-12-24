@@ -528,6 +528,56 @@ void handleStopSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
+void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
+  int paramId = doc["paramId"];
+  double value = doc["value"];
+
+  DBG_OUTPUT_PORT.printf("[WebSocket] Update param request: paramId=%d, value=%f\n", paramId, value);
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot update parameter - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "paramUpdateError";
+    errorDoc["data"]["paramId"] = paramId;
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Set the parameter value
+  OICan::SetResult result = OICan::SetValue(paramId, value);
+
+  JsonDocument responseDoc;
+  if (result == OICan::Ok) {
+    responseDoc["event"] = "paramUpdateSuccess";
+    responseDoc["data"]["paramId"] = paramId;
+    responseDoc["data"]["value"] = value;
+    DBG_OUTPUT_PORT.printf("[WebSocket] Parameter %d updated successfully to %f\n", paramId, value);
+  } else {
+    responseDoc["event"] = "paramUpdateError";
+    responseDoc["data"]["paramId"] = paramId;
+    responseDoc["data"]["value"] = value;
+
+    if (result == OICan::UnknownIndex) {
+      responseDoc["data"]["error"] = "Unknown parameter ID";
+    } else if (result == OICan::ValueOutOfRange) {
+      responseDoc["data"]["error"] = "Value out of range";
+    } else if (result == OICan::CommError) {
+      responseDoc["data"]["error"] = "Communication error";
+    } else {
+      responseDoc["data"]["error"] = "Unknown error";
+    }
+    DBG_OUTPUT_PORT.printf("[WebSocket] Parameter %d update failed: %d\n", paramId, result);
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
 void handleGetParams(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Get params request for nodeId: %d\n", nodeId);
@@ -694,6 +744,8 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleStartSpotValues(client, doc);
       } else if (action == "stopSpotValues") {
         handleStopSpotValues(client, doc);
+      } else if (action == "updateParam") {
+        handleUpdateParam(client, doc);
       } else if (action == "getParams") {
         handleGetParams(client, doc);
       } else if (action == "reloadParams") {

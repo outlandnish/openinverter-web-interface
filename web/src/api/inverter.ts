@@ -53,6 +53,16 @@ export interface Parameter {
 export type ParameterList = Record<string, Parameter>
 
 class InverterAPI {
+  // Store WebSocket sendMessage function reference
+  private wsSendMessage: ((action: string, data?: any) => void) | null = null
+
+  /**
+   * Register WebSocket sendMessage function for parameter updates
+   */
+  setWebSocketSender(sendMessage: (action: string, data?: any) => void) {
+    this.wsSendMessage = sendMessage
+  }
+
   /**
    * Send a command to the inverter
    */
@@ -70,11 +80,18 @@ class InverterAPI {
   }
 
   /**
-   * Set a parameter value by ID (not name)
+   * Set a parameter value by ID (not name) via WebSocket
    */
   async setParamById(paramId: number, value: number | string): Promise<string> {
-    const cmd = `set ${paramId} ${value}`
-    return this.sendCommand(cmd)
+    if (!this.wsSendMessage) {
+      throw new Error('WebSocket not initialized. Call setWebSocketSender() first.')
+    }
+
+    // Send via WebSocket - response will be handled by WebSocket event listeners
+    this.wsSendMessage('updateParam', { paramId, value })
+
+    // Return a success message (actual result will come through WebSocket events)
+    return 'Parameter update requested'
   }
 
   /**

@@ -7,7 +7,7 @@ interface ParameterCategoryProps {
   onToggle: (category: string) => void
   getDisplayName: (key: string) => string
   isConnected: boolean
-  onUpdate: () => Promise<void>
+  onUpdate: (paramId: number, newValue: number) => void
 }
 
 export default function ParameterCategory({
