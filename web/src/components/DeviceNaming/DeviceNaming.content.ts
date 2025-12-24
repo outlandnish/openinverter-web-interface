@@ -27,6 +27,10 @@ const deviceNamingContent = {
       en: 'Save & Connect',
       de: 'Speichern & Verbinden',
     }),
+    rename: t({
+      en: 'Rename',
+      de: 'Umbenennen',
+    }),
   },
 } satisfies DeclarationContent
 

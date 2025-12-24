@@ -2,6 +2,7 @@ import { useState, useEffect } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useToast } from '@hooks/useToast'
+import { ProgressBar } from '@components/ProgressBar'
 
 interface OTAUpdateProps {
   onUploadStart?: () => void
@@ -161,16 +162,11 @@ export default function OTAUpdate({
             <p>{content.updateProgress}</p>
           </div>
 
-          <div class="progress-bar-container">
-            <div class="progress-bar" style={{ width: `${otaProgress}%` }}>
-              <span class="progress-text">{otaProgress}%</span>
-            </div>
-          </div>
-
-          <div class="progress-status">
-            {otaStatus === 'uploading' && content.transferringFirmware}
-            {otaStatus === 'updating' && content.installingFirmware}
-          </div>
+          <ProgressBar
+            progress={otaProgress}
+            label={otaStatus === 'uploading' ? content.transferringFirmware : content.installingFirmware}
+            showPercentage={true}
+          />
         </div>
       )}
 

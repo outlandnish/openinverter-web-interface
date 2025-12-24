@@ -162,17 +162,17 @@ button:active {
 .progress-bar-track {
   width: 100%;
   height: 24px;
-  background-color: var(--bg-secondary);
-  border-radius: 12px;
+  background-color: var(--oi-beige);
+  border-radius: 2px;
   overflow: hidden;
   position: relative;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--oi-blue), var(--oi-light-blue));
-  border-radius: 12px;
+  background: var(--oi-blue);
+  border-radius: 2px;
   transition: width 0.3s ease;
   display: flex;
   align-items: center;
@@ -193,6 +193,29 @@ button:active {
   color: var(--text-secondary);
   text-align: center;
   margin-top: 0.25rem;
+}
+
+.progress-bar-indeterminate {
+  width: 100% !important;
+  background: linear-gradient(
+    90deg,
+    var(--oi-beige) 0%,
+    var(--oi-blue) 25%,
+    var(--oi-blue) 50%,
+    var(--oi-beige) 75%,
+    var(--oi-beige) 100%
+  );
+  background-size: 200% 100%;
+  animation: indeterminateProgress 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminateProgress {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
 }
 
 .info {
@@ -633,6 +656,9 @@ button:active {
   padding: 1.5rem;
   cursor: pointer;
   transition: all 0.3s;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .device-card:hover {
@@ -645,11 +671,39 @@ button:active {
   font-size: 1.2rem;
   font-weight: 600;
   color: #333;
-  margin-bottom: 1rem;
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+.device-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.btn-small {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.btn-danger {
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-danger:hover {
+  background: #c82333;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
 }
 
 .last-connected-badge {
@@ -667,6 +721,57 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.device-card {
+  position: relative;
+}
+
+.device-card-actions {
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+  z-index: 1;
+}
+
+.device-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: white;
+  border: 1.5px solid #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.device-action-btn svg {
+  width: 16px;
+  height: 16px;
+  color: #666;
+  transition: color 0.2s ease;
+}
+
+.device-action-btn:hover {
+  border-color: var(--oi-blue);
+  background: #f8f9fa;
+}
+
+.device-action-btn:hover svg {
+  color: var(--oi-blue);
+}
+
+.device-action-btn-danger:hover {
+  border-color: #dc3545;
+}
+
+.device-action-btn-danger:hover svg {
+  color: #dc3545;
 }
 
 .device-serial,
@@ -1332,48 +1437,6 @@ button:active {
 .progress-info p {
   color: #666;
   line-height: 1.6;
-}
-
-.progress-bar-container {
-  width: 100%;
-  height: 40px;
-  background: #e0e0e0;
-  border-radius: 20px;
-  overflow: hidden;
-  margin-bottom: 1rem;
-  position: relative;
-}
-
-.progress-bar {
-  height: 100%;
-  background: var(--oi-gradient);
-  transition: width 0.3s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-
-.progress-text {
-  color: white;
-  font-weight: 600;
-  font-size: 0.9rem;
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1;
-}
-
-.progress-status {
-  text-align: center;
-  color: var(--oi-blue);
-  font-weight: 500;
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
 }
 
 /* Device Info Grid */

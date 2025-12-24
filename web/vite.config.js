@@ -144,6 +144,10 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: true,
       },
+      '/ota/upload': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
       '/reloadjson': {
         target: apiTarget,
         changeOrigin: true,

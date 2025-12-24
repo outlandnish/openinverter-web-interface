@@ -707,6 +707,268 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
   }
 }
 
+        uint8_t start = doc["start"] | 1;
+        uint8_t end = doc["end"] | 32;
+
+        CANCommand cmd;
+        cmd.type = CMD_START_SCAN;
+        cmd.data.scan.start = start;
+        cmd.data.scan.end = end;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Scan start command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan start command");
+        }
+
+      } else if (action == "stopScan") {
+        CANCommand cmd;
+        cmd.type = CMD_STOP_SCAN;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Scan stop command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan stop command");
+        }
+
+      } else if (action == "connect") {
+        uint8_t nodeId = doc["nodeId"];
+        String serial = doc["serial"] | "";
+        uint32_t clientId = client->id();
+
+        // Check if device is already locked by another client
+        if (deviceLocks.count(nodeId) > 0 && deviceLocks[nodeId] != clientId) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] ERROR: Node %d is already connected by client #%lu\n", nodeId, (unsigned long)deviceLocks[nodeId]);
+          
+          JsonDocument errorDoc;
+          errorDoc["event"] = "error";
+          errorDoc["data"]["message"] = String("Device ") + serial + " (node " + String(nodeId) + ") is already connected by another client. Please wait for the other client to disconnect.";
+          errorDoc["data"]["nodeId"] = nodeId;
+          errorDoc["data"]["serial"] = serial;
+          errorDoc["data"]["type"] = "device_locked";
+          String errorOutput;
+          serializeJson(errorDoc, errorOutput);
+          client->text(errorOutput);
+          return;
+        }
+
+        // Release any previous device lock held by this client
+        if (clientDevices.count(clientId) > 0) {
+          uint8_t oldNodeId = clientDevices[clientId];
+          deviceLocks.erase(oldNodeId);
+          DBG_OUTPUT_PORT.printf("Released previous device lock for node %d (client switching devices)\n", oldNodeId);
+        }
+
+        // Acquire lock for new device
+        deviceLocks[nodeId] = clientId;
+        clientDevices[clientId] = nodeId;
+        DBG_OUTPUT_PORT.printf("Client #%lu acquired lock for node %d\n", (unsigned long)clientId, nodeId);
+
+        CANCommand cmd;
+        cmd.type = CMD_CONNECT;
+        cmd.data.connect.nodeId = nodeId;
+        strncpy(cmd.data.connect.serial, serial.c_str(), sizeof(cmd.data.connect.serial) - 1);
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Connect command queued (node %d)\n", nodeId);
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue connect command");
+          // Release lock on failure
+          deviceLocks.erase(nodeId);
+          clientDevices.erase(clientId);
+        }
+
+      } else if (action == "setDeviceName") {
+        String serial = doc["serial"];
+        String name = doc["name"];
+        int nodeId = doc["nodeId"] | -1;
+
+        CANCommand cmd;
+        cmd.type = CMD_SET_DEVICE_NAME;
+        strncpy(cmd.data.setDeviceName.serial, serial.c_str(), sizeof(cmd.data.setDeviceName.serial) - 1);
+        strncpy(cmd.data.setDeviceName.name, name.c_str(), sizeof(cmd.data.setDeviceName.name) - 1);
+        cmd.data.setDeviceName.nodeId = nodeId;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Set device name command queued (%s)\n", serial.c_str());
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set device name command");
+        }
+
+      } else if (action == "deleteDevice") {
+        String serial = doc["serial"];
+
+        CANCommand cmd;
+        cmd.type = CMD_DELETE_DEVICE;
+        strncpy(cmd.data.deleteDevice.serial, serial.c_str(), sizeof(cmd.data.deleteDevice.serial) - 1);
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Delete device command queued (%s)\n", serial.c_str());
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue delete device command");
+        }
+
+      } else if (action == "renameDevice") {
+        String serial = doc["serial"];
+        String name = doc["name"];
+
+        CANCommand cmd;
+        cmd.type = CMD_RENAME_DEVICE;
+        strncpy(cmd.data.renameDevice.serial, serial.c_str(), sizeof(cmd.data.renameDevice.serial) - 1);
+        strncpy(cmd.data.renameDevice.name, name.c_str(), sizeof(cmd.data.renameDevice.name) - 1);
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Rename device command queued (%s -> %s)\n", serial.c_str(), name.c_str());
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue rename device command");
+        }
+
+      } else if (action == "getNodeId") {
+        CANCommand cmd;
+        cmd.type = CMD_GET_NODE_ID;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Get node ID command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue get node ID command");
+        }
+
+      } else if (action == "setNodeId") {
+        int id = doc["id"];
+
+        CANCommand cmd;
+        cmd.type = CMD_SET_NODE_ID;
+        cmd.data.setNodeId.nodeId = id;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Set node ID command queued (node %d)\n", id);
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set node ID command");
+        }
+
+      } else if (action == "startSpotValues") {
+        CANCommand cmd;
+        cmd.type = CMD_START_SPOT_VALUES;
+
+        if (doc.containsKey("paramIds")) {
+          JsonArray paramIds = doc["paramIds"].as<JsonArray>();
+          cmd.data.spotValues.paramCount = 0;
+          for (JsonVariant id : paramIds) {
+            if (cmd.data.spotValues.paramCount < 100) {
+              cmd.data.spotValues.paramIds[cmd.data.spotValues.paramCount++] = id.as<int>();
+            }
+          }
+        }
+
+        if (doc.containsKey("interval")) {
+          cmd.data.spotValues.interval = doc["interval"].as<uint32_t>();
+          if (cmd.data.spotValues.interval < 100) cmd.data.spotValues.interval = 100;
+          if (cmd.data.spotValues.interval > 10000) cmd.data.spotValues.interval = 10000;
+        } else {
+          cmd.data.spotValues.interval = 1000;
+        }
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.printf("[WebSocket] Start spot values command queued (%d params)\n", cmd.data.spotValues.paramCount);
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start spot values command");
+        }
+
+      } else if (action == "stopSpotValues") {
+        CANCommand cmd;
+        cmd.type = CMD_STOP_SPOT_VALUES;
+
+        if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+          DBG_OUTPUT_PORT.println("[WebSocket] Stop spot values command queued");
+        } else {
+          DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop spot values command");
+        }
+
+      } else if (action == "getParams") {
+        int nodeId = doc["nodeId"];
+        DBG_OUTPUT_PORT.printf("[WebSocket] Get params request for nodeId: %d\n", nodeId);
+
+        // Download JSON - progress will be sent via WebSocket jsonProgress events
+        String json = OICan::GetRawJson(nodeId);
+
+        if (json.isEmpty() || json == "{}") {
+          // Device is busy or error occurred
+          JsonDocument errorDoc;
+          errorDoc["event"] = "paramsError";
+          errorDoc["data"]["error"] = "Device busy or not connected";
+          errorDoc["data"]["nodeId"] = nodeId;
+          String errorOutput;
+          serializeJson(errorDoc, errorOutput);
+          client->text(errorOutput);
+          DBG_OUTPUT_PORT.println("[WebSocket] Sent paramsError - device busy");
+        } else {
+          // Send the parameters JSON back to the requesting client
+          JsonDocument responseDoc;
+          responseDoc["event"] = "paramsData";
+          responseDoc["data"]["nodeId"] = nodeId;
+
+          // Parse the JSON string into the data field
+          JsonDocument paramsDoc;
+          deserializeJson(paramsDoc, json);
+          responseDoc["data"]["params"] = paramsDoc;
+
+          String output;
+          serializeJson(responseDoc, output);
+          client->text(output);
+          DBG_OUTPUT_PORT.printf("[WebSocket] Sent params data (%d bytes)\n", output.length());
+        }
+
+      } else if (action == "reloadParams") {
+        int nodeId = doc["nodeId"];
+        DBG_OUTPUT_PORT.printf("[WebSocket] Reload params request for nodeId: %d\n", nodeId);
+
+        bool success = OICan::ReloadJson(nodeId);
+
+        JsonDocument responseDoc;
+        if (success) {
+          responseDoc["event"] = "paramsReloaded";
+          responseDoc["data"]["nodeId"] = nodeId;
+          responseDoc["data"]["message"] = "Cached JSON cleared, will reload from device";
+        } else {
+          responseDoc["event"] = "paramsError";
+          responseDoc["data"]["error"] = "Device busy, cannot reload";
+          responseDoc["data"]["nodeId"] = nodeId;
+        }
+
+        String output;
+        serializeJson(responseDoc, output);
+        client->text(output);
+        DBG_OUTPUT_PORT.printf("[WebSocket] Sent reload response (success=%d)\n", success);
+
+      } else if (action == "disconnect") {
+        // Release device lock when explicitly disconnecting
+        uint32_t clientId = client->id();
+        if (clientDevices.count(clientId) > 0) {
+          uint8_t nodeId = clientDevices[clientId];
+          deviceLocks.erase(nodeId);
+          clientDevices.erase(clientId);
+          DBG_OUTPUT_PORT.printf("[WebSocket] Released device lock for node %d (client #%lu disconnected)\n", nodeId, (unsigned long)clientId);
+
+          // Notify other clients that the device is now available
+          JsonDocument doc;
+          doc["event"] = "deviceUnlocked";
+          doc["data"]["nodeId"] = nodeId;
+          String output;
+          serializeJson(doc, output);
+          ws.textAll(output);
+
+          // Send disconnected event to the client
+          JsonDocument disconnectDoc;
+          disconnectDoc["event"] = "disconnected";
+          String disconnectOutput;
+          serializeJson(disconnectDoc, disconnectOutput);
+          client->text(disconnectOutput);
+        }
+      }
+    }
+  }
+}
+
 //format bytes
 String formatBytes(uint64_t bytes){
   if (bytes < 1024){
@@ -1089,31 +1351,6 @@ void setup(void){
     digitalWrite(config.getCanEnablePin(), LOW);
   }
 
-  // Initialize CAN transceiver shutdown and standby pins (canipulator environments)
-  #ifdef CAN0_SHUTDOWN_PIN
-    pinMode(CAN0_SHUTDOWN_PIN, OUTPUT);
-    digitalWrite(CAN0_SHUTDOWN_PIN, LOW);
-    DBG_OUTPUT_PORT.printf("CAN0 shutdown pin %d set to LOW\n", CAN0_SHUTDOWN_PIN);
-  #endif
-
-  #ifdef CAN0_STANDBY_PIN
-    pinMode(CAN0_STANDBY_PIN, OUTPUT);
-    digitalWrite(CAN0_STANDBY_PIN, LOW);
-    DBG_OUTPUT_PORT.printf("CAN0 standby pin %d set to LOW\n", CAN0_STANDBY_PIN);
-  #endif
-
-  #ifdef CAN1_SHUTDOWN_PIN
-    pinMode(CAN1_SHUTDOWN_PIN, OUTPUT);
-    digitalWrite(CAN1_SHUTDOWN_PIN, LOW);
-    DBG_OUTPUT_PORT.printf("CAN1 shutdown pin %d set to LOW\n", CAN1_SHUTDOWN_PIN);
-  #endif
-
-  #ifdef CAN1_STANDBY_PIN
-    pinMode(CAN1_STANDBY_PIN, OUTPUT);
-    digitalWrite(CAN1_STANDBY_PIN, LOW);
-    DBG_OUTPUT_PORT.printf("CAN1 standby pin %d set to LOW\n", CAN1_STANDBY_PIN);
-  #endif
-
   // Initialize CAN bus at startup
   DBG_OUTPUT_PORT.println("Initializing CAN bus...");
   OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
@@ -1185,7 +1422,6 @@ void setup(void){
     doc["event"] = "jsonProgress";
     doc["data"]["bytesReceived"] = bytesReceived;
     doc["data"]["complete"] = (bytesReceived == 0);
-    doc["data"]["totalBytes"] = OICan::GetJsonTotalSize(); // Add total size if known
     String output;
     serializeJson(doc, output);
     ws.textAll(output);

@@ -3,16 +3,19 @@ import { useLocation } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import DeviceScanner from '@components/DeviceScanner'
 import DeviceNaming from '@components/DeviceNaming'
+import DeviceListItem from '@components/DeviceListItem'
 import DisconnectedState from '@components/DisconnectedState'
 import Layout from '@components/Layout'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceContext, type MergedDevice } from '@contexts/DeviceContext'
 import { api } from '@api/inverter'
+import { sortDevicesByLastSeen } from '@utils/deviceSort'
 
 export default function SystemOverview() {
   const [, setLocation] = useLocation()
   const content = useIntlayer('system-overview')
   const [namingDevice, setNamingDevice] = useState<MergedDevice | null>(null)
+  const [renamingDevice, setRenamingDevice] = useState<MergedDevice | null>(null)
   const [configuredScanRange, setConfiguredScanRange] = useState({ start: 1, end: 32 })
 
   // Use shared WebSocket connection
@@ -29,7 +32,9 @@ export default function SystemOverview() {
     setDeviceName,
     connectToDevice,
     currentScanNode,
-    scanRange: activeScanRange
+    scanRange: activeScanRange,
+    deleteDevice,
+    renameDevice
   } = useDeviceContext()
 
   // Stop scanning when component unmounts (navigating away)
@@ -114,6 +119,25 @@ export default function SystemOverview() {
     setLocation(`/devices/${serial}`)
   }
 
+  const handleDeleteDevice = (device: MergedDevice, e: Event) => {
+    e.stopPropagation()
+    
+    if (confirm(content.confirmDelete.value || content.confirmDelete)) {
+      deleteDevice(device.serial)
+    }
+  }
+
+  const handleRenameClick = (device: MergedDevice, e: Event) => {
+    e.stopPropagation()
+    setRenamingDevice(device)
+  }
+
+  const handleRenameSubmit = (newName: string) => {
+    if (!renamingDevice) return
+    renameDevice(renamingDevice.serial, newName)
+    setRenamingDevice(null)
+  }
+
   return (
     <Layout onQuickScan={handleScan}>
       <div class="container">
@@ -162,30 +186,17 @@ export default function SystemOverview() {
           )
         ) : (
           <div class="device-list">
-            {mergedDevices.map(device => {
-              const isLastConnected = device.serial === lastConnectedSerial
-              return (
-                <div
-                  key={device.serial}
-                  class="device-card"
-                  onClick={() => handleDeviceSelect(device)}
-                >
-                  <div class="device-name">
-                    {device.name || content.unnamedDevice}
-                    {isLastConnected && <span class="last-connected-badge">{content.lastConnected}</span>}
-                  </div>
-                  <div class="device-info">
-                    <div class="device-serial">{content.serial} {device.serial}</div>
-                    {device.nodeId !== undefined && (
-                      <div class="device-node">{content.nodeId} {device.nodeId}</div>
-                    )}
-                    <div class={`device-status ${isDeviceOnline(device.serial) ? 'online' : 'offline'}`}>
-                      {isDeviceOnline(device.serial) ? content.online : content.offline}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
+            {sortDevicesByLastSeen(mergedDevices).map(device => (
+              <DeviceListItem
+                key={device.serial}
+                device={device}
+                isLastConnected={device.serial === lastConnectedSerial}
+                isOnline={isDeviceOnline(device.serial)}
+                onSelect={handleDeviceSelect}
+                onRename={handleRenameClick}
+                onDelete={handleDeleteDevice}
+              />
+            ))}
           </div>
         )}
 
@@ -194,6 +205,15 @@ export default function SystemOverview() {
             serial={namingDevice.serial}
             onSave={handleDeviceName}
             onCancel={() => setNamingDevice(null)}
+          />
+        )}
+
+        {renamingDevice && (
+          <DeviceNaming
+            serial={renamingDevice.serial}
+            onSave={handleRenameSubmit}
+            onCancel={() => setRenamingDevice(null)}
+            mode="rename"
           />
         )}
       </div>

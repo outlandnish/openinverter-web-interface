@@ -43,6 +43,7 @@ bool SaveToFlash();
 String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
 int GetCurrentUpdatePage();
+bool IsUpdateInProgress();
 int GetNodeId();
 BaudRate GetBaudRate();
 bool ReloadJson(); // Reload JSON for currently connected device
@@ -53,6 +54,7 @@ bool ResetDevice();
 String ScanDevices(uint8_t startNodeId, uint8_t endNodeId);
 String GetSavedDevices();
 bool SaveDeviceName(String serial, String name, int nodeId = -1);
+bool DeleteDevice(String serial);
 
 // Continuous scanning functions
 bool StartContinuousScan(uint8_t startNodeId = 1, uint8_t endNodeId = 32); // Returns true if scan started successfully
@@ -72,6 +74,14 @@ void SetScanProgressCallback(ScanProgressCallback callback);
 typedef void (*ConnectionReadyCallback)(uint8_t nodeId, const char* serial);
 void SetConnectionReadyCallback(ConnectionReadyCallback callback);
 
+// Callback type for JSON download progress
+typedef void (*JsonDownloadProgressCallback)(int bytesReceived);
+void SetJsonDownloadProgressCallback(JsonDownloadProgressCallback callback);
+
+// Callback type for streaming JSON data chunks as they arrive from CAN
+typedef void (*JsonStreamCallback)(const char* chunk, int chunkSize, bool isComplete);
+void SetJsonStreamCallback(JsonStreamCallback callback);
+
 // Heartbeat functions to check device status
 void ProcessHeartbeat(); // Legacy - may be removed in future (now using passive heartbeats)
 void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen); // Update lastSeen and notify clients
@@ -80,6 +90,9 @@ void UpdateDeviceLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen); // Update 
 // Device list management
 void LoadDevices(); // Load devices from file into memory at startup
 void AddOrUpdateDevice(const char* serial, uint8_t nodeId, const char* name = nullptr, uint32_t lastSeen = 0); // Add/update device in memory
+
+// JSON download info
+int GetJsonTotalSize(); // Get total size of JSON being downloaded (0 if unknown)
 
 }
 #endif

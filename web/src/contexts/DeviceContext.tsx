@@ -34,6 +34,8 @@ export interface DeviceContextValue {
   setDeviceName: (serial: string, name: string, nodeId?: number) => void
   connectToDevice: (nodeId: number, serial: string) => void
   isDeviceOnline: (serial: string) => boolean
+  deleteDevice: (serial: string) => void
+  renameDevice: (serial: string, newName: string) => void
 }
 
 const DeviceContext = createContext<DeviceContextValue | null>(null)
@@ -127,6 +129,30 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
         case 'savedDevices':
           if (message.data.devices) {
             setSavedDevices(message.data.devices)
+          }
+          break
+
+        case 'deviceDeleted':
+          if (message.data.success) {
+            setSavedDevices(prev => {
+              const updated = { ...prev }
+              delete updated[message.data.serial]
+              return updated
+            })
+            console.log('[DeviceContext] Device deleted:', message.data.serial)
+          }
+          break
+
+        case 'deviceRenamed':
+          if (message.data.success) {
+            setSavedDevices(prev => ({
+              ...prev,
+              [message.data.serial]: {
+                ...prev[message.data.serial],
+                name: message.data.name
+              }
+            }))
+            console.log('[DeviceContext] Device renamed:', message.data.serial, '->', message.data.name)
           }
           break
       }
@@ -227,6 +253,35 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
     return timeSinceLastSeen < ONLINE_THRESHOLD_MS
   }, [devicesSeenInCurrentScan, savedDevices])
 
+  const deleteDevice = useCallback((serial: string) => {
+    // Send via WebSocket
+    sendMessage('deleteDevice', { serial })
+
+    // Optimistically update local state
+    setSavedDevices(prev => {
+      const updated = { ...prev }
+      delete updated[serial]
+      return updated
+    })
+  }, [sendMessage])
+
+  const renameDevice = useCallback((serial: string, newName: string) => {
+    // Send via WebSocket
+    sendMessage('renameDevice', {
+      serial,
+      name: newName
+    })
+
+    // Optimistically update local state
+    setSavedDevices(prev => ({
+      ...prev,
+      [serial]: {
+        ...prev[serial],
+        name: newName
+      }
+    }))
+  }, [sendMessage])
+
   const mergedDevices = useCallback((): MergedDevice[] => {
     // Convert saved devices object to array
     return Object.entries(savedDevices).map(([serial, device]) => ({
@@ -252,6 +307,8 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
     setDeviceName,
     connectToDevice,
     isDeviceOnline,
+    deleteDevice,
+    renameDevice,
   }
 
   return (

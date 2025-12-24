@@ -43,6 +43,26 @@ const deviceListContent = {
       en: 'Online',
       de: 'Online',
     }),
+    rename: t({
+      en: 'Rename',
+      de: 'Umbenennen',
+    }),
+    delete: t({
+      en: 'Delete',
+      de: 'Löschen',
+    }),
+    confirmDelete: t({
+      en: 'Are you sure you want to delete this device?',
+      de: 'Sind Sie sicher, dass Sie dieses Gerät löschen möchten?',
+    }),
+    deviceDeleted: t({
+      en: 'Device deleted successfully',
+      de: 'Gerät erfolgreich gelöscht',
+    }),
+    deviceRenamed: t({
+      en: 'Device renamed successfully',
+      de: 'Gerät erfolgreich umbenannt',
+    }),
   },
 } satisfies DeclarationContent
 

@@ -5,9 +5,10 @@ interface DeviceNamingProps {
   serial: string
   onSave: (name: string) => void
   onCancel: () => void
+  mode?: 'name' | 'rename'
 }
 
-export default function DeviceNaming({ serial, onSave, onCancel }: DeviceNamingProps) {
+export default function DeviceNaming({ serial, onSave, onCancel, mode = 'name' }: DeviceNamingProps) {
   const content = useIntlayer('device-naming')
   const [name, setName] = useState('')
 
@@ -33,7 +34,7 @@ export default function DeviceNaming({ serial, onSave, onCancel }: DeviceNamingP
                 type="text"
                 value={name}
                 onInput={(e) => setName((e.target as HTMLInputElement).value)}
-                placeholder={content.placeholder}
+                placeholder={content.placeholder.value}
                 autoFocus
                 required
               />
@@ -44,7 +45,7 @@ export default function DeviceNaming({ serial, onSave, onCancel }: DeviceNamingP
                 {content.cancel}
               </button>
               <button type="submit" class="btn-primary" disabled={!name.trim()}>
-                {content.saveAndConnect}
+                {mode === 'rename' ? content.rename : content.saveAndConnect}
               </button>
             </div>
           </form>

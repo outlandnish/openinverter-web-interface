@@ -5,7 +5,7 @@ import { useWebSocketContext } from '@contexts/WebSocketContext'
 import MultiLineChart, { COLORS, type DataPoint } from '@components/MultiLineChart'
 import { convertSpotValue } from '@utils/spotValueConversions'
 import { formatParameterValue } from '@utils/parameterDisplay'
-import ProgressBar from '@components/ProgressBar'
+import { ProgressBar } from '@components/ProgressBar'
 
 type HistoricalData = Record<string, DataPoint[]>
 const MAX_HISTORY_POINTS = 100
@@ -228,22 +228,18 @@ export default function SpotValuesMonitor({
   if (paramsLoading) {
     return (
       <div class="loading">
-        {downloadProgress > 0 ? (
-          <div style={{ width: '100%', maxWidth: '500px' }}>
-            <ProgressBar 
-              progress={downloadProgress} 
-              label="Downloading parameter definitions..." 
-            />
-            {serial && connectedSerial && normalizeSerial(connectedSerial) !== normalizeSerial(serial) && (
-              <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
-                ⚠️ Warning: Currently connected to device <strong>{connectedSerial}</strong>, but loading parameters for <strong>{serial}</strong>. 
-                The parameter file may be incorrect. Please ensure the correct device is connected.
-              </div>
-            )}
-          </div>
-        ) : (
-          <span>{content.loadingParameters}</span>
-        )}
+        <div style={{ width: '100%', maxWidth: '500px' }}>
+          <ProgressBar
+            progress={downloadProgress}
+            label={downloadProgress > 0 ? "Downloading parameter definitions..." : content.loadingParameters}
+          />
+          {serial && connectedSerial && normalizeSerial(connectedSerial) !== normalizeSerial(serial) && (
+            <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
+              ⚠️ Warning: Currently connected to device <strong>{connectedSerial}</strong>, but loading parameters for <strong>{serial}</strong>.
+              The parameter file may be incorrect. Please ensure the correct device is connected.
+            </div>
+          )}
+        </div>
       </div>
     )
   }

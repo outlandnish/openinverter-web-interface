@@ -20,6 +20,7 @@ export default function DeviceList() {
   const [savedDevices, setSavedDevices] = useState<Record<string, SavedDevice>>({})
   const [scanning, setScanning] = useState(false)
   const [namingDevice, setNamingDevice] = useState<MergedDevice | null>(null)
+  const [renamingDevice, setRenamingDevice] = useState<MergedDevice | null>(null)
   const [lastConnectedSerial, setLastConnectedSerial] = useState<string | null>(null)
 
   // WebSocket connection for real-time device updates
@@ -60,6 +61,31 @@ export default function DeviceList() {
 
         case 'connected':
           console.log('Connected to device:', message.data)
+          break
+
+        case 'deviceDeleted':
+          if (message.data.success) {
+            setSavedDevices(prev => {
+              const updated = { ...prev }
+              delete updated[message.data.serial]
+              return updated
+            })
+            console.log('Device deleted:', message.data.serial)
+          }
+          break
+
+        case 'deviceRenamed':
+          if (message.data.success) {
+            setSavedDevices(prev => ({
+              ...prev,
+              [message.data.serial]: {
+                ...prev[message.data.serial],
+                name: message.data.name
+              }
+            }))
+            setRenamingDevice(null)
+            console.log('Device renamed:', message.data.serial, '->', message.data.name)
+          }
           break
       }
     })
@@ -172,6 +198,39 @@ export default function DeviceList() {
     setLocation(`/devices/${serial}`)
   }
 
+  const handleDeleteDevice = (device: MergedDevice, e: Event) => {
+    e.stopPropagation()
+    
+    if (confirm(content.confirmDelete)) {
+      sendMessage('deleteDevice', {
+        serial: device.serial
+      })
+    }
+  }
+
+  const handleRenameClick = (device: MergedDevice, e: Event) => {
+    e.stopPropagation()
+    setRenamingDevice(device)
+  }
+
+  const handleRenameSubmit = (newName: string) => {
+    if (!renamingDevice) return
+
+    sendMessage('renameDevice', {
+      serial: renamingDevice.serial,
+      name: newName
+    })
+
+    // Update local state optimistically
+    setSavedDevices(prev => ({
+      ...prev,
+      [renamingDevice.serial]: {
+        ...prev[renamingDevice.serial],
+        name: newName
+      }
+    }))
+  }
+
   const mergedDevices = mergeDevices()
 
   return (
@@ -217,6 +276,24 @@ export default function DeviceList() {
                     <div class="device-status online">{content.online}</div>
                   )}
                 </div>
+                <div class="device-actions">
+                  {device.name && (
+                    <button 
+                      class="btn-secondary btn-small" 
+                      onClick={(e) => handleRenameClick(device, e)}
+                      title={content.rename}
+                    >
+                      ✏️ {content.rename}
+                    </button>
+                  )}
+                  <button 
+                    class="btn-danger btn-small" 
+                    onClick={(e) => handleDeleteDevice(device, e)}
+                    title={content.delete}
+                  >
+                    🗑️ {content.delete}
+                  </button>
+                </div>
               </div>
             )
           })
@@ -228,6 +305,14 @@ export default function DeviceList() {
           serial={namingDevice.serial}
           onSave={handleDeviceName}
           onCancel={() => setNamingDevice(null)}
+        />
+      )}
+
+      {renamingDevice && (
+        <DeviceNaming
+          serial={renamingDevice.serial}
+          onSave={handleRenameSubmit}
+          onCancel={() => setRenamingDevice(null)}
         />
       )}
     </div>

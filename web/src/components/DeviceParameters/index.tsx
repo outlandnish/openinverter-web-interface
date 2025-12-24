@@ -5,7 +5,7 @@ import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useToast } from '@hooks/useToast'
 import { api } from '@api/inverter'
 import ParameterCategory from './ParameterCategory'
-import ProgressBar from '@components/ProgressBar'
+import { ProgressBar } from '@components/ProgressBar'
 
 interface DeviceParametersProps {
   serial: string
@@ -25,7 +25,7 @@ export default function DeviceParameters({
   const { isConnected } = useWebSocketContext()
   // Parse nodeId to number for fetching params from specific device
   const numericNodeId = parseInt(nodeId)
-  const { params, loading, refresh: refreshParams, getDisplayName, downloadProgress } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
+  const { params, loading, refresh: refreshParams, getDisplayName, downloadProgress, downloadTotal } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
 
@@ -49,20 +49,25 @@ export default function DeviceParameters({
   }
 
   if (loading) {
+    // Determine if we should show determinate or indeterminate progress
+    const isIndeterminate = downloadTotal === 0 && downloadProgress === 0
+    const label = downloadTotal > 0
+      ? `Downloading parameter definitions... (${Math.round((downloadProgress * downloadTotal) / 100)} / ${downloadTotal} bytes)`
+      : downloadProgress > 0
+      ? `Downloading parameter definitions... ${downloadProgress}%`
+      : "Loading parameters..."
+
     return (
       <section id="device-parameters" class="card">
         <h2 class="section-header">{content.deviceParameters}</h2>
         <div class="loading">
-          {downloadProgress > 0 ? (
-            <div style={{ width: '100%', maxWidth: '500px' }}>
-              <ProgressBar 
-                progress={downloadProgress} 
-                label="Downloading parameter definitions..." 
-              />
-            </div>
-          ) : (
-            <span>Loading parameters...</span>
-          )}
+          <div style={{ width: '100%', maxWidth: '500px' }}>
+            <ProgressBar
+              progress={downloadProgress}
+              label={label}
+              indeterminate={isIndeterminate}
+            />
+          </div>
         </div>
       </section>
     )

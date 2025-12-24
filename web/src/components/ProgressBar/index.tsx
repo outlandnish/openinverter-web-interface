@@ -1,10 +1,11 @@
-interface ProgressBarProps {
+export interface ProgressBarProps {
   progress: number // 0-100
   label?: string
   showPercentage?: boolean
+  indeterminate?: boolean
 }
 
-export default function ProgressBar({ progress, label, showPercentage = true }: ProgressBarProps) {
+export function ProgressBar({ progress, label, showPercentage = true, indeterminate = false }: ProgressBarProps) {
   const clampedProgress = Math.min(100, Math.max(0, progress))
 
   return (
@@ -12,15 +13,12 @@ export default function ProgressBar({ progress, label, showPercentage = true }: 
       {label && <div class="progress-bar-label">{label}</div>}
       <div class="progress-bar-track">
         <div
-          class="progress-bar-fill"
-          style={{ width: `${clampedProgress}%` }}
+          class={indeterminate ? "progress-bar-fill progress-bar-indeterminate" : "progress-bar-fill"}
+          style={indeterminate ? {} : { width: `${clampedProgress}%` }}
         >
-          {showPercentage && clampedProgress > 10 && (
-            <span class="progress-bar-percentage">{Math.round(clampedProgress)}%</span>
-          )}
         </div>
       </div>
-      {showPercentage && clampedProgress <= 10 && (
+      {showPercentage && !indeterminate && (
         <div class="progress-bar-percentage-outside">{Math.round(clampedProgress)}%</div>
       )}
     </div>

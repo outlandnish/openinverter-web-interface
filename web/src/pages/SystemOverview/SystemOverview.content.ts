@@ -59,6 +59,18 @@ const systemOverviewContent = {
       en: 'Scanning node:',
       de: 'Scanne Knoten:',
     }),
+    rename: t({
+      en: 'Rename',
+      de: 'Umbenennen',
+    }),
+    delete: t({
+      en: 'Delete',
+      de: 'Löschen',
+    }),
+    confirmDelete: t({
+      en: 'Are you sure you want to delete this device?',
+      de: 'Sind Sie sicher, dass Sie dieses Gerät löschen möchten?',
+    }),
   },
 } satisfies DeclarationContent
 
