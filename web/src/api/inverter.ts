@@ -64,22 +64,6 @@ class InverterAPI {
   }
 
   /**
-   * Send a command to the inverter
-   */
-  async sendCommand(cmd: string): Promise<string> {
-    const response = await fetch(`/cmd?cmd=${encodeURIComponent(cmd)}`)
-    return response.text()
-  }
-
-  /**
-   * Get JSON parameter list with current values from inverter
-   */
-  async getParamList(): Promise<ParameterList> {
-    const response = await fetch('/cmd?cmd=json')
-    return response.json()
-  }
-
-  /**
    * Set a parameter value by ID (not name) via WebSocket
    */
   async setParamById(paramId: number, value: number | string): Promise<string> {
@@ -92,21 +76,6 @@ class InverterAPI {
 
     // Return a success message (actual result will come through WebSocket events)
     return 'Parameter update requested'
-  }
-
-  /**
-   * Get a parameter value by ID
-   */
-  async getParamById(paramId: number): Promise<number> {
-    // Use the existing getParamList and extract the value
-    // This is a fallback - in practice you might implement a dedicated endpoint
-    const params = await this.getParamList()
-    for (const key in params) {
-      if (params[key].id === paramId) {
-        return params[key].value as number
-      }
-    }
-    return 0
   }
 
   /**
