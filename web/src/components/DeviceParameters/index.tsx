@@ -194,10 +194,15 @@ export default function DeviceParameters({
           handleParamUpdate(paramId, value)
         })
 
-        // Send updates to device
+        // Send updates to device with rate limiting to prevent overwhelming the ESP32
+        // The ESP32 can only queue a limited number of WebSocket messages
+        const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
         for (const { paramId, value, key } of updates) {
           try {
             await api.setParamById(paramId, value)
+            // Wait 50ms between each update to avoid overwhelming the ESP32 message queue
+            await delay(50)
           } catch (error) {
             showError(content.failedToUpdate({ key, error: (error as Error).message }))
           }

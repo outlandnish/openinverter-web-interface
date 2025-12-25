@@ -173,7 +173,7 @@ export default function SpotValuesMonitor({
     } else {
       // CRITICAL: Verify correct device is connected before starting streaming
       if (serial && normalizeSerial(connectedSerial) !== normalizeSerial(serial)) {
-        alert(`Wrong device connected! Please connect to ${serial} first.\nCurrently connected to: ${connectedSerial || 'none'}`)
+        alert(content.wrongDeviceAlert({ serial, connectedSerial: connectedSerial || 'none' }))
         return
       }
 
@@ -236,12 +236,11 @@ export default function SpotValuesMonitor({
         <div style={{ width: '100%', maxWidth: '500px' }}>
           <ProgressBar
             progress={downloadProgress}
-            label={downloadProgress > 0 ? "Downloading parameter definitions..." : content.loadingParameters}
+            label={downloadProgress > 0 ? content.downloadingParameters : content.loadingParameters}
           />
           {serial && connectedSerial && normalizeSerial(connectedSerial) !== normalizeSerial(serial) && (
             <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
-              ⚠️ Warning: Currently connected to device <strong>{connectedSerial}</strong>, but loading parameters for <strong>{serial}</strong>.
-              The parameter file may be incorrect. Please ensure the correct device is connected.
+              {content.loadingWrongDeviceWarningPrefix} <strong>{connectedSerial}</strong>{content.loadingWrongDeviceWarningSuffix} <strong>{serial}</strong>{content.loadingWrongDeviceWarningEnd}
             </div>
           )}
         </div>
@@ -288,9 +287,7 @@ export default function SpotValuesMonitor({
 
       {wrongDeviceConnected && (
         <div style={{ margin: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
-          ⚠️ <strong>Warning:</strong> You are viewing parameters for device <strong>{serial}</strong>, 
-          but device <strong>{connectedSerial}</strong> is currently connected. 
-          Values shown may be incorrect. Please connect to the correct device before streaming.
+          {content.streamingWrongDeviceWarningPrefix} <strong>{content.streamingWrongDeviceWarningBold}</strong> {content.streamingWrongDeviceWarningText1} <strong>{serial}</strong>{content.streamingWrongDeviceWarningText2} <strong>{connectedSerial}</strong> {content.streamingWrongDeviceWarningText3}
         </div>
       )}
 

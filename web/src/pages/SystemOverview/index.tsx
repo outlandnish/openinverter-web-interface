@@ -121,7 +121,7 @@ export default function SystemOverview() {
 
   const handleDeleteDevice = (device: MergedDevice, e: Event) => {
     e.stopPropagation()
-    
+
     if (confirm(content.confirmDelete.value || content.confirmDelete)) {
       deleteDevice(device.serial)
     }
