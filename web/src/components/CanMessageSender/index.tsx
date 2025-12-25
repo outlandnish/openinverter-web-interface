@@ -251,7 +251,6 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
                 class="input-data"
                 maxLength={23}
               />
-              <span class="input-hint">Enter hex bytes (auto-formatted)</span>
             </label>
           </div>
 
@@ -360,7 +359,6 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
                     class="input-data"
                     maxLength={23}
                   />
-                  <span class="input-hint">Enter hex bytes (auto-formatted)</span>
                 </label>
               </div>
 
