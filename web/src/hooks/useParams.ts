@@ -373,10 +373,14 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
     // Cleanup: abort the request when component unmounts or deviceSerial/refreshTrigger/nodeId changes
     return () => {
       abortController.abort()
-      // Clear any pending WebSocket request
-      if (pendingRequestRef.current) {
-        pendingRequestRef.current.reject(new Error('Request cancelled'))
-        pendingRequestRef.current = null
+      // Clear any pending WebSocket requests
+      if (pendingSchemaRequestRef.current) {
+        pendingSchemaRequestRef.current.reject(new Error('Request cancelled'))
+        pendingSchemaRequestRef.current = null
+      }
+      if (pendingValuesRequestRef.current) {
+        pendingValuesRequestRef.current.reject(new Error('Request cancelled'))
+        pendingValuesRequestRef.current = null
       }
     }
   }, [deviceSerial, refreshTrigger, explicitNodeId, sendMessage])
