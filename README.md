@@ -38,22 +38,7 @@ Out of the box, this works with:
 The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3.
 
 # Firmware
-Tompile it follow the [instructions below](#development).
-
-# Flashing / Upgrading
-## Wirelessly
-Create a file platformio-local-override.ini and put in it
-```
-[env]
-upload_protocol = espota
-upload_port = 192.168.4.1
-upload_flags = 
-```
-Install platformio on your system and flash with commands
-```
-pio run --target upload
-pio run --target uploadfs
-```
+To compile it follow the [instructions below](#development).
 
 # Documentations
 * [Openinverter Web Interface Protocol](PROTOCOL.md)
