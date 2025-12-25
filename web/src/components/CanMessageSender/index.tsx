@@ -72,6 +72,30 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
     return bytes.slice(0, 8)
   }
 
+  // Format input to hex byte mask (XX XX XX XX XX XX XX XX)
+  const formatHexBytes = (input: string): string => {
+    // Remove all non-hex characters
+    const cleaned = input.replace(/[^0-9A-Fa-f]/g, '').toUpperCase()
+
+    // Split into pairs and join with spaces
+    const pairs: string[] = []
+    for (let i = 0; i < cleaned.length && i < 16; i += 2) {
+      if (i + 1 < cleaned.length) {
+        pairs.push(cleaned.substring(i, i + 2))
+      } else {
+        pairs.push(cleaned.substring(i, i + 1))
+      }
+    }
+
+    return pairs.join(' ')
+  }
+
+  // Handle masked input change
+  const handleDataBytesChange = (value: string, setter: (val: string) => void) => {
+    const formatted = formatHexBytes(value)
+    setter(formatted)
+  }
+
   // Format number to hex string
   const toHex = (num: number): string => {
     return num.toString(16).toUpperCase().padStart(2, '0')
@@ -218,14 +242,16 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
           <div class="form-row">
             <label>
-              Data Bytes (hex, space-separated):
+              Data Bytes (hex):
               <input
                 type="text"
                 placeholder="00 00 00 00 00 00 00 00"
                 value={dataBytes}
-                onChange={(e) => setDataBytes((e.currentTarget as HTMLInputElement).value)}
+                onChange={(e) => handleDataBytesChange((e.currentTarget as HTMLInputElement).value, setDataBytes)}
                 class="input-data"
+                maxLength={23}
               />
+              <span class="input-hint">Enter hex bytes (auto-formatted)</span>
             </label>
           </div>
 
@@ -322,17 +348,19 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
               <div class="form-row">
                 <label>
-                  Data Bytes (hex, space-separated):
+                  Data Bytes (hex):
                   <input
                     type="text"
                     placeholder="00 00 00 00 00 00 00 00"
                     value={periodicFormData.data}
-                    onChange={(e) => setPeriodicFormData({
-                      ...periodicFormData,
-                      data: (e.currentTarget as HTMLInputElement).value
-                    })}
+                    onChange={(e) => handleDataBytesChange(
+                      (e.currentTarget as HTMLInputElement).value,
+                      (val) => setPeriodicFormData({ ...periodicFormData, data: val })
+                    )}
                     class="input-data"
+                    maxLength={23}
                   />
+                  <span class="input-hint">Enter hex bytes (auto-formatted)</span>
                 </label>
               </div>
 
