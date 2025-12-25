@@ -1051,7 +1051,26 @@ SetResult RemoveCanMapping(String json){
     return UnknownIndex;
   }
 
-  setValueSdo(_nodeId, doc["index"].as<uint32_t>(), doc["subindex"].as<uint8_t>(), 0U); //Writing 0 to map index removes the mapping
+  // The index from GetCanMapping is a read index (0x3100+), but we need to use
+  // the write index (0x3000 for TX, 0x3001 for RX) to actually delete the mapping
+  uint32_t readIndex = doc["index"].as<uint32_t>();
+  uint32_t writeIndex;
+  
+  if (readIndex >= SDO_INDEX_MAP_RD + 0x80) {
+    // RX mapping (read index 0x3180+)
+    writeIndex = SDO_INDEX_MAP_RX + (readIndex - (SDO_INDEX_MAP_RD + 0x80));
+  } else if (readIndex >= SDO_INDEX_MAP_RD) {
+    // TX mapping (read index 0x3100+)
+    writeIndex = SDO_INDEX_MAP_TX + (readIndex - SDO_INDEX_MAP_RD);
+  } else {
+    DBG_OUTPUT_PORT.printf("Remove: Invalid index 0x%X\n", readIndex);
+    return UnknownIndex;
+  }
+  
+  DBG_OUTPUT_PORT.printf("Removing mapping: read index 0x%X -> write index 0x%X, subindex %d\n", 
+                         readIndex, writeIndex, doc["subindex"].as<uint8_t>());
+
+  setValueSdo(_nodeId, writeIndex, doc["subindex"].as<uint8_t>(), 0U); //Writing 0 to map index removes the mapping
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
