@@ -259,6 +259,12 @@ const deviceDetailsContent = {
       en: 'Import from JSON',
       de: 'Aus JSON importieren',
     }),
+    importing: insert(
+      t({
+        en: 'Importing... ({{current}}/{{total}})',
+        de: 'Importiere... ({{current}}/{{total}})',
+      })
+    ),
     importExportHint: t({
       en: 'Export saves all parameter values to a JSON file. Import loads and validates parameters from a JSON file.',
       de: 'Export speichert alle Parameterwerte in einer JSON-Datei. Import lädt und validiert Parameter aus einer JSON-Datei.',

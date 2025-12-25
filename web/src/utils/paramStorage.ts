@@ -9,125 +9,110 @@ import type { Parameter as ApiParameter, ParameterList as ApiParameterList } fro
 export type Parameter = ApiParameter
 export type ParameterList = ApiParameterList
 
-const STORAGE_PREFIX = 'params_'
-const STORAGE_VERSION = 1
+const SCHEMA_PREFIX = 'schema_'
+const STORAGE_VERSION = 2 // v2: Separated schema from values
 
-interface StoredParams {
+interface StoredSchema {
   version: number
   timestamp: number
-  params: ParameterList
+  schema: ParameterList
 }
 
 export const ParamStorage = {
+
   /**
-   * Get parameter definitions for a device
+   * Get parameter schema (definitions without values) for a device
    */
-  getParams(serial: string): ParameterList | null {
+  getSchema(serial: string): ParameterList | null {
     try {
-      const key = `${STORAGE_PREFIX}${serial}`
+      const key = `${SCHEMA_PREFIX}${serial}`
       const data = localStorage.getItem(key)
 
       if (!data) return null
 
-      const stored: StoredParams = JSON.parse(data)
+      const stored: StoredSchema = JSON.parse(data)
 
       // Version check
       if (stored.version !== STORAGE_VERSION) {
-        console.warn('Parameter storage version mismatch, clearing cache')
-        this.clearParams(serial)
+        console.warn('Schema storage version mismatch, clearing cache')
+        this.clearSchema(serial)
         return null
       }
 
-      return stored.params
+      return stored.schema
     } catch (error) {
-      console.error('Failed to load parameters from localStorage:', error)
+      console.error('Failed to load schema from localStorage:', error)
       return null
     }
   },
 
   /**
-   * Save parameter definitions for a device
+   * Save parameter schema (definitions without values) for a device
    */
-  saveParams(serial: string, params: ParameterList): void {
+  saveSchema(serial: string, schema: ParameterList): void {
     try {
-      const key = `${STORAGE_PREFIX}${serial}`
-      const stored: StoredParams = {
+      const key = `${SCHEMA_PREFIX}${serial}`
+      const stored: StoredSchema = {
         version: STORAGE_VERSION,
         timestamp: Date.now(),
-        params,
+        schema,
       }
 
       localStorage.setItem(key, JSON.stringify(stored))
-      console.log(`Saved ${Object.keys(params).length} parameters for device ${serial}`)
+      console.log(`Saved schema with ${Object.keys(schema).length} parameters for device ${serial}`)
     } catch (error) {
-      console.error('Failed to save parameters to localStorage:', error)
+      console.error('Failed to save schema to localStorage:', error)
       // Handle quota exceeded
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-        console.warn('localStorage quota exceeded, clearing old parameter caches')
-        this.clearOldestCache()
+        console.warn('localStorage quota exceeded, clearing old schema caches')
+        this.clearOldestSchemaCache()
         // Retry once
         try {
           localStorage.setItem(
-            `${STORAGE_PREFIX}${serial}`,
+            `${SCHEMA_PREFIX}${serial}`,
             JSON.stringify({
               version: STORAGE_VERSION,
               timestamp: Date.now(),
-              params,
+              schema,
             })
           )
         } catch (retryError) {
-          console.error('Failed to save parameters even after cleanup:', retryError)
+          console.error('Failed to save schema even after cleanup:', retryError)
         }
       }
     }
   },
 
   /**
-   * Get parameter ID by name
+   * Check if schema is cached for a device
    */
-  getParamId(serial: string, paramName: string): number | null {
-    const params = this.getParams(serial)
-    return params?.[paramName]?.id ?? null
+  hasSchema(serial: string): boolean {
+    return this.getSchema(serial) !== null
   },
 
   /**
-   * Get parameter definition by name
+   * Clear schema for a specific device
    */
-  getParam(serial: string, paramName: string): Parameter | null {
-    const params = this.getParams(serial)
-    return params?.[paramName] ?? null
-  },
-
-  /**
-   * Check if parameters are cached for a device
-   */
-  hasParams(serial: string): boolean {
-    return this.getParams(serial) !== null
-  },
-
-  /**
-   * Clear parameters for a specific device
-   */
-  clearParams(serial: string): void {
-    const key = `${STORAGE_PREFIX}${serial}`
+  clearSchema(serial: string): void {
+    const key = `${SCHEMA_PREFIX}${serial}`
     localStorage.removeItem(key)
-    console.log(`Cleared parameters for device ${serial}`)
+    console.log(`Cleared schema for device ${serial}`)
   },
 
   /**
-   * Clear the oldest parameter cache to free up space
+   * Clear the oldest schema cache to free up space
    */
-  clearOldestCache(): void {
+  clearOldestSchemaCache(): void {
     const keys: Array<{ key: string; timestamp: number }> = []
 
-    // Find all parameter storage keys
+    // Find all schema storage keys
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
-      if (key && key.startsWith(STORAGE_PREFIX)) {
+      if (key && key.startsWith(SCHEMA_PREFIX)) {
         try {
           const data = localStorage.getItem(key)
           if (data) {
-            const stored: StoredParams = JSON.parse(data)
+            const stored: StoredSchema = JSON.parse(data)
             keys.push({ key, timestamp: stored.timestamp })
           }
         } catch (error) {
@@ -143,44 +128,7 @@ export const ParamStorage = {
     // Remove oldest
     if (keys.length > 0) {
       localStorage.removeItem(keys[0].key)
-      console.log(`Removed oldest parameter cache: ${keys[0].key}`)
-    }
-  },
-
-  /**
-   * Get all cached device serials
-   */
-  getCachedDevices(): string[] {
-    const serials: string[] = []
-
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (key && key.startsWith(STORAGE_PREFIX)) {
-        serials.push(key.replace(STORAGE_PREFIX, ''))
-      }
-    }
-
-    return serials
-  },
-
-  /**
-   * Get cache info (size, timestamp) for a device
-   */
-  getCacheInfo(serial: string): { size: number; timestamp: number; paramCount: number } | null {
-    const key = `${STORAGE_PREFIX}${serial}`
-    const data = localStorage.getItem(key)
-
-    if (!data) return null
-
-    try {
-      const stored: StoredParams = JSON.parse(data)
-      return {
-        size: new Blob([data]).size,
-        timestamp: stored.timestamp,
-        paramCount: Object.keys(stored.params).length,
-      }
-    } catch (error) {
-      return null
+      console.log(`Removed oldest schema cache: ${keys[0].key}`)
     }
   },
 }

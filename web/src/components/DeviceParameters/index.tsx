@@ -25,10 +25,12 @@ export default function DeviceParameters({
   const { isConnected, subscribe } = useWebSocketContext()
   // Parse nodeId to number for fetching params from specific device
   const numericNodeId = parseInt(nodeId)
-  const { params, loading, getDisplayName, downloadProgress, downloadTotal } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
+  const { params, loading, getDisplayName, downloadProgress, downloadTotal, refresh } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const [localParams, setLocalParams] = useState(params)
+  const [isImporting, setIsImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 })
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Sync localParams with params when params changes (e.g., on initial load or refresh)
@@ -36,18 +38,26 @@ export default function DeviceParameters({
     setLocalParams(params)
   }, [params])
 
-  // Subscribe to WebSocket events for save to flash responses
+  // Subscribe to WebSocket events for save to flash responses and parameter update errors
   useEffect(() => {
     const unsubscribe = subscribe((message) => {
       if (message.event === 'saveToFlashSuccess') {
+        // Refresh parameters from device to verify they were saved correctly
+        // Note: Schema is still cached, only values are refreshed
+        refresh()
         showSuccess(content.parametersSaved)
       } else if (message.event === 'saveToFlashError') {
         showError(content.saveParametersFailed)
+      } else if (message.event === 'paramUpdateError') {
+        // Show parameter update errors to the user
+        const paramName = message.data?.paramId ? `Parameter ${message.data.paramId}` : 'Parameter'
+        const errorMsg = message.data?.error || 'Unknown error'
+        showError(`${paramName}: ${errorMsg}`)
       }
     })
 
     return unsubscribe
-  }, [subscribe, showSuccess, showError, content])
+  }, [subscribe, showSuccess, showError, content, refresh])
 
   const toggleSection = (category: string) => {
     const newCollapsed = new Set(collapsedSections)
@@ -93,7 +103,7 @@ export default function DeviceParameters({
     }
 
     // Create export object with only parameter values
-    const exportData: Record<string, number> = {}
+    const exportData: Record<string, number | string> = {}
     Object.entries(localParams).forEach(([key, param]) => {
       if (param.isparam) {
         exportData[key] = param.value
@@ -189,6 +199,9 @@ export default function DeviceParameters({
 
       // If we have valid updates, apply them
       if (updates.length > 0) {
+        setIsImporting(true)
+        setImportProgress({ current: 0, total: updates.length })
+
         // Update local state first
         updates.forEach(({ paramId, value }) => {
           handleParamUpdate(paramId, value)
@@ -198,9 +211,11 @@ export default function DeviceParameters({
         // The ESP32 can only queue a limited number of WebSocket messages
         const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-        for (const { paramId, value, key } of updates) {
+        for (let i = 0; i < updates.length; i++) {
+          const { paramId, value, key } = updates[i]
           try {
             await api.setParamById(paramId, value)
+            setImportProgress({ current: i + 1, total: updates.length })
             // Wait 50ms between each update to avoid overwhelming the ESP32 message queue
             await delay(50)
           } catch (error) {
@@ -208,6 +223,7 @@ export default function DeviceParameters({
           }
         }
 
+        setIsImporting(false)
         showSuccess(content.importedSuccessfully({ count: validCount, plural: validCount === 1 ? '' : 's' }))
       }
 
@@ -222,6 +238,7 @@ export default function DeviceParameters({
     } catch (error) {
       showError(content.parseJSONFailed({ error: (error as Error).message }))
       target.value = ''
+      setIsImporting(false)
     }
   }
 
@@ -326,11 +343,14 @@ export default function DeviceParameters({
       <div class="form-group" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #ddd' }}>
         <label style={{ marginBottom: '1rem' }}>{content.importExportParameters}</label>
         <div class="button-group" style={{ marginTop: 0 }}>
-          <button class="btn-secondary" onClick={handleExportToJSON} disabled={!localParams}>
+          <button class="btn-secondary" onClick={handleExportToJSON} disabled={!localParams || isImporting}>
             {content.exportToJSON}
           </button>
-          <button class="btn-secondary" onClick={handleImportFromJSON} disabled={!localParams}>
-            {content.importFromJSON}
+          <button class="btn-secondary" onClick={handleImportFromJSON} disabled={!localParams || isImporting}>
+            {isImporting
+              ? content.importing({ current: importProgress.current, total: importProgress.total })
+              : content.importFromJSON
+            }
           </button>
         </div>
         <small class="hint" style={{ display: 'block', marginTop: '0.5rem' }}>

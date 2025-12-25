@@ -75,10 +75,16 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
   // Track which serial we currently have loaded to prevent redundant loads
   const loadedSerialRef = useRef<string | null>(null)
 
-  // Track pending WebSocket request
-  const pendingRequestRef = useRef<{
+  // Track pending WebSocket requests
+  const pendingSchemaRequestRef = useRef<{
     nodeId: number
-    resolve: (params: ParameterList) => void
+    resolve: (schema: ParameterList) => void
+    reject: (error: Error) => void
+  } | null>(null)
+
+  const pendingValuesRequestRef = useRef<{
+    nodeId: number
+    resolve: (values: Record<string, number | string>) => void
     reject: (error: Error) => void
   } | null>(null)
 
@@ -86,22 +92,41 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
     setRefreshTrigger(prev => prev + 1)
   }
 
-  // Request params via WebSocket and return a promise
-  const requestParamsViaWebSocket = (nodeId: number): Promise<ParameterList> => {
+  // Request schema via WebSocket and return a promise
+  const requestSchemaViaWebSocket = (nodeId: number): Promise<ParameterList> => {
     return new Promise((resolve, reject) => {
       // Store the pending request
-      pendingRequestRef.current = { nodeId, resolve, reject }
+      pendingSchemaRequestRef.current = { nodeId, resolve, reject }
 
       // Send WebSocket message
-      sendMessage('getParams', { nodeId })
+      sendMessage('getParamSchema', { nodeId })
 
       // Set a timeout in case we don't get a response
       setTimeout(() => {
-        if (pendingRequestRef.current && pendingRequestRef.current.nodeId === nodeId) {
-          pendingRequestRef.current.reject(new Error('Request timeout'))
-          pendingRequestRef.current = null
+        if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
+          pendingSchemaRequestRef.current.reject(new Error('Schema request timeout'))
+          pendingSchemaRequestRef.current = null
         }
       }, 30000) // 30 second timeout
+    })
+  }
+
+  // Request values via WebSocket and return a promise
+  const requestValuesViaWebSocket = (nodeId: number): Promise<Record<string, number | string>> => {
+    return new Promise((resolve, reject) => {
+      // Store the pending request
+      pendingValuesRequestRef.current = { nodeId, resolve, reject }
+
+      // Send WebSocket message
+      sendMessage('getParamValues', { nodeId })
+
+      // Set a timeout in case we don't get a response
+      setTimeout(() => {
+        if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
+          pendingValuesRequestRef.current.reject(new Error('Values request timeout'))
+          pendingValuesRequestRef.current = null
+        }
+      }, 10000) // 10 second timeout (values are faster than full schema)
     })
   }
 
@@ -143,29 +168,55 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         }
       }
 
-      // Handle params data response
-      else if (message.event === 'paramsData') {
+      // Handle schema data response
+      else if (message.event === 'paramSchemaData') {
         const nodeId = message.data.nodeId
-        const params = message.data.params
+        const schema = message.data.schema
 
         // Check if this response is for a pending request
-        if (pendingRequestRef.current && pendingRequestRef.current.nodeId === nodeId) {
-          console.log('Received params data via WebSocket for nodeId:', nodeId)
-          pendingRequestRef.current.resolve(params)
-          pendingRequestRef.current = null
+        if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
+          console.log('Received param schema via WebSocket for nodeId:', nodeId)
+          pendingSchemaRequestRef.current.resolve(schema)
+          pendingSchemaRequestRef.current = null
         }
       }
 
-      // Handle params error response
-      else if (message.event === 'paramsError') {
+      // Handle schema error response
+      else if (message.event === 'paramSchemaError') {
         const nodeId = message.data.nodeId
         const error = message.data.error
 
         // Check if this error is for a pending request
-        if (pendingRequestRef.current && pendingRequestRef.current.nodeId === nodeId) {
-          console.error('Params error via WebSocket:', error)
-          pendingRequestRef.current.reject(new Error(error))
-          pendingRequestRef.current = null
+        if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
+          console.error('Schema error via WebSocket:', error)
+          pendingSchemaRequestRef.current.reject(new Error(error))
+          pendingSchemaRequestRef.current = null
+        }
+      }
+
+      // Handle values data response
+      else if (message.event === 'paramValuesData') {
+        const nodeId = message.data.nodeId
+        const values = message.data.values
+
+        // Check if this response is for a pending request
+        if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
+          console.log('Received param values via WebSocket for nodeId:', nodeId)
+          pendingValuesRequestRef.current.resolve(values)
+          pendingValuesRequestRef.current = null
+        }
+      }
+
+      // Handle values error response
+      else if (message.event === 'paramValuesError') {
+        const nodeId = message.data.nodeId
+        const error = message.data.error
+
+        // Check if this error is for a pending request
+        if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
+          console.error('Values error via WebSocket:', error)
+          pendingValuesRequestRef.current.reject(new Error(error))
+          pendingValuesRequestRef.current = null
         }
       }
     })
@@ -187,6 +238,7 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
       }
 
       // Check if we already have the right params loaded (prevents redundant effect runs)
+      // On refresh, we still want to reload values
       if (!forceRefresh && loadedSerialRef.current === deviceSerial && params !== null) {
         console.log('Params already loaded for device:', deviceSerial, '- skipping redundant load')
         if (!abortController.signal.aborted) {
@@ -196,80 +248,106 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         return
       }
 
-      // Check cache first BEFORE setting loading state
-      // This prevents stale data from previous device and avoids loading flicker
-      if (!forceRefresh) {
-        const cached = ParamStorage.getParams(deviceSerial)
-        if (cached) {
-          console.log('Using cached parameters from localStorage for device:', deviceSerial)
-          // Process cached parameters to ensure enums are parsed
-          const processedCached = processParameters(cached)
-
-          // Check if aborted before setting state
-          if (!abortController.signal.aborted) {
-            setParams(processedCached)
-            setLoading(false)
-            setError(null)
-            loadedSerialRef.current = deviceSerial
-          }
-          return
-        }
-      }
-
-      // No cache available - need to download
-      // Clear stale params from previous device to avoid confusion
-      try {
-        // Download from device - nodeId is required
-        if (explicitNodeId === undefined) {
-          // Clear params and show we're waiting for nodeId
-          if (!abortController.signal.aborted) {
-            setParams(null)
-            setLoading(false)
-            setError(null)
-          }
-          console.log('Waiting for nodeId to download parameters for device:', deviceSerial)
-          return
-        }
-
-        // Start loading - clear stale params
+      // NodeId is required for fetching from device
+      if (explicitNodeId === undefined) {
+        // Clear params and show we're waiting for nodeId
         if (!abortController.signal.aborted) {
           setParams(null)
+          setLoading(false)
+          setError(null)
+        }
+        console.log('Waiting for nodeId to fetch parameters for device:', deviceSerial)
+        return
+      }
+
+      try {
+        // Start loading
+        if (!abortController.signal.aborted) {
           setLoading(true)
           setError(null)
         }
 
-        console.log(`Downloading parameters from nodeId ${explicitNodeId} for serial:`, deviceSerial)
+        console.log(`Fetching parameters from nodeId ${explicitNodeId} for serial:`, deviceSerial)
         setDownloadProgress(0)
         setDownloadTotal(0) // Reset for new download
 
-        // Request params via WebSocket - progress will be tracked via WebSocket jsonProgress events
-        let rawParams: ParameterList
+        // STEP 1: Get schema (from cache or fetch from device)
+        let schema: ParameterList
+        const cachedSchema = !forceRefresh ? ParamStorage.getSchema(deviceSerial) : null
+
+        if (cachedSchema) {
+          console.log('Using cached schema from localStorage for device:', deviceSerial)
+          schema = cachedSchema
+        } else {
+          console.log('Fetching fresh schema from device for nodeId:', explicitNodeId)
+          try {
+            schema = await requestSchemaViaWebSocket(explicitNodeId)
+
+            // Check if request was aborted while waiting
+            if (abortController.signal.aborted) {
+              console.log('Schema fetch aborted for device:', deviceSerial)
+              return
+            }
+
+            // Process schema to parse enums from unit strings
+            schema = processParameters(schema)
+
+            // Save schema to localStorage
+            ParamStorage.saveSchema(deviceSerial, schema)
+          } catch (err) {
+            // Clear pending request on abort
+            if (abortController.signal.aborted) {
+              pendingSchemaRequestRef.current = null
+              console.log('Schema fetch was aborted')
+              return
+            }
+            throw err // Re-throw if not aborted
+          }
+        }
+
+        // STEP 2: Always fetch fresh values from device
+        console.log('Fetching fresh values from device for nodeId:', explicitNodeId)
+        let values: Record<string, number | string>
         try {
-          rawParams = await requestParamsViaWebSocket(explicitNodeId)
+          values = await requestValuesViaWebSocket(explicitNodeId)
 
           // Check if request was aborted while waiting
           if (abortController.signal.aborted) {
-            console.log('Parameter fetch aborted for device:', deviceSerial)
+            console.log('Values fetch aborted for device:', deviceSerial)
             return
           }
         } catch (err) {
           // Clear pending request on abort
           if (abortController.signal.aborted) {
-            pendingRequestRef.current = null
-            console.log('Parameter fetch was aborted')
+            pendingValuesRequestRef.current = null
+            console.log('Values fetch was aborted')
             return
           }
           throw err // Re-throw if not aborted
         }
 
-        // Process parameters to parse enums from unit strings
-        const processedParams = processParameters(rawParams)
+        // STEP 3: Merge schema + values
+        const mergedParams: ParameterList = {}
+        for (const [key, paramDef] of Object.entries(schema)) {
+          const paramId = paramDef.id
+          mergedParams[key] = {
+            ...paramDef,
+            // Update value from fresh values if available
+            value: paramId !== undefined && values[paramId] !== undefined
+              ? values[paramId]
+              : paramDef.value // Fallback to schema value if not found
+          }
+        }
 
-        // Save to localStorage
-        ParamStorage.saveParams(deviceSerial, processedParams)
+        // Check if aborted before setting state
+        if (!abortController.signal.aborted) {
+          setParams(mergedParams)
+          setLoading(false)
+          setError(null)
+          loadedSerialRef.current = deviceSerial
+        }
 
-        setParams(processedParams)
-        loadedSerialRef.current = deviceSerial
+        console.log('Successfully loaded parameters for device:', deviceSerial)
       } catch (err) {
         // Ignore abort errors
         if (err instanceof Error && err.name === 'AbortError') {

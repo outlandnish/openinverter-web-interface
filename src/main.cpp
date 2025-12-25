@@ -877,41 +877,6 @@ void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
-void handleGetParams(AsyncWebSocketClient* client, JsonDocument& doc) {
-  int nodeId = doc["nodeId"];
-  DBG_OUTPUT_PORT.printf("[WebSocket] Get params request for nodeId: %d\n", nodeId);
-
-  // Download JSON - progress will be sent via WebSocket jsonProgress events
-  String json = OICan::GetRawJson(nodeId);
-
-  if (json.isEmpty() || json == "{}") {
-    // Device is busy or error occurred
-    JsonDocument errorDoc;
-    errorDoc["event"] = "paramsError";
-    errorDoc["data"]["error"] = "Device busy or not connected";
-    errorDoc["data"]["nodeId"] = nodeId;
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
-    DBG_OUTPUT_PORT.println("[WebSocket] Sent paramsError - device busy");
-  } else {
-    // Send the parameters JSON back to the requesting client
-    JsonDocument responseDoc;
-    responseDoc["event"] = "paramsData";
-    responseDoc["data"]["nodeId"] = nodeId;
-
-    // Parse the JSON string into the data field
-    JsonDocument paramsDoc;
-    deserializeJson(paramsDoc, json);
-    responseDoc["data"]["params"] = paramsDoc;
-
-    String output;
-    serializeJson(responseDoc, output);
-    client->text(output);
-    DBG_OUTPUT_PORT.printf("[WebSocket] Sent params data (%d bytes)\n", output.length());
-  }
-}
-
 void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Reload params request for nodeId: %d\n", nodeId);
@@ -933,6 +898,106 @@ void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) {
   serializeJson(responseDoc, output);
   client->text(output);
   DBG_OUTPUT_PORT.printf("[WebSocket] Sent reload response (success=%d)\n", success);
+}
+
+void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
+  int nodeId = doc["nodeId"];
+  DBG_OUTPUT_PORT.printf("[WebSocket] Get param schema request for nodeId: %d\n", nodeId);
+
+  // Download JSON - progress will be sent via WebSocket jsonProgress events
+  String json = OICan::GetRawJson(nodeId);
+
+  if (json.isEmpty() || json == "{}") {
+    // Device is busy or error occurred
+    JsonDocument errorDoc;
+    errorDoc["event"] = "paramSchemaError";
+    errorDoc["data"]["error"] = "Device busy or not connected";
+    errorDoc["data"]["nodeId"] = nodeId;
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    DBG_OUTPUT_PORT.println("[WebSocket] Sent paramSchemaError - device busy");
+  } else {
+    // Parse the JSON and strip out values
+    JsonDocument paramsDoc;
+    deserializeJson(paramsDoc, json);
+
+    JsonDocument schemaDoc;
+    JsonObject schemaObj = schemaDoc.to<JsonObject>();
+
+    // Iterate through all parameters and copy everything except 'value'
+    for (JsonPair kv : paramsDoc.as<JsonObject>()) {
+      JsonObject paramObj = schemaObj[kv.key()].to<JsonObject>();
+      JsonObject sourceParam = kv.value().as<JsonObject>();
+
+      for (JsonPair field : sourceParam) {
+        // Copy all fields except 'value'
+        if (strcmp(field.key().c_str(), "value") != 0) {
+          paramObj[field.key()] = field.value();
+        }
+      }
+    }
+
+    // Send the schema back to the requesting client
+    JsonDocument responseDoc;
+    responseDoc["event"] = "paramSchemaData";
+    responseDoc["data"]["nodeId"] = nodeId;
+    responseDoc["data"]["schema"] = schemaDoc;
+
+    String output;
+    serializeJson(responseDoc, output);
+    client->text(output);
+    DBG_OUTPUT_PORT.printf("[WebSocket] Sent param schema (%d bytes)\n", output.length());
+  }
+}
+
+void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
+  int nodeId = doc["nodeId"];
+  DBG_OUTPUT_PORT.printf("[WebSocket] Get param values request for nodeId: %d\n", nodeId);
+
+  // Download JSON - progress will be sent via WebSocket jsonProgress events
+  String json = OICan::GetRawJson(nodeId);
+
+  if (json.isEmpty() || json == "{}") {
+    // Device is busy or error occurred
+    JsonDocument errorDoc;
+    errorDoc["event"] = "paramValuesError";
+    errorDoc["data"]["error"] = "Device busy or not connected";
+    errorDoc["data"]["nodeId"] = nodeId;
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - device busy");
+  } else {
+    // Parse the JSON and extract only values
+    JsonDocument paramsDoc;
+    deserializeJson(paramsDoc, json);
+
+    JsonDocument valuesDoc;
+    JsonObject valuesObj = valuesDoc.to<JsonObject>();
+
+    // Iterate through all parameters and extract only paramId and value
+    for (JsonPair kv : paramsDoc.as<JsonObject>()) {
+      JsonObject sourceParam = kv.value().as<JsonObject>();
+
+      // Only include if it has both id and value fields
+      if (sourceParam.containsKey("id") && sourceParam.containsKey("value")) {
+        int paramId = sourceParam["id"];
+        valuesObj[String(paramId)] = sourceParam["value"];
+      }
+    }
+
+    // Send the values back to the requesting client
+    JsonDocument responseDoc;
+    responseDoc["event"] = "paramValuesData";
+    responseDoc["data"]["nodeId"] = nodeId;
+    responseDoc["data"]["values"] = valuesDoc;
+
+    String output;
+    serializeJson(responseDoc, output);
+    client->text(output);
+    DBG_OUTPUT_PORT.printf("[WebSocket] Sent param values (%d bytes)\n", output.length());
+  }
 }
 
 void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -1222,8 +1287,10 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleStopSpotValues(client, doc);
       } else if (action == "updateParam") {
         handleUpdateParam(client, doc);
-      } else if (action == "getParams") {
-        handleGetParams(client, doc);
+      } else if (action == "getParamSchema") {
+        handleGetParamSchema(client, doc);
+      } else if (action == "getParamValues") {
+        handleGetParamValues(client, doc);
       } else if (action == "reloadParams") {
         handleReloadParams(client, doc);
       } else if (action == "disconnect") {
