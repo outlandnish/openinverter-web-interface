@@ -3,6 +3,7 @@ import { useLocation, useRoute } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
+import { DeviceDetailsProvider } from '@contexts/DeviceDetailsContext'
 import Layout from '@components/Layout'
 import ConnectionStatus from '@components/ConnectionStatus'
 import SpotValuesMonitor from '@components/SpotValuesMonitor'
@@ -140,8 +141,9 @@ export default function DeviceDetails() {
   }
 
   return (
-    <Layout currentSerial={routeParams?.serial}>
-      <div class="container">
+    <DeviceDetailsProvider>
+      <Layout currentSerial={routeParams?.serial}>
+        <div class="container">
         {loading ? (
           <div class="loading-container" style={{
             display: 'flex',
@@ -255,7 +257,8 @@ export default function DeviceDetails() {
       />
           </>
         )}
-      </div>
-    </Layout>
+        </div>
+      </Layout>
+    </DeviceDetailsProvider>
   )
 }

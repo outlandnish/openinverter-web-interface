@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useEffect } from 'preact/hooks'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
+import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import { useToast } from '@hooks/useToast'
 import './styles.css'
 
@@ -8,30 +9,28 @@ interface CanMessageSenderProps {
   nodeId: number
 }
 
-interface PeriodicMessage {
-  id: string
-  canId: number
-  data: number[]
-  interval: number
-  active: boolean
-}
-
 export default function CanMessageSender({ serial, nodeId }: CanMessageSenderProps) {
+  // Props available for future use (validation, filtering, etc.)
+  void serial; void nodeId;
+
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
   const { showError, showSuccess } = useToast()
 
-  // One-shot message state
-  const [canId, setCanId] = useState<string>('0x180')
-  const [dataBytes, setDataBytes] = useState<string>('00 00 00 00 00 00 00 00')
+  // Get state from context
+  const {
+    canMessages,
+    setCanId,
+    setDataBytes,
+    addPeriodicMessage,
+    removePeriodicMessage,
+    togglePeriodicMessage,
+    setShowAddPeriodicForm,
+    setPeriodicFormData,
+    resetPeriodicFormData,
+  } = useDeviceDetailsContext()
 
-  // Periodic message state
-  const [periodicMessages, setPeriodicMessages] = useState<PeriodicMessage[]>([])
-  const [showAddPeriodicForm, setShowAddPeriodicForm] = useState(false)
-  const [periodicFormData, setPeriodicFormData] = useState({
-    canId: '0x180',
-    data: '00 00 00 00 00 00 00 00',
-    interval: 100
-  })
+  // Destructure CAN message state for easier access
+  const { canId, dataBytes, periodicMessages, showAddPeriodicForm, periodicFormData } = canMessages
 
   // Subscribe to WebSocket messages
   useEffect(() => {
@@ -156,7 +155,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
       return
     }
 
-    const newMessage: PeriodicMessage = {
+    const newMessage = {
       id: `msg_${Date.now()}`,
       canId: parseHex(periodicFormData.canId),
       data: parseDataBytes(periodicFormData.data),
@@ -164,18 +163,14 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
       active: false
     }
 
-    setPeriodicMessages(prev => [...prev, newMessage])
+    addPeriodicMessage(newMessage)
     setShowAddPeriodicForm(false)
-    setPeriodicFormData({
-      canId: '0x180',
-      data: '00 00 00 00 00 00 00 00',
-      interval: 100
-    })
+    resetPeriodicFormData()
     showSuccess('Periodic message added')
   }
 
   // Start/stop periodic message
-  const handleTogglePeriodic = (message: PeriodicMessage) => {
+  const handleTogglePeriodic = (message: { id: string; canId: number; data: number[]; interval: number; active: boolean }) => {
     if (!isConnected) {
       showError('Not connected to device')
       return
@@ -199,9 +194,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
     }
 
     // Optimistically update UI
-    setPeriodicMessages(prev => prev.map(msg =>
-      msg.id === message.id ? { ...msg, active: newActive } : msg
-    ))
+    togglePeriodicMessage(message.id, newActive)
   }
 
   // Remove periodic message
@@ -213,7 +206,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
         intervalId: messageId
       })
     }
-    setPeriodicMessages(prev => prev.filter(m => m.id !== messageId))
+    removePeriodicMessage(messageId)
     showSuccess('Periodic message removed')
   }
 

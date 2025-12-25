@@ -2,12 +2,12 @@ import { useState, useEffect } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
+import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import MultiLineChart, { COLORS, type DataPoint } from '@components/MultiLineChart'
 import { convertSpotValue } from '@utils/spotValueConversions'
 import { formatParameterValue } from '@utils/parameterDisplay'
 import { ProgressBar } from '@components/ProgressBar'
 
-type HistoricalData = Record<string, DataPoint[]>
 const MAX_HISTORY_POINTS = 100
 
 interface SpotValuesMonitorProps {
@@ -40,13 +40,23 @@ export default function SpotValuesMonitor({
 }: SpotValuesMonitorProps) {
   const content = useIntlayer('spot-values')
 
-  const [streaming, setStreaming] = useState(false)
-  const [interval, setInterval] = useState(1000)
-  const [spotValues, setSpotValues] = useState<Record<string, number>>({})
-  const [historicalData, setHistoricalData] = useState<HistoricalData>({})
-  const [selectedParams, setSelectedParams] = useState<Set<string>>(new Set())
-  const [chartParams, setChartParams] = useState<Set<string>>(new Set())
-  const [viewMode, setViewMode] = useState<'table' | 'chart'>('table')
+  // Get state from context
+  const {
+    monitoring,
+    setStreaming,
+    setInterval,
+    setSpotValues,
+    setHistoricalData,
+    clearHistoricalData,
+    setSelectedParams,
+    setChartParams,
+    setViewMode,
+  } = useDeviceDetailsContext()
+
+  // Destructure monitoring state for easier access
+  const { streaming, interval, spotValues, historicalData, selectedParams, chartParams, viewMode } = monitoring
+
+  // Keep connectedSerial as local state (connection-specific, not tab-specific)
   const [connectedSerial, setConnectedSerial] = useState<string | null>(null)
 
   // Load device parameters using explicit nodeId for multi-client support
@@ -72,7 +82,7 @@ export default function SpotValuesMonitor({
           // Stop streaming when disconnected
           if (streaming) {
             setStreaming(false)
-            setHistoricalData({})
+            clearHistoricalData()
           }
           console.log('[SpotValuesMonitor] Device disconnected')
           break
@@ -84,7 +94,7 @@ export default function SpotValuesMonitor({
           }
           // Clear historical data when stopping
           if (!message.data.active) {
-            setHistoricalData({})
+            clearHistoricalData()
           }
           break
 
@@ -195,13 +205,15 @@ export default function SpotValuesMonitor({
   }
 
   const handleParamToggle = (paramKey: string) => {
-    const newSelected = new Set(selectedParams)
-    if (newSelected.has(paramKey)) {
-      newSelected.delete(paramKey)
-    } else {
-      newSelected.add(paramKey)
-    }
-    setSelectedParams(newSelected)
+    setSelectedParams(prev => {
+      const newSelected = new Set(prev)
+      if (newSelected.has(paramKey)) {
+        newSelected.delete(paramKey)
+      } else {
+        newSelected.add(paramKey)
+      }
+      return newSelected
+    })
   }
 
   const handleSelectAll = () => {
@@ -216,13 +228,15 @@ export default function SpotValuesMonitor({
   }
 
   const handleChartParamToggle = (paramKey: string) => {
-    const newChartParams = new Set(chartParams)
-    if (newChartParams.has(paramKey)) {
-      newChartParams.delete(paramKey)
-    } else {
-      newChartParams.add(paramKey)
-    }
-    setChartParams(newChartParams)
+    setChartParams(prev => {
+      const newChartParams = new Set(prev)
+      if (newChartParams.has(paramKey)) {
+        newChartParams.delete(paramKey)
+      } else {
+        newChartParams.add(paramKey)
+      }
+      return newChartParams
+    })
   }
 
   if (paramsLoading) {

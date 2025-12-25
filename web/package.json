@@ -15,6 +15,7 @@
   "dependencies": {
     "intlayer": "^7.3.3",
     "preact": "^10.19.3",
+    "preact-hint": "^0.3.1",
     "preact-intlayer": "^7.3.3",
     "vite-intlayer": "^7.3.3",
     "wouter": "^3.8.0"

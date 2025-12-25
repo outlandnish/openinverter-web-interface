@@ -4,6 +4,7 @@ import { App } from './App'
 import { ToastProvider } from '@components/Toast/ToastContainer'
 import { WebSocketProvider } from '@contexts/WebSocketContext'
 import { DeviceProvider } from '@contexts/DeviceContext'
+import 'preact-hint/dist/style.css'
 import './styles/theme.css'
 import './style.css'
 
