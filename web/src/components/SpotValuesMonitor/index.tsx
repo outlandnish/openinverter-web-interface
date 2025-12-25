@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useEffect } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
@@ -51,13 +51,11 @@ export default function SpotValuesMonitor({
     setSelectedParams,
     setChartParams,
     setViewMode,
+    setConnectedSerial,
   } = useDeviceDetailsContext()
 
   // Destructure monitoring state for easier access
-  const { streaming, interval, spotValues, historicalData, selectedParams, chartParams, viewMode } = monitoring
-
-  // Keep connectedSerial as local state (connection-specific, not tab-specific)
-  const [connectedSerial, setConnectedSerial] = useState<string | null>(null)
+  const { streaming, interval, spotValues, historicalData, selectedParams, chartParams, viewMode, connectedSerial } = monitoring
 
   // Load device parameters using explicit nodeId for multi-client support
   const { params, loading: paramsLoading, getDisplayName, downloadProgress } = useParams(serial, nodeId)

@@ -37,6 +37,7 @@ export interface DeviceDetailsContextValue {
     selectedParams: Set<string>
     chartParams: Set<string>
     viewMode: 'table' | 'chart'
+    connectedSerial: string | null
   }
 
   // CAN message state
@@ -61,6 +62,7 @@ export interface DeviceDetailsContextValue {
   setChartParams: (params: Set<string> | ((prev: Set<string>) => Set<string>)) => void
   toggleChartParam: (paramId: string) => void
   setViewMode: (mode: 'table' | 'chart') => void
+  setConnectedSerial: (serial: string | null) => void
 
   // CAN message actions
   setCanId: (canId: string) => void
@@ -95,6 +97,7 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
   const [selectedParams, setSelectedParams] = useState<Set<string>>(new Set())
   const [chartParams, setChartParams] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<'table' | 'chart'>('table')
+  const [connectedSerial, setConnectedSerial] = useState<string | null>(null)
 
   // CAN message state
   const [canId, setCanId] = useState<string>('0x180')
@@ -184,6 +187,7 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
       selectedParams,
       chartParams,
       viewMode,
+      connectedSerial,
     },
     canMessages: {
       canId,
@@ -204,6 +208,7 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
     setChartParams,
     toggleChartParam,
     setViewMode,
+    setConnectedSerial,
     setCanId,
     setDataBytes,
     addPeriodicMessage,
