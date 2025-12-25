@@ -918,34 +918,38 @@ void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
     client->text(errorOutput);
     DBG_OUTPUT_PORT.println("[WebSocket] Sent paramSchemaError - device busy");
   } else {
-    // Parse the JSON and strip out values
-    JsonDocument paramsDoc;
-    deserializeJson(paramsDoc, json);
+    // Build response with schema inline to avoid extra JsonDocument allocation
+    String output = "{\"event\":\"paramSchemaData\",\"data\":{\"nodeId\":";
+    output += String(nodeId);
+    output += ",\"schema\":";
 
-    JsonDocument schemaDoc;
-    JsonObject schemaObj = schemaDoc.to<JsonObject>();
+    // Parse and filter schema in place using dynamic allocation
+    DynamicJsonDocument* paramsDoc = new DynamicJsonDocument(json.length() + 1024);
+    deserializeJson(*paramsDoc, json);
 
-    // Iterate through all parameters and copy everything except 'value'
-    for (JsonPair kv : paramsDoc.as<JsonObject>()) {
+    // Create schema by removing 'value' fields
+    DynamicJsonDocument* schemaDoc = new DynamicJsonDocument(json.length());
+    JsonObject schemaObj = schemaDoc->to<JsonObject>();
+
+    for (JsonPair kv : paramsDoc->as<JsonObject>()) {
       JsonObject paramObj = schemaObj[kv.key()].to<JsonObject>();
       JsonObject sourceParam = kv.value().as<JsonObject>();
 
       for (JsonPair field : sourceParam) {
-        // Copy all fields except 'value'
         if (strcmp(field.key().c_str(), "value") != 0) {
           paramObj[field.key()] = field.value();
         }
       }
     }
 
-    // Send the schema back to the requesting client
-    JsonDocument responseDoc;
-    responseDoc["event"] = "paramSchemaData";
-    responseDoc["data"]["nodeId"] = nodeId;
-    responseDoc["data"]["schema"] = schemaDoc;
+    // Serialize schema
+    serializeJson(*schemaDoc, output);
+    output += "}}";
 
-    String output;
-    serializeJson(responseDoc, output);
+    // Clean up
+    delete paramsDoc;
+    delete schemaDoc;
+
     client->text(output);
     DBG_OUTPUT_PORT.printf("[WebSocket] Sent param schema (%d bytes)\n", output.length());
   }
@@ -969,32 +973,37 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
     client->text(errorOutput);
     DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - device busy");
   } else {
-    // Parse the JSON and extract only values
-    JsonDocument paramsDoc;
-    deserializeJson(paramsDoc, json);
+    // Build response with values inline to avoid extra JsonDocument allocation
+    String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
+    output += String(nodeId);
+    output += ",\"values\":";
 
-    JsonDocument valuesDoc;
-    JsonObject valuesObj = valuesDoc.to<JsonObject>();
+    // Parse and extract values using dynamic allocation
+    DynamicJsonDocument* paramsDoc = new DynamicJsonDocument(json.length() + 1024);
+    deserializeJson(*paramsDoc, json);
 
-    // Iterate through all parameters and extract only paramId and value
-    for (JsonPair kv : paramsDoc.as<JsonObject>()) {
+    // Create values object - much smaller than schema
+    DynamicJsonDocument* valuesDoc = new DynamicJsonDocument(8192);
+    JsonObject valuesObj = valuesDoc->to<JsonObject>();
+
+    // Extract only paramId and value
+    for (JsonPair kv : paramsDoc->as<JsonObject>()) {
       JsonObject sourceParam = kv.value().as<JsonObject>();
 
-      // Only include if it has both id and value fields
       if (sourceParam.containsKey("id") && sourceParam.containsKey("value")) {
         int paramId = sourceParam["id"];
         valuesObj[String(paramId)] = sourceParam["value"];
       }
     }
 
-    // Send the values back to the requesting client
-    JsonDocument responseDoc;
-    responseDoc["event"] = "paramValuesData";
-    responseDoc["data"]["nodeId"] = nodeId;
-    responseDoc["data"]["values"] = valuesDoc;
+    // Serialize values
+    serializeJson(*valuesDoc, output);
+    output += "}}";
 
-    String output;
-    serializeJson(responseDoc, output);
+    // Clean up
+    delete paramsDoc;
+    delete valuesDoc;
+
     client->text(output);
     DBG_OUTPUT_PORT.printf("[WebSocket] Sent param values (%d bytes)\n", output.length());
   }
