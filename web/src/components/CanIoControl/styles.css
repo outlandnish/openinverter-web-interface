@@ -144,7 +144,7 @@
   background: #c82333;
 }
 
-.status-indicator {
+.can-io-status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -156,7 +156,7 @@
   font-weight: 500;
 }
 
-.status-indicator .pulse {
+.can-io-status-indicator .pulse {
   width: 10px;
   height: 10px;
   background: #28a745;

@@ -252,7 +252,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           {active ? 'Stop CAN IO' : 'Start CAN IO'}
         </button>
         {active && (
-          <div class="status-indicator active">
+          <div class="can-io-status-indicator active">
             <span class="pulse"></span>
             Active (sending every {interval}ms)
           </div>
