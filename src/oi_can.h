@@ -41,6 +41,7 @@ void RequestValue(int paramId); // Send SDO request without waiting (async)
 bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs); // Try to receive response (async)
 bool IsIdle(); // Check if CAN state machine is idle
 bool SaveToFlash();
+bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength); // Send arbitrary CAN message
 String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
 int GetCurrentUpdatePage();

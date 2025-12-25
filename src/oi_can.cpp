@@ -1105,6 +1105,36 @@ bool SaveToFlash() {
   }
 }
 
+bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength) {
+  if (dataLength > 8) return false; // CAN data cannot be longer than 8 bytes
+
+  twai_message_t frame;
+  frame.identifier = canId;
+  frame.data_length_code = dataLength;
+  frame.flags = 0; // Standard frame, no RTR
+
+  // Copy data to frame
+  for (uint8_t i = 0; i < dataLength; i++) {
+    frame.data[i] = data[i];
+  }
+
+  // Clear remaining bytes
+  for (uint8_t i = dataLength; i < 8; i++) {
+    frame.data[i] = 0;
+  }
+
+  // Send the message
+  esp_err_t result = twai_transmit(&frame, pdMS_TO_TICKS(10));
+
+  if (result == ESP_OK) {
+    DBG_OUTPUT_PORT.printf("Sent CAN message: ID=0x%03X, Len=%d\n", canId, dataLength);
+    return true;
+  } else {
+    DBG_OUTPUT_PORT.printf("Failed to send CAN message: ID=0x%03X, Error=%d\n", canId, result);
+    return false;
+  }
+}
+
 String StreamValues(String paramIds, int samples) {
   if (state != IDLE) return "";
 

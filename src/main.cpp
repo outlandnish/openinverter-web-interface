@@ -53,7 +53,10 @@ enum CANCommandType {
   CMD_START_SPOT_VALUES,
   CMD_STOP_SPOT_VALUES,
   CMD_DELETE_DEVICE,
-  CMD_RENAME_DEVICE
+  CMD_RENAME_DEVICE,
+  CMD_SEND_CAN_MESSAGE,
+  CMD_START_CAN_INTERVAL,
+  CMD_STOP_CAN_INTERVAL
 };
 
 // Event types from CAN task
@@ -69,7 +72,9 @@ enum CANEventType {
   EVT_DEVICE_NAME_SET,
   EVT_ERROR,
   EVT_DEVICE_DELETED,
-  EVT_DEVICE_RENAMED
+  EVT_DEVICE_RENAMED,
+  EVT_CAN_MESSAGE_SENT,
+  EVT_CAN_INTERVAL_STATUS
 };
 
 // Command message structure
@@ -104,6 +109,21 @@ struct CANCommand {
       char serial[50];
       char name[50];
     } renameDevice;
+    struct {
+      uint32_t canId;
+      uint8_t data[8];
+      uint8_t dataLength;
+    } sendCanMessage;
+    struct {
+      uint32_t canId;
+      uint8_t data[8];
+      uint8_t dataLength;
+      uint32_t intervalMs;
+      char intervalId[32]; // Unique ID for this interval message
+    } startCanInterval;
+    struct {
+      char intervalId[32]; // ID of interval to stop
+    } stopCanInterval;
   } data;
 };
 
@@ -163,6 +183,15 @@ struct CANEvent {
       char serial[50];
       char name[50];
     } deviceRenamed;
+    struct {
+      bool success;
+      uint32_t canId;
+    } canMessageSent;
+    struct {
+      bool active;
+      char intervalId[32];
+      uint32_t intervalMs;
+    } canIntervalStatus;
   } data;
 };
 
@@ -184,6 +213,17 @@ Config config;
 std::vector<int> spotValuesParamIds; // Parameter IDs to monitor
 uint32_t spotValuesInterval = 1000; // Default 1000ms
 uint32_t lastSpotValuesTime = 0; // Last time we collected spot values
+
+// Interval CAN message sending
+struct IntervalCanMessage {
+  String id;
+  uint32_t canId;
+  uint8_t data[8];
+  uint8_t dataLength;
+  uint32_t intervalMs;
+  uint32_t lastSentTime;
+};
+std::vector<IntervalCanMessage> intervalCanMessages;
 
 // Device locking for multi-client support
 std::map<uint8_t, uint32_t> deviceLocks; // nodeId -> WebSocket client ID
@@ -488,6 +528,110 @@ void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
+void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
+  CANCommand cmd;
+  cmd.type = CMD_SEND_CAN_MESSAGE;
+
+  // Parse CAN ID
+  if (!doc.containsKey("canId")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: sendCanMessage missing canId");
+    return;
+  }
+  cmd.data.sendCanMessage.canId = doc["canId"].as<uint32_t>();
+
+  // Parse data array
+  if (!doc.containsKey("data")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: sendCanMessage missing data");
+    return;
+  }
+
+  JsonArray dataArray = doc["data"].as<JsonArray>();
+  cmd.data.sendCanMessage.dataLength = 0;
+  for (JsonVariant dataByte : dataArray) {
+    if (cmd.data.sendCanMessage.dataLength < 8) {
+      cmd.data.sendCanMessage.data[cmd.data.sendCanMessage.dataLength++] = dataByte.as<uint8_t>();
+    }
+  }
+
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+    DBG_OUTPUT_PORT.printf("[WebSocket] Send CAN message command queued (ID=0x%03X, Len=%d)\n",
+                           cmd.data.sendCanMessage.canId, cmd.data.sendCanMessage.dataLength);
+  } else {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue send CAN message command");
+  }
+}
+
+void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+  CANCommand cmd;
+  cmd.type = CMD_START_CAN_INTERVAL;
+
+  // Parse interval ID
+  if (!doc.containsKey("intervalId")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: startCanInterval missing intervalId");
+    return;
+  }
+  String intervalId = doc["intervalId"].as<String>();
+  strncpy(cmd.data.startCanInterval.intervalId, intervalId.c_str(), 31);
+  cmd.data.startCanInterval.intervalId[31] = '\0';
+
+  // Parse CAN ID
+  if (!doc.containsKey("canId")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: startCanInterval missing canId");
+    return;
+  }
+  cmd.data.startCanInterval.canId = doc["canId"].as<uint32_t>();
+
+  // Parse data array
+  if (!doc.containsKey("data")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: startCanInterval missing data");
+    return;
+  }
+
+  JsonArray dataArray = doc["data"].as<JsonArray>();
+  cmd.data.startCanInterval.dataLength = 0;
+  for (JsonVariant dataByte : dataArray) {
+    if (cmd.data.startCanInterval.dataLength < 8) {
+      cmd.data.startCanInterval.data[cmd.data.startCanInterval.dataLength++] = dataByte.as<uint8_t>();
+    }
+  }
+
+  // Parse interval
+  if (!doc.containsKey("intervalMs")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: startCanInterval missing intervalMs");
+    return;
+  }
+  cmd.data.startCanInterval.intervalMs = doc["intervalMs"].as<uint32_t>();
+  if (cmd.data.startCanInterval.intervalMs < 10) cmd.data.startCanInterval.intervalMs = 10;
+  if (cmd.data.startCanInterval.intervalMs > 60000) cmd.data.startCanInterval.intervalMs = 60000;
+
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+    DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN interval command queued (ID=%s, CAN=0x%03X, Interval=%dms)\n",
+                           cmd.data.startCanInterval.intervalId, cmd.data.startCanInterval.canId, cmd.data.startCanInterval.intervalMs);
+  } else {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start CAN interval command");
+  }
+}
+
+void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+  CANCommand cmd;
+  cmd.type = CMD_STOP_CAN_INTERVAL;
+
+  // Parse interval ID
+  if (!doc.containsKey("intervalId")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: stopCanInterval missing intervalId");
+    return;
+  }
+  String intervalId = doc["intervalId"].as<String>();
+  strncpy(cmd.data.stopCanInterval.intervalId, intervalId.c_str(), 31);
+  cmd.data.stopCanInterval.intervalId[31] = '\0';
+
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+    DBG_OUTPUT_PORT.printf("[WebSocket] Stop CAN interval command queued (ID=%s)\n", cmd.data.stopCanInterval.intervalId);
+  } else {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN interval command");
+  }
+}
+
 void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_START_SPOT_VALUES;
@@ -644,6 +788,12 @@ void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc) {
     deviceLocks.erase(nodeId);
     clientDevices.erase(clientId);
     DBG_OUTPUT_PORT.printf("[WebSocket] Released device lock for node %d (client #%lu disconnected)\n", nodeId, (unsigned long)clientId);
+
+    // Clear interval messages when disconnecting
+    if (!intervalCanMessages.empty()) {
+      DBG_OUTPUT_PORT.printf("[WebSocket] Clearing %d interval message(s) on disconnect\n", intervalCanMessages.size());
+      intervalCanMessages.clear();
+    }
 
     // Notify other clients that the device is now available
     JsonDocument notifyDoc;
@@ -931,6 +1081,12 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleRemoveCanMapping(client, doc);
       } else if (action == "saveToFlash") {
         handleSaveToFlash(client, doc);
+      } else if (action == "sendCanMessage") {
+        handleSendCanMessage(client, doc);
+      } else if (action == "startCanInterval") {
+        handleStartCanInterval(client, doc);
+      } else if (action == "stopCanInterval") {
+        handleStopCanInterval(client, doc);
       } else {
         DBG_OUTPUT_PORT.printf("[WebSocket] Unknown action: %s\n", action.c_str());
       }
@@ -1124,6 +1280,12 @@ void canTask(void* parameter) {
         case CMD_CONNECT:
           DBG_OUTPUT_PORT.printf("[CAN Task] Connecting to node %d\n", cmd.data.connect.nodeId);
           {
+            // Clear interval messages when switching devices
+            if (!intervalCanMessages.empty()) {
+              DBG_OUTPUT_PORT.printf("[CAN Task] Clearing %d interval message(s) on device switch\n", intervalCanMessages.size());
+              intervalCanMessages.clear();
+            }
+
             OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
             OICan::Init(cmd.data.connect.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
             // Connected event will be sent via ConnectionReadyCallback when device reaches IDLE state
@@ -1133,6 +1295,12 @@ void canTask(void* parameter) {
         case CMD_SET_NODE_ID:
           DBG_OUTPUT_PORT.printf("[CAN Task] Setting node ID to %d\n", cmd.data.setNodeId.nodeId);
           {
+            // Clear interval messages when switching devices
+            if (!intervalCanMessages.empty()) {
+              DBG_OUTPUT_PORT.printf("[CAN Task] Clearing %d interval message(s) on node ID change\n", intervalCanMessages.size());
+              intervalCanMessages.clear();
+            }
+
             OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
             OICan::Init(cmd.data.setNodeId.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
 
@@ -1219,6 +1387,81 @@ void canTask(void* parameter) {
             xQueueSend(canEventQueue, &evt, 0);
           }
           break;
+
+        case CMD_SEND_CAN_MESSAGE:
+          {
+            bool success = OICan::SendCanMessage(
+              cmd.data.sendCanMessage.canId,
+              cmd.data.sendCanMessage.data,
+              cmd.data.sendCanMessage.dataLength
+            );
+
+            CANEvent evt;
+            evt.type = EVT_CAN_MESSAGE_SENT;
+            evt.data.canMessageSent.success = success;
+            evt.data.canMessageSent.canId = cmd.data.sendCanMessage.canId;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_START_CAN_INTERVAL:
+          {
+            // Check if interval ID already exists and remove it
+            for (auto it = intervalCanMessages.begin(); it != intervalCanMessages.end(); ) {
+              if (it->id == cmd.data.startCanInterval.intervalId) {
+                it = intervalCanMessages.erase(it);
+              } else {
+                ++it;
+              }
+            }
+
+            // Add new interval message
+            IntervalCanMessage msg;
+            msg.id = String(cmd.data.startCanInterval.intervalId);
+            msg.canId = cmd.data.startCanInterval.canId;
+            msg.dataLength = cmd.data.startCanInterval.dataLength;
+            for (uint8_t i = 0; i < msg.dataLength; i++) {
+              msg.data[i] = cmd.data.startCanInterval.data[i];
+            }
+            msg.intervalMs = cmd.data.startCanInterval.intervalMs;
+            msg.lastSentTime = millis();
+            intervalCanMessages.push_back(msg);
+
+            DBG_OUTPUT_PORT.printf("[CAN Task] Started interval message: ID=%s, CAN=0x%03X, Interval=%dms\n",
+                                   msg.id.c_str(), msg.canId, msg.intervalMs);
+
+            CANEvent evt;
+            evt.type = EVT_CAN_INTERVAL_STATUS;
+            evt.data.canIntervalStatus.active = true;
+            strcpy(evt.data.canIntervalStatus.intervalId, cmd.data.startCanInterval.intervalId);
+            evt.data.canIntervalStatus.intervalMs = cmd.data.startCanInterval.intervalMs;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_STOP_CAN_INTERVAL:
+          {
+            bool found = false;
+            for (auto it = intervalCanMessages.begin(); it != intervalCanMessages.end(); ) {
+              if (it->id == cmd.data.stopCanInterval.intervalId) {
+                DBG_OUTPUT_PORT.printf("[CAN Task] Stopped interval message: ID=%s\n", it->id.c_str());
+                it = intervalCanMessages.erase(it);
+                found = true;
+              } else {
+                ++it;
+              }
+            }
+
+            if (found) {
+              CANEvent evt;
+              evt.type = EVT_CAN_INTERVAL_STATUS;
+              evt.data.canIntervalStatus.active = false;
+              strcpy(evt.data.canIntervalStatus.intervalId, cmd.data.stopCanInterval.intervalId);
+              evt.data.canIntervalStatus.intervalMs = 0;
+              xQueueSend(canEventQueue, &evt, 0);
+            }
+          }
+          break;
       }
     }
 
@@ -1226,6 +1469,15 @@ void canTask(void* parameter) {
     if (!spotValuesParamIds.empty() && (millis() - lastSpotValuesTime) >= spotValuesInterval) {
       lastSpotValuesTime = millis();
       collectSpotValues();
+    }
+
+    // Send interval CAN messages
+    uint32_t currentTime = millis();
+    for (auto& msg : intervalCanMessages) {
+      if ((currentTime - msg.lastSentTime) >= msg.intervalMs) {
+        msg.lastSentTime = currentTime;
+        OICan::SendCanMessage(msg.canId, msg.data, msg.dataLength);
+      }
     }
 
     // Run CAN processing loop
@@ -1789,6 +2041,21 @@ void processCANEvents() {
         data["success"] = evt.data.deviceRenamed.success;
         data["serial"] = evt.data.deviceRenamed.serial;
         data["name"] = evt.data.deviceRenamed.name;
+        break;
+
+      case EVT_CAN_MESSAGE_SENT:
+        doc["event"] = "canMessageSent";
+        data["success"] = evt.data.canMessageSent.success;
+        data["canId"] = evt.data.canMessageSent.canId;
+        break;
+
+      case EVT_CAN_INTERVAL_STATUS:
+        doc["event"] = "canIntervalStatus";
+        data["active"] = evt.data.canIntervalStatus.active;
+        data["intervalId"] = evt.data.canIntervalStatus.intervalId;
+        if (evt.data.canIntervalStatus.active) {
+          data["intervalMs"] = evt.data.canIntervalStatus.intervalMs;
+        }
         break;
 
       case EVT_ERROR:
