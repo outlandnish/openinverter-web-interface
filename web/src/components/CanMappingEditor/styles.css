@@ -194,3 +194,29 @@
   text-align: center;
   color: var(--text-secondary);
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .mappings-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .form-row {
+    flex-direction: column;
+  }
+
+  .form-row label {
+    min-width: 100%;
+    width: 100%;
+  }
+
+  .form-actions {
+    flex-direction: column;
+  }
+
+  .form-actions button {
+    width: 100%;
+  }
+}

@@ -37,6 +37,7 @@ function DeviceDetailsContent() {
   const [firmwareVersion, setFirmwareVersion] = useState('')
   const [deviceConnected, setDeviceConnected] = useState(false)
   const [deviceName, setDeviceName] = useState<string>('')
+  const [deviceInfoExpanded, setDeviceInfoExpanded] = useState(false)
 
   // Load device parameters (only when savedNodeId is available)
   const { params } = useParams(
@@ -201,7 +202,11 @@ function DeviceDetailsContent() {
   }
 
   return (
-    <Layout currentSerial={routeParams?.serial}>
+    <Layout
+      currentSerial={routeParams?.serial}
+      pageTitle={deviceName || routeParams?.serial || content.deviceMonitor}
+      onTitleClick={() => setDeviceInfoExpanded(!deviceInfoExpanded)}
+    >
       <div class="container">
       {loading ? (
         <div class="loading-container" style={{
@@ -216,15 +221,16 @@ function DeviceDetailsContent() {
         ) : (
           <>
             <div class="page-header">
-              <div class="page-title-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div class="page-title-row">
                 <h1 class="page-title">{deviceName || routeParams?.serial || content.deviceMonitor}</h1>
                 <ConnectionStatus
                   connected={deviceConnected}
                   label={deviceConnected ? content.connected : content.disconnected}
                 />
               </div>
-              <div class="device-info-inline" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+
+              <div class={`device-info-inline ${deviceInfoExpanded ? 'expanded' : ''}`}>
+                <div class="device-info-badges">
                   <div class="info-badge">
                     <span class="info-label">{content.serial}</span>
                     <span class="info-value">{routeParams?.serial || content.unknown}</span>
@@ -243,21 +249,6 @@ function DeviceDetailsContent() {
                   onClick={handleResetDevice}
                   disabled={!deviceConnected}
                   title={content.resetDevice.value}
-                  style={{
-                    width: '2.5rem',
-                    height: '2.5rem',
-                    padding: '0.5rem',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    background: 'var(--oi-beige)',
-                    color: 'var(--text-primary)',
-                    cursor: deviceConnected ? 'pointer' : 'not-allowed',
-                    opacity: deviceConnected ? 1 : 0.5,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'all 0.2s ease'
-                  }}
                   onMouseEnter={(e) => {
                     if (deviceConnected) {
                       e.currentTarget.style.background = '#f5e5d3'
@@ -276,10 +267,11 @@ function DeviceDetailsContent() {
                     stroke-width="2"
                     stroke-linecap="round"
                     stroke-linejoin="round"
-                    style={{ width: '1.25rem', height: '1.25rem' }}
+                    class="reset-icon"
                   >
                     <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
                   </svg>
+                  <span class="reset-button-text">{content.resetDevice.value}</span>
                 </button>
               </div>
             </div>

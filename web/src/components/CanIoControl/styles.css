@@ -177,3 +177,55 @@ input:disabled {
   background: #e9ecef;
   cursor: not-allowed;
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .can-io-control {
+    padding: 15px;
+    margin: 15px 0;
+  }
+
+  .can-io-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .can-io-row label {
+    min-width: 100%;
+    width: 100%;
+  }
+
+  .can-io-row input[type="text"],
+  .can-io-row input[type="number"] {
+    width: 100%;
+  }
+
+  .can-io-row input[type="range"] {
+    min-width: 100%;
+    width: 100%;
+  }
+
+  .can-io-row .value {
+    min-width: 100%;
+    text-align: left;
+  }
+
+  .can-io-flags {
+    grid-template-columns: 1fr;
+  }
+
+  .can-io-actions {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .can-io-actions button {
+    width: 100%;
+  }
+
+  .can-io-status-indicator {
+    width: 100%;
+    justify-content: center;
+  }
+}

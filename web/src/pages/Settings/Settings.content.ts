@@ -19,10 +19,6 @@ const settingsContent = {
       en: 'CAN Bus Configuration',
       de: 'CAN-Bus-Konfiguration',
     }),
-    canBusInfo: t({
-      en: 'These settings apply to all devices on the CAN bus.',
-      de: 'Diese Einstellungen gelten für alle Geräte auf dem CAN-Bus.',
-    }),
     canSpeed: t({
       en: 'CAN Speed',
       de: 'CAN-Geschwindigkeit',
@@ -78,10 +74,6 @@ const settingsContent = {
     scanConfiguration: t({
       en: 'Scan Configuration',
       de: 'Scan-Konfiguration',
-    }),
-    scanConfigurationInfo: t({
-      en: 'Configure the default node ID range for CAN bus scanning.',
-      de: 'Konfigurieren Sie den Standard-Node-ID-Bereich für das Scannen des CAN-Bus.',
     }),
     scanStartNode: t({
       en: 'Scan Start Node',

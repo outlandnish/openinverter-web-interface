@@ -11,9 +11,11 @@ interface LayoutProps {
   children: ComponentChildren
   currentSerial?: string
   onQuickScan?: () => void
+  pageTitle?: string
+  onTitleClick?: () => void
 }
 
-export default function Layout({ children, currentSerial, onQuickScan }: LayoutProps) {
+export default function Layout({ children, currentSerial, onQuickScan, pageTitle, onTitleClick }: LayoutProps) {
   const content = useIntlayer('layout')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { showError, showWarning, showInfo } = useToast()
@@ -107,13 +109,24 @@ export default function Layout({ children, currentSerial, onQuickScan }: LayoutP
         scanDisabled={!isConnected}
       />
 
-      <div class={`main-content ${sidebarOpen ? 'sidebar-open' : ''}`}>
+      {/* Mobile Header Bar */}
+      <div class="mobile-header-bar">
         <button class="hamburger-menu" onClick={toggleSidebar}>
           <span></span>
           <span></span>
           <span></span>
         </button>
+        {pageTitle && (
+          <div
+            class={`mobile-header-title ${onTitleClick ? 'clickable' : ''}`}
+            onClick={onTitleClick}
+          >
+            {pageTitle}
+          </div>
+        )}
+      </div>
 
+      <div class={`main-content ${sidebarOpen ? 'sidebar-open' : ''}`}>
         {children}
       </div>
     </div>

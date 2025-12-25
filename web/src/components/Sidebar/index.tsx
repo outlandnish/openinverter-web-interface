@@ -58,6 +58,9 @@ export default function Sidebar({ devices, isOpen, onToggle, currentSerial, onQu
       {/* Sidebar */}
       <aside class={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
         <div class="sidebar-header">
+          <button class="sidebar-close" onClick={onToggle}>
+            ✕
+          </button>
           <div class="sidebar-branding">
             <div class="sidebar-branding-top">
               <img src="/openinverter-logo.png" alt="OpenInverter" class="sidebar-logo" />
@@ -70,9 +73,6 @@ export default function Sidebar({ devices, isOpen, onToggle, currentSerial, onQu
               />
             </div>
           </div>
-          <button class="sidebar-close" onClick={onToggle}>
-            ✕
-          </button>
         </div>
 
         <nav class="sidebar-nav">

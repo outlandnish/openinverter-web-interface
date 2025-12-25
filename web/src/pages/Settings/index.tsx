@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'preact/hooks'
-import { useLocation } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import { api, DeviceSettings } from '@api/inverter'
 import Layout from '@components/Layout'
@@ -15,7 +14,6 @@ const CAN_SPEEDS = [
 ]
 
 export default function Settings() {
-  const [, setLocation] = useLocation()
   const content = useIntlayer('settings')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -70,7 +68,7 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <Layout>
+      <Layout pageTitle={content.title}>
         <div class="container">
           <LoadingSpinner size="large" label={content.loadingSettings} />
         </div>
@@ -79,7 +77,7 @@ export default function Settings() {
   }
 
   return (
-    <Layout>
+    <Layout pageTitle={content.title}>
       <div class="container">
         <div class="page-header">
           <h1 class="page-title">{content.title}</h1>
@@ -92,7 +90,6 @@ export default function Settings() {
           <>
             <section class="card">
               <h2>{content.canBusConfiguration}</h2>
-              <p class="info">{content.canBusInfo}</p>
 
               <div class="form-group">
                 <label>{content.canSpeed}</label>
@@ -147,7 +144,6 @@ export default function Settings() {
 
             <section class="card">
               <h2>{content.scanConfiguration}</h2>
-              <p class="info">{content.scanConfigurationInfo}</p>
 
               <div class="form-group">
                 <label>{content.scanStartNode}</label>

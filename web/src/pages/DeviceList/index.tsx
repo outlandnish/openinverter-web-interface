@@ -2,6 +2,7 @@ import { useState, useEffect } from 'preact/hooks'
 import { useLocation } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import { api, SavedDevice } from '@api/inverter'
+import Layout from '@components/Layout'
 import DeviceScanner from '@components/DeviceScanner'
 import DeviceNaming from '@components/DeviceNaming'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
@@ -120,19 +121,6 @@ export default function DeviceList() {
     }
   }
 
-  const handleScan = (fullScan: boolean = false) => {
-    const start = 1
-    const end = fullScan ? 127 : 32
-
-    if (scanning) {
-      // Stop scan
-      sendMessage('stopScan')
-    } else {
-      // Start continuous scan
-      sendMessage('startScan', { start, end })
-    }
-  }
-
   const mergeDevices = (): MergedDevice[] => {
     // Convert saved devices object to array
     return Object.entries(savedDevices).map(([serial, device]) => ({
@@ -234,21 +222,18 @@ export default function DeviceList() {
   const mergedDevices = mergeDevices()
 
   return (
-    <div class="container">
-      <header class="header">
-        <h1>{content.title}</h1>
-        <button class="btn-secondary" onClick={() => setLocation('/settings')}>
-          {content.settings}
-        </button>
-      </header>
+    <Layout pageTitle={content.title}>
+      <div class="container">
+        <header class="header">
+          <h1>{content.title}</h1>
+          <button class="btn-secondary" onClick={() => setLocation('/settings')}>
+            {content.settings}
+          </button>
+        </header>
 
-      <DeviceScanner
-        scanning={scanning}
-        onScan={handleScan}
-        deviceCount={mergedDevices.length}
-      />
+        {scanning && <DeviceScanner scanning={scanning} />}
 
-      <div class="device-list">
+        <div class="device-list">
         {mergedDevices.length === 0 ? (
           <div class="empty-state">
             <p>{scanning ? content.scanningForDevices : content.noDevicesFound}</p>
@@ -315,6 +300,7 @@ export default function DeviceList() {
           onCancel={() => setRenamingDevice(null)}
         />
       )}
-    </div>
+      </div>
+    </Layout>
   )
 }

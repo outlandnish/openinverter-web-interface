@@ -30,6 +30,22 @@ export default function Tabs({ tabs, defaultTab, onTabChange }: TabsProps) {
 
   return (
     <div class="tabs-container">
+      {/* Mobile select dropdown */}
+      <div class="tabs-mobile-select">
+        <select
+          value={activeTab}
+          onChange={(e) => handleTabClick((e.target as HTMLSelectElement).value)}
+          class="tab-select"
+        >
+          {tabs.map(tab => (
+            <option key={tab.id} value={tab.id} disabled={tab.disabled}>
+              {tab.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Desktop tab navigation */}
       <div class="tabs-header">
         <div class="tabs-nav">
           {tabs.map(tab => (

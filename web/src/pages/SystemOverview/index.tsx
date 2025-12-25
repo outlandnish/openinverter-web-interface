@@ -148,7 +148,7 @@ export default function SystemOverview() {
   }
 
   return (
-    <Layout onQuickScan={handleScan}>
+    <Layout onQuickScan={handleScan} pageTitle={content.title}>
       <div class="container">
         <div class="page-header">
           <h1 class="page-title">{content.title}</h1>

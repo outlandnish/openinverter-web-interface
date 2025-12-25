@@ -189,3 +189,10 @@ button:disabled {
   background: #d32f2f;
   border-color: #d32f2f;
 }
+
+/* Mobile Responsive Styles */
+@media (max-width: 768px) {
+  .btn-primary {
+    width: 100%;
+  }
+}

@@ -5,6 +5,33 @@
   margin-bottom: 2rem;
 }
 
+.tabs-mobile-select {
+  display: none;
+}
+
+.tab-select {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  background: white;
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.tab-select:focus {
+  outline: none;
+  border-color: var(--oi-blue);
+}
+
+.tab-select option:disabled {
+  color: var(--text-muted);
+}
+
 .tabs-header {
   background: white;
   border-radius: 0;
@@ -90,43 +117,32 @@
   min-height: 200px;
 }
 
+/* Make inner cards/sections full width */
+.tabs-content > * {
+  margin: 0;
+  border-radius: 0;
+}
+
+.tabs-content .card,
+.tabs-content section {
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 /* Mobile responsive adjustments */
 @media (max-width: 768px) {
-  .tab-button {
-    min-width: 100px;
-    padding: 0.875rem 1rem;
-    font-size: 0.875rem;
+  .tabs-mobile-select {
+    display: block;
   }
 
-  .tab-label {
-    /* Hide labels on very small screens, show only icons */
-    display: inline-block;
+  .tabs-header {
+    display: none;
   }
 
-  .tab-icon {
-    font-size: 1rem;
+  .tabs-content {
+    padding: 1rem 0;
   }
-}
-
-@media (max-width: 480px) {
-  .tab-button {
-    min-width: 80px;
-    padding: 0.75rem 0.75rem;
-    font-size: 0.8rem;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .tab-icon {
-    font-size: 1.2rem;
-  }
-
-  .tab-label {
-    font-size: 0.75rem;
-  }
-}
-
-/* Smooth scroll behavior for tab navigation on mobile */
-.tabs-nav {
-  scroll-behavior: smooth;
 }
