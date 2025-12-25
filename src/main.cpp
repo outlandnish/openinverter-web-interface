@@ -596,11 +596,11 @@ void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 
   // Parse interval
-  if (!doc.containsKey("intervalMs")) {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: startCanInterval missing intervalMs");
+  if (!doc.containsKey("interval")) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: startCanInterval missing interval");
     return;
   }
-  cmd.data.startCanInterval.intervalMs = doc["intervalMs"].as<uint32_t>();
+  cmd.data.startCanInterval.intervalMs = doc["interval"].as<uint32_t>();
   if (cmd.data.startCanInterval.intervalMs < 10) cmd.data.startCanInterval.intervalMs = 10;
   if (cmd.data.startCanInterval.intervalMs > 60000) cmd.data.startCanInterval.intervalMs = 60000;
 
