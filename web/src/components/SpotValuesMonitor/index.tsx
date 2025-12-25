@@ -50,12 +50,11 @@ export default function SpotValuesMonitor({
     clearHistoricalData,
     setSelectedParams,
     setChartParams,
-    setViewMode,
     setConnectedSerial,
   } = useDeviceDetailsContext()
 
   // Destructure monitoring state for easier access
-  const { streaming, interval, spotValues, historicalData, selectedParams, chartParams, viewMode, connectedSerial } = monitoring
+  const { streaming, interval, spotValues, historicalData, selectedParams, chartParams, connectedSerial } = monitoring
 
   // Load device parameters using explicit nodeId for multi-client support
   const { params, loading: paramsLoading, getDisplayName, downloadProgress } = useParams(serial, nodeId)
@@ -338,89 +337,28 @@ export default function SpotValuesMonitor({
         </div>
       )}
 
-      <div class="view-mode-tabs">
-        <button
-          class={viewMode === 'table' ? 'tab-active' : 'tab'}
-          onClick={() => setViewMode('table')}
-        >
-          {content.tableView}
-        </button>
-        <button
-          class={viewMode === 'chart' ? 'tab-active' : 'tab'}
-          onClick={() => setViewMode('chart')}
-          disabled={!streaming && Object.keys(historicalData).length === 0}
-        >
-          {content.chartView}
-        </button>
-      </div>
-
-      {viewMode === 'table' && (
-        <div class="spot-values-grid">
-          {Array.from(categories.entries()).map(([category, categoryParams]) => (
-            <div key={category} class="category-section">
-              <h3>{category}</h3>
-              <table class="spot-values-table">
-                <thead>
-                  <tr>
-                    <th>{content.parameter}</th>
-                    <th>{content.value}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {categoryParams.map(([key, param]) => {
-                    // Use either id or i (index) field
-                    const paramId = (param.id || param.i)?.toString()
-                    const rawValue = paramId && spotValues[paramId] !== undefined
-                      ? spotValues[paramId]
-                      : param.value
-
-                    // Apply conversions and format for display
-                    let displayValue: string
-
-                    if (typeof rawValue === 'number' && param.unit) {
-                      // Apply unit conversion
-                      const converted = convertSpotValue(rawValue, param.unit)
-
-                      // Create a modified param with converted unit for formatting
-                      const convertedParam = { ...param, unit: converted.unit }
-                      displayValue = formatParameterValue(convertedParam, converted.value)
-                    } else {
-                      // Use formatParameterValue for enum handling and standard formatting
-                      displayValue = formatParameterValue(param, rawValue)
-                    }
-
-                    return (
-                      <tr
-                        key={key}
-                        class={selectedParams.has(key) ? 'selected' : ''}
-                        onClick={() => !streaming && handleParamToggle(key)}
-                        style={{ cursor: streaming ? 'default' : 'pointer' }}
-                      >
-                        <td>{getDisplayName(key)}</td>
-                        <td class="value-cell">{displayValue}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {viewMode === 'chart' && (
-        <div class="chart-view">
-          <section class="card">
-            <h2>{content.selectParametersToChart}</h2>
-            <div class="chart-param-selector">
+      {/* Chart Section - Show when there's data and parameters are selected for charting */}
+      {chartParams.size > 0 && Object.keys(historicalData).length > 0 && (
+        <div class="chart-section" style={{ marginBottom: '2rem' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '1rem',
+            paddingBottom: '0.75rem',
+            borderBottom: '2px solid var(--oi-beige)'
+          }}>
+            <h3 style={{ margin: 0, color: 'var(--oi-blue)', fontSize: '1.1rem', fontWeight: 600 }}>
+              {content.timeSeriesChart}
+            </h3>
+            <div class="chart-param-selector" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', flex: 1, justifyContent: 'flex-end' }}>
               {Array.from(selectedParams).map(key => {
                 const param = params[key]
-                // Use either id or i (index) field
                 const paramId = (param?.id || param?.i)?.toString()
                 const hasData = paramId && historicalData[paramId] && historicalData[paramId].length > 0
 
                 return (
-                  <label key={key} class="chart-param-option">
+                  <label key={key} class="chart-param-option" style={{ fontSize: '0.85rem' }}>
                     <input
                       type="checkbox"
                       checked={chartParams.has(key)}
@@ -435,39 +373,99 @@ export default function SpotValuesMonitor({
                 )
               })}
             </div>
-          </section>
+          </div>
+          <MultiLineChart
+            series={Array.from(chartParams).map((key, index) => {
+              const param = params[key]
+              const paramId = (param?.id || param?.i)?.toString()
+              const converted = convertSpotValue(0, param.unit)
+              const displayUnit = converted.unit
 
-          <section class="card">
-            <h2>{content.timeSeriesChart}</h2>
-            {chartParams.size > 0 ? (
-              <MultiLineChart
-                series={Array.from(chartParams).map((key, index) => {
-                  const param = params[key]
-                  // Use either id or i (index) field
-                  const paramId = (param?.id || param?.i)?.toString()
-
-                  // Get the converted unit for display
-                  const converted = convertSpotValue(0, param.unit)
-                  const displayUnit = converted.unit
-
-                  return {
-                    label: getDisplayName(key),
-                    unit: displayUnit,
-                    color: COLORS[index % COLORS.length],
-                    data: (paramId && historicalData[paramId]) || []
-                  }
-                })}
-                width={Math.min(window.innerWidth - 100, 1000)}
-                height={500}
-              />
-            ) : (
-              <div class="chart-placeholder">
-                <p>{content.chartPlaceholder}</p>
-              </div>
-            )}
-          </section>
+              return {
+                label: getDisplayName(key),
+                unit: displayUnit,
+                color: COLORS[index % COLORS.length],
+                data: (paramId && historicalData[paramId]) || []
+              }
+            })}
+            width={Math.min(window.innerWidth - 100, 1000)}
+            height={400}
+          />
         </div>
       )}
+
+      {/* Spot Values Grid */}
+      <div class="spot-values-categories">
+        {Array.from(categories.entries()).map(([category, categoryParams]) => (
+          <div key={category} class="parameter-category">
+            <h3 class="category-title">
+              {category}
+              <span class="param-count">({categoryParams.length})</span>
+            </h3>
+            <div class="parameters-list">
+              {categoryParams.map(([key, param]) => {
+                const paramId = (param.id || param.i)?.toString()
+                const rawValue = paramId && spotValues[paramId] !== undefined
+                  ? spotValues[paramId]
+                  : param.value
+
+                // Apply conversions and format for display
+                let displayValue: string
+
+                if (typeof rawValue === 'number' && param.unit) {
+                  const converted = convertSpotValue(rawValue, param.unit)
+                  const convertedParam = { ...param, unit: converted.unit }
+                  displayValue = formatParameterValue(convertedParam, converted.value)
+                } else {
+                  displayValue = formatParameterValue(param, rawValue)
+                }
+
+                const isSelected = selectedParams.has(key)
+                const isCharted = chartParams.has(key)
+
+                return (
+                  <div
+                    key={key}
+                    class="parameter-item"
+                    style={{
+                      background: isSelected ? '#f0f8ff' : 'transparent',
+                      padding: '0.75rem',
+                      borderRadius: '6px',
+                      border: `2px solid ${isSelected ? 'var(--oi-blue)' : 'transparent'}`,
+                      cursor: streaming ? 'default' : 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onClick={() => !streaming && handleParamToggle(key)}
+                  >
+                    <div class="parameter-header" style={{ marginBottom: '0.5rem' }}>
+                      <label class="parameter-label" style={{ fontSize: '0.9rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {getDisplayName(key)}
+                        {isCharted && (
+                          <span style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            background: COLORS[Array.from(chartParams).indexOf(key) % COLORS.length],
+                            display: 'inline-block'
+                          }} />
+                        )}
+                      </label>
+                    </div>
+                    <div class="parameter-value" style={{
+                      fontSize: '1.1rem',
+                      fontWeight: 600,
+                      color: 'var(--text-primary)',
+                      fontFamily: "'Monaco', 'Courier New', monospace"
+                    }}>
+                      {displayValue}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </section>
   )
 }

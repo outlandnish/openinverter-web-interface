@@ -1551,6 +1551,12 @@ button:active {
   gap: 2rem;
 }
 
+.spot-values-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
 .category-section h3 {
   margin-bottom: 1rem;
   color: var(--oi-blue);

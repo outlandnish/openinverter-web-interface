@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useRef } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
@@ -29,6 +29,7 @@ export default function DeviceParameters({
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const [localParams, setLocalParams] = useState(params)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Sync localParams with params when params changes (e.g., on initial load or refresh)
   useEffect(() => {
@@ -82,6 +83,140 @@ export default function DeviceParameters({
       // Success/error will be shown via WebSocket event handlers
     } catch (error) {
       showError(content.saveParametersFailed)
+    }
+  }
+
+  const handleExportToJSON = () => {
+    if (!localParams) {
+      showError('No parameters to export')
+      return
+    }
+
+    // Create export object with only parameter values
+    const exportData: Record<string, number> = {}
+    Object.entries(localParams).forEach(([key, param]) => {
+      if (param.isparam) {
+        exportData[key] = param.value
+      }
+    })
+
+    // Create blob and download
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `parameters_${serial}_${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    showSuccess('Parameters exported successfully')
+  }
+
+  const handleImportFromJSON = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileSelected = async (e: Event) => {
+    const target = e.target as HTMLInputElement
+    const file = target.files?.[0]
+
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const importedData = JSON.parse(text)
+
+      if (!localParams) {
+        showError('No parameter definitions loaded')
+        return
+      }
+
+      let validCount = 0
+      let invalidCount = 0
+      const errors: string[] = []
+      const updates: Array<{ paramId: number; value: number; key: string }> = []
+
+      // Validate all parameters first
+      Object.entries(importedData).forEach(([key, value]) => {
+        if (typeof value !== 'number') {
+          invalidCount++
+          errors.push(`${key}: value must be a number`)
+          return
+        }
+
+        const param = localParams[key]
+
+        if (!param) {
+          invalidCount++
+          errors.push(`${key}: parameter not found`)
+          return
+        }
+
+        if (!param.isparam) {
+          invalidCount++
+          errors.push(`${key}: not a settable parameter`)
+          return
+        }
+
+        if (param.id === undefined) {
+          invalidCount++
+          errors.push(`${key}: parameter ID not defined`)
+          return
+        }
+
+        // Validate range
+        if (param.minimum !== undefined && value < param.minimum) {
+          invalidCount++
+          errors.push(`${key}: value ${value} below minimum ${param.minimum}`)
+          return
+        }
+
+        if (param.maximum !== undefined && value > param.maximum) {
+          invalidCount++
+          errors.push(`${key}: value ${value} above maximum ${param.maximum}`)
+          return
+        }
+
+        // Add to updates list
+        validCount++
+        updates.push({ paramId: param.id, value, key })
+      })
+
+      // Clear file input
+      target.value = ''
+
+      // If we have valid updates, apply them
+      if (updates.length > 0) {
+        // Update local state first
+        updates.forEach(({ paramId, value }) => {
+          handleParamUpdate(paramId, value)
+        })
+
+        // Send updates to device
+        for (const { paramId, value, key } of updates) {
+          try {
+            await api.setParamById(paramId, value)
+          } catch (error) {
+            showError(`Failed to update ${key}: ${(error as Error).message}`)
+          }
+        }
+
+        showSuccess(`Imported ${validCount} parameter${validCount === 1 ? '' : 's'} successfully. Don't forget to save to flash!`)
+      }
+
+      if (invalidCount > 0) {
+        const errorMsg = `${invalidCount} parameter${invalidCount === 1 ? '' : 's'} failed validation:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n...and ${errors.length - 5} more` : ''}`
+        showError(errorMsg)
+      }
+
+      if (validCount === 0 && invalidCount === 0) {
+        showError('No valid parameters found in file')
+      }
+    } catch (error) {
+      showError('Failed to parse JSON file: ' + (error as Error).message)
+      target.value = ''
     }
   }
 
@@ -181,6 +316,28 @@ export default function DeviceParameters({
         <button class="btn-secondary" onClick={handleSaveToFlash} disabled={!isConnected}>
           {content.saveAllToFlash}
         </button>
+      </div>
+
+      <div class="form-group" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #ddd' }}>
+        <label style={{ marginBottom: '1rem' }}>Import/Export Parameters</label>
+        <div class="button-group" style={{ marginTop: 0 }}>
+          <button class="btn-secondary" onClick={handleExportToJSON} disabled={!localParams}>
+            📥 Export to JSON
+          </button>
+          <button class="btn-secondary" onClick={handleImportFromJSON} disabled={!localParams}>
+            📤 Import from JSON
+          </button>
+        </div>
+        <small class="hint" style={{ display: 'block', marginTop: '0.5rem' }}>
+          Export saves all parameter values to a JSON file. Import loads and validates parameters from a JSON file.
+        </small>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json"
+          style={{ display: 'none' }}
+          onChange={handleFileSelected}
+        />
       </div>
     </section>
   )
