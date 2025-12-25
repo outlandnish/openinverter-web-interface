@@ -35,6 +35,7 @@ export interface FileInfo {
  * @property enums - Enumeration values for discrete parameters
  * @property id - Unique parameter ID
  * @property i - Parameter index
+ * @property description - Description of the parameter shown in tooltip
  */
 export interface Parameter {
   value: number | string
@@ -48,6 +49,7 @@ export interface Parameter {
   enums?: Record<string, string>
   id?: number
   i?: number
+  description?: string
 }
 
 export type ParameterList = Record<string, Parameter>

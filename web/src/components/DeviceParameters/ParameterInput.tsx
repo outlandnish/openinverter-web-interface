@@ -4,6 +4,7 @@ import { api } from '@api/inverter'
 import { useToast } from '@hooks/useToast'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { normalizeEnumValue } from '@utils/parameterDisplay'
+import Tooltip from '@components/Tooltip'
 
 interface ParameterInputProps {
   paramKey: string
@@ -95,10 +96,19 @@ export default function ParameterInput({
   return (
     <div key={paramKey} class="parameter-item">
       <div class="parameter-header">
-        <label class="parameter-label">
-          {displayName}
-          {param.unit && <span class="parameter-unit"> ({param.unit})</span>}
-        </label>
+        {param.description ? (
+          <Tooltip content={param.description} position="right">
+            <label class="parameter-label">
+              {displayName}
+              {param.unit && <span class="parameter-unit"> ({param.unit})</span>}
+            </label>
+          </Tooltip>
+        ) : (
+          <label class="parameter-label">
+            {displayName}
+            {param.unit && <span class="parameter-unit"> ({param.unit})</span>}
+          </label>
+        )}
       </div>
 
       <div class="parameter-input-group">

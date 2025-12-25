@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import { useCanMappings, CanMapping } from '@hooks/useCanMappings'
 import { useParams } from '@hooks/useParams'
 import { useToast } from '@hooks/useToast'
+import { getParameterDisplayName } from '@utils/paramStorage'
 import './styles.css'
 
 interface CanMappingEditorProps {
@@ -26,13 +27,13 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
     offset: 0,
   })
 
-  // Get parameter name by ID
+  // Get parameter display name by ID
   const getParamName = (paramId: number): string => {
     if (!params) return `Param ${paramId}`
 
     for (const [key, param] of Object.entries(params)) {
       if (param.id === paramId) {
-        return key
+        return getParameterDisplayName(key, param)
       }
     }
     return `Param ${paramId}`
@@ -224,7 +225,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                       <option value={0}>Select parameter...</option>
                       {params && Object.entries(params).map(([key, param]) => (
                         <option key={param.id} value={param.id}>
-                          {key} (ID: {param.id})
+                          {getParameterDisplayName(key, param)} (ID: {param.id})
                         </option>
                       ))}
                     </select>
