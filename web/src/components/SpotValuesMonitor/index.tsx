@@ -3,7 +3,7 @@ import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
-import MultiLineChart, { COLORS, type DataPoint } from '@components/MultiLineChart'
+import MultiLineChart, { COLORS } from '@components/MultiLineChart'
 import { convertSpotValue } from '@utils/spotValueConversions'
 import { formatParameterValue } from '@utils/parameterDisplay'
 import { ProgressBar } from '@components/ProgressBar'
@@ -164,14 +164,8 @@ export default function SpotValuesMonitor({
     }
   }, [params])
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (streaming) {
-        sendMessage('stopSpotValues')
-      }
-    }
-  }, [streaming])
+  // Note: Removed cleanup that stops streaming on unmount
+  // Streaming state now persists in context across tab switches
 
   const handleStartStop = () => {
     if (streaming) {

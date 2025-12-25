@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect } from 'preact/hooks'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
+import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import { useToast } from '@hooks/useToast'
 import './styles.css'
 
@@ -23,30 +24,47 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
   const { showError, showSuccess } = useToast()
 
-  // State
-  const [active, setActive] = useState(false)
-  const [canId, setCanId] = useState('3F')
-  const [interval, setInterval] = useState(100)
+  // Get state from context
+  const {
+    canIo,
+    setCanIoActive,
+    setCanIoCanId,
+    setCanIoInterval,
+    setCanIoCruise,
+    setCanIoStart,
+    setCanIoBrake,
+    setCanIoForward,
+    setCanIoReverse,
+    setCanIoBms,
+    setCanIoThrottlePercent,
+    setCanIoCruisespeed,
+    setCanIoRegenpreset,
+    setCanIoUseCrc,
+  } = useDeviceDetailsContext()
 
-  // CAN IO flags
-  const [cruise, setCruise] = useState(false)
-  const [start, setStart] = useState(false)
-  const [brake, setBrake] = useState(false)
-  const [forward, setForward] = useState(false)
-  const [reverse, setReverse] = useState(false)
-  const [bms, setBms] = useState(false)
-
-  // Throttle and other parameters
-  const [throttlePercent, setThrottlePercent] = useState(0)
-  const [cruisespeed, setCruisespeed] = useState(0)
-  const [regenpreset, setRegenpreset] = useState(0)
+  // Destructure canIo state for easier access
+  const {
+    active,
+    canId,
+    interval,
+    cruise,
+    start,
+    brake,
+    forward,
+    reverse,
+    bms,
+    throttlePercent,
+    cruisespeed,
+    regenpreset,
+    useCrc,
+  } = canIo
 
   // Subscribe to WebSocket messages
   useEffect(() => {
     const unsubscribe = subscribe((message) => {
       switch (message.event) {
         case 'canIoIntervalStatus':
-          setActive(message.data.active)
+          setCanIoActive(message.data.active)
           if (message.data.active) {
             showSuccess(`CAN IO interval started (${message.data.intervalMs}ms)`)
           } else {
@@ -57,7 +75,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
     })
 
     return unsubscribe
-  }, [subscribe])
+  }, [subscribe, setCanIoActive, showSuccess])
 
   const handleStart = () => {
     if (!isConnected) {
@@ -91,7 +109,8 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
       canio,
       cruisespeed,
       regenpreset,
-      interval
+      interval,
+      useCrc
     })
   }
 
@@ -123,7 +142,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           <input
             type="text"
             value={canId}
-            onInput={(e) => setCanId((e.target as HTMLInputElement).value.toUpperCase())}
+            onInput={(e) => setCanIoCanId((e.target as HTMLInputElement).value.toUpperCase())}
             disabled={active}
             placeholder="3F"
             maxLength={3}
@@ -134,12 +153,24 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           <input
             type="number"
             value={interval}
-            onInput={(e) => setInterval(parseInt((e.target as HTMLInputElement).value) || 100)}
+            onInput={(e) => setCanIoInterval(parseInt((e.target as HTMLInputElement).value) || 100)}
             disabled={active}
             min={10}
             max={500}
           />
           <span class="hint">10-500ms (recommended: 50-100ms)</span>
+        </div>
+        <div class="can-io-row">
+          <label>
+            <input
+              type="checkbox"
+              checked={useCrc}
+              onChange={(e) => setCanIoUseCrc((e.target as HTMLInputElement).checked)}
+              disabled={active}
+            />
+            <span>Use CRC-32 (controlcheck=1)</span>
+          </label>
+          <span class="hint">Disable for counter-only mode (controlcheck=0)</span>
         </div>
       </div>
 
@@ -150,7 +181,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             <input
               type="checkbox"
               checked={cruise}
-              onChange={(e) => setCruise((e.target as HTMLInputElement).checked)}
+              onChange={(e) => setCanIoCruise((e.target as HTMLInputElement).checked)}
               disabled={!active}
             />
             <span>Cruise (0x01)</span>
@@ -159,7 +190,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             <input
               type="checkbox"
               checked={start}
-              onChange={(e) => setStart((e.target as HTMLInputElement).checked)}
+              onChange={(e) => setCanIoStart((e.target as HTMLInputElement).checked)}
               disabled={!active}
             />
             <span>Start (0x02)</span>
@@ -168,7 +199,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             <input
               type="checkbox"
               checked={brake}
-              onChange={(e) => setBrake((e.target as HTMLInputElement).checked)}
+              onChange={(e) => setCanIoBrake((e.target as HTMLInputElement).checked)}
               disabled={!active}
             />
             <span>Brake (0x04)</span>
@@ -177,7 +208,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             <input
               type="checkbox"
               checked={forward}
-              onChange={(e) => setForward((e.target as HTMLInputElement).checked)}
+              onChange={(e) => setCanIoForward((e.target as HTMLInputElement).checked)}
               disabled={!active}
             />
             <span>Forward (0x08)</span>
@@ -186,7 +217,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             <input
               type="checkbox"
               checked={reverse}
-              onChange={(e) => setReverse((e.target as HTMLInputElement).checked)}
+              onChange={(e) => setCanIoReverse((e.target as HTMLInputElement).checked)}
               disabled={!active}
             />
             <span>Reverse (0x10)</span>
@@ -195,7 +226,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             <input
               type="checkbox"
               checked={bms}
-              onChange={(e) => setBms((e.target as HTMLInputElement).checked)}
+              onChange={(e) => setCanIoBms((e.target as HTMLInputElement).checked)}
               disabled={!active}
             />
             <span>BMS (0x20)</span>
@@ -210,7 +241,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           <input
             type="range"
             value={throttlePercent}
-            onInput={(e) => setThrottlePercent(parseInt((e.target as HTMLInputElement).value))}
+            onInput={(e) => setCanIoThrottlePercent(parseInt((e.target as HTMLInputElement).value))}
             disabled={!active}
             min={0}
             max={100}
@@ -222,7 +253,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           <input
             type="number"
             value={cruisespeed}
-            onInput={(e) => setCruisespeed(parseInt((e.target as HTMLInputElement).value) || 0)}
+            onInput={(e) => setCanIoCruisespeed(parseInt((e.target as HTMLInputElement).value) || 0)}
             disabled={!active}
             min={0}
             max={16383}
@@ -234,7 +265,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           <input
             type="number"
             value={regenpreset}
-            onInput={(e) => setRegenpreset(parseInt((e.target as HTMLInputElement).value) || 0)}
+            onInput={(e) => setCanIoRegenpreset(parseInt((e.target as HTMLInputElement).value) || 0)}
             disabled={!active}
             min={0}
             max={255}

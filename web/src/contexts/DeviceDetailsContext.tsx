@@ -26,6 +26,23 @@ export interface PeriodicFormData {
   interval: number
 }
 
+// Types for CAN IO Control state
+export interface CanIoState {
+  active: boolean
+  canId: string
+  interval: number
+  cruise: boolean
+  start: boolean
+  brake: boolean
+  forward: boolean
+  reverse: boolean
+  bms: boolean
+  throttlePercent: number
+  cruisespeed: number
+  regenpreset: number
+  useCrc: boolean
+}
+
 // Context value interface
 export interface DeviceDetailsContextValue {
   // Monitoring state
@@ -48,6 +65,9 @@ export interface DeviceDetailsContextValue {
     showAddPeriodicForm: boolean
     periodicFormData: PeriodicFormData
   }
+
+  // CAN IO state
+  canIo: CanIoState
 
   // Monitoring actions
   setStreaming: (streaming: boolean) => void
@@ -74,6 +94,21 @@ export interface DeviceDetailsContextValue {
   setShowAddPeriodicForm: (show: boolean) => void
   setPeriodicFormData: (data: PeriodicFormData) => void
   resetPeriodicFormData: () => void
+
+  // CAN IO actions
+  setCanIoActive: (active: boolean) => void
+  setCanIoCanId: (canId: string) => void
+  setCanIoInterval: (interval: number) => void
+  setCanIoCruise: (cruise: boolean) => void
+  setCanIoStart: (start: boolean) => void
+  setCanIoBrake: (brake: boolean) => void
+  setCanIoForward: (forward: boolean) => void
+  setCanIoReverse: (reverse: boolean) => void
+  setCanIoBms: (bms: boolean) => void
+  setCanIoThrottlePercent: (throttlePercent: number) => void
+  setCanIoCruisespeed: (cruisespeed: number) => void
+  setCanIoRegenpreset: (regenpreset: number) => void
+  setCanIoUseCrc: (useCrc: boolean) => void
 }
 
 const DeviceDetailsContext = createContext<DeviceDetailsContextValue | null>(null)
@@ -105,6 +140,21 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
   const [periodicMessages, setPeriodicMessages] = useState<PeriodicMessage[]>([])
   const [showAddPeriodicForm, setShowAddPeriodicForm] = useState(false)
   const [periodicFormData, setPeriodicFormData] = useState<PeriodicFormData>(DEFAULT_PERIODIC_FORM_DATA)
+
+  // CAN IO state
+  const [canIoActive, setCanIoActive] = useState(false)
+  const [canIoCanId, setCanIoCanId] = useState('3F')
+  const [canIoInterval, setCanIoInterval] = useState(100)
+  const [canIoCruise, setCanIoCruise] = useState(false)
+  const [canIoStart, setCanIoStart] = useState(false)
+  const [canIoBrake, setCanIoBrake] = useState(false)
+  const [canIoForward, setCanIoForward] = useState(false)
+  const [canIoReverse, setCanIoReverse] = useState(false)
+  const [canIoBms, setCanIoBms] = useState(false)
+  const [canIoThrottlePercent, setCanIoThrottlePercent] = useState(0)
+  const [canIoCruisespeed, setCanIoCruisespeed] = useState(0)
+  const [canIoRegenpreset, setCanIoRegenpreset] = useState(0)
+  const [canIoUseCrc, setCanIoUseCrc] = useState(false)
 
   // Monitoring actions
   const updateSpotValue = useCallback((paramId: string, value: number) => {
@@ -196,6 +246,21 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
       showAddPeriodicForm,
       periodicFormData,
     },
+    canIo: {
+      active: canIoActive,
+      canId: canIoCanId,
+      interval: canIoInterval,
+      cruise: canIoCruise,
+      start: canIoStart,
+      brake: canIoBrake,
+      forward: canIoForward,
+      reverse: canIoReverse,
+      bms: canIoBms,
+      throttlePercent: canIoThrottlePercent,
+      cruisespeed: canIoCruisespeed,
+      regenpreset: canIoRegenpreset,
+      useCrc: canIoUseCrc,
+    },
     setStreaming,
     setInterval,
     setSpotValues,
@@ -218,6 +283,19 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
     setShowAddPeriodicForm,
     setPeriodicFormData,
     resetPeriodicFormData,
+    setCanIoActive,
+    setCanIoCanId,
+    setCanIoInterval,
+    setCanIoCruise,
+    setCanIoStart,
+    setCanIoBrake,
+    setCanIoForward,
+    setCanIoReverse,
+    setCanIoBms,
+    setCanIoThrottlePercent,
+    setCanIoCruisespeed,
+    setCanIoRegenpreset,
+    setCanIoUseCrc,
   }
 
   return (

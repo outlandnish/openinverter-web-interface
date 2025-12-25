@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'preact/hooks'
-import { useLocation, useRoute } from 'wouter'
+import { useRoute } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
-import { DeviceDetailsProvider } from '@contexts/DeviceDetailsContext'
+import { DeviceDetailsProvider, useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import Layout from '@components/Layout'
 import ConnectionStatus from '@components/ConnectionStatus'
 import SpotValuesMonitor from '@components/SpotValuesMonitor'
@@ -18,10 +18,17 @@ import { formatParameterValue } from '@/utils/parameterDisplay'
 import { api } from '@/api/inverter'
 
 export default function DeviceDetails() {
-  const [, setLocation] = useLocation()
+  return (
+    <DeviceDetailsProvider>
+      <DeviceDetailsContent />
+    </DeviceDetailsProvider>
+  )
+}
+
+function DeviceDetailsContent() {
   const [, routeParams] = useRoute('/devices/:serial')
   const content = useIntlayer('device-details')
-  const { showError, showSuccess, showWarning } = useToast()
+  const { showSuccess, showWarning } = useToast()
 
   const [loading, setLoading] = useState(true)
   const [nodeId, setNodeId] = useState('')
@@ -39,14 +46,26 @@ export default function DeviceDetails() {
   // Use shared WebSocket connection
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
 
-  // Disconnect from device when component unmounts (navigating away)
+  // Use shared device details context
+  const { monitoring, canIo, setStreaming, clearHistoricalData, setCanIoActive } = useDeviceDetailsContext()
+
+  // Disconnect from device and stop all activities when component unmounts (navigating away)
   useEffect(() => {
     return () => {
+      // Stop streaming if active (check current state at cleanup time)
+      sendMessage('stopSpotValues')
+      setStreaming(false)
+      clearHistoricalData()
+
+      // Stop CAN IO if active
+      sendMessage('stopCanIoInterval', {})
+      setCanIoActive(false)
+
       // Send disconnect message when leaving the page
       sendMessage('disconnect')
-      console.log('[DeviceDetails] Sent disconnect message on unmount')
+      console.log('[DeviceDetails] Sent disconnect and cleanup on unmount')
     }
-  }, [sendMessage])
+  }, [])
 
   // Subscribe to WebSocket messages and load settings when ready
   useEffect(() => {
@@ -142,11 +161,10 @@ export default function DeviceDetails() {
   }
 
   return (
-    <DeviceDetailsProvider>
-      <Layout currentSerial={routeParams?.serial}>
-        <div class="container">
-        {loading ? (
-          <div class="loading-container" style={{
+    <Layout currentSerial={routeParams?.serial}>
+      <div class="container">
+      {loading ? (
+        <div class="loading-container" style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -263,6 +281,5 @@ export default function DeviceDetails() {
         )}
         </div>
       </Layout>
-    </DeviceDetailsProvider>
   )
 }

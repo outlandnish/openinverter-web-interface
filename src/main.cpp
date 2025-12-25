@@ -135,6 +135,7 @@ struct CANCommand {
       uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
       uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
       uint32_t intervalMs;      // Send interval in milliseconds
+      bool useCrc;              // Use CRC-32 (true) or counter-only (false)
     } startCanIoInterval;
   } data;
 };
@@ -253,8 +254,9 @@ struct CanIoInterval {
   uint32_t intervalMs;
   uint32_t lastSentTime;
   uint8_t sequenceCounter; // 2-bit counter (0-3)
+  bool useCrc;             // Use CRC-32 (true) or counter-only (false)
 };
-CanIoInterval canIoInterval = {false, 0x3F, 0, 0, 0, 0, 0, 100, 0, 0};
+CanIoInterval canIoInterval = {false, 0x3F, 0, 0, 0, 0, 0, 100, 0, 0, false};
 
 // Device locking for multi-client support
 std::map<uint8_t, uint32_t> deviceLocks; // nodeId -> WebSocket client ID
@@ -288,25 +290,25 @@ void statusLEDOff() {
   setStatusLED(LED_OFF);
 }
 
-// CRC8 calculation for CAN IO messages
-uint8_t calculateCRC8(const uint8_t* data, uint8_t length) {
-  uint8_t crc = 0xFF;
-  for (uint8_t i = 0; i < length; i++) {
-    crc ^= data[i];
-    for (uint8_t j = 0; j < 8; j++) {
-      if (crc & 0x80) {
-        crc = (crc << 1) ^ 0x2F;
-      } else {
-        crc <<= 1;
-      }
+// CRC-32 calculation for CAN IO messages (STM32 polynomial 0x04C11DB7)
+// This matches the IEEE 802.3 / Ethernet CRC-32 polynomial
+uint32_t crc32_word(uint32_t crc, uint32_t word) {
+  const uint32_t polynomial = 0x04C11DB7;
+  crc ^= word;
+  for (int i = 0; i < 32; i++) {
+    if (crc & 0x80000000) {
+      crc = (crc << 1) ^ polynomial;
+    } else {
+      crc = crc << 1;
     }
   }
   return crc;
 }
 
 // Build CAN IO message with bit packing
+// Set useCRC=true for controlcheck=1 (StmCrc8), false for controlcheck=0 (CounterOnly)
 void buildCanIoMessage(uint8_t* msg, uint16_t pot, uint16_t pot2, uint8_t canio,
-                       uint8_t ctr, uint16_t cruisespeed, uint8_t regenpreset) {
+                       uint8_t ctr, uint16_t cruisespeed, uint8_t regenpreset, bool useCRC = false) {
   // Mask inputs to their bit limits
   pot &= 0x0FFF;          // 12 bits
   pot2 &= 0x0FFF;         // 12 bits
@@ -328,8 +330,15 @@ void buildCanIoMessage(uint8_t* msg, uint16_t pot, uint16_t pot2, uint8_t canio,
   msg[5] = (data1 >> 8) & 0xFF;
   msg[6] = (data1 >> 16) & 0xFF;
 
-  // Calculate CRC8 over first 6 bytes and place in byte 7
-  msg[7] = calculateCRC8(msg, 6);
+  // Calculate CRC-32 if requested, otherwise set to 0
+  uint8_t crcByte = 0;
+  if (useCRC) {
+    uint32_t crc = 0xFFFFFFFF;
+    crc = crc32_word(crc, data0);
+    crc = crc32_word(crc, data1);
+    crcByte = crc & 0xFF;  // Lower 8 bits
+  }
+  msg[7] = crcByte;
 }
 
 // WebSocket broadcast helper
@@ -729,6 +738,9 @@ void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.data.startCanIoInterval.intervalMs = doc.containsKey("interval") ? doc["interval"].as<uint32_t>() : 100;
   if (cmd.data.startCanIoInterval.intervalMs < 10) cmd.data.startCanIoInterval.intervalMs = 10;
   if (cmd.data.startCanIoInterval.intervalMs > 500) cmd.data.startCanIoInterval.intervalMs = 500;
+
+  // Parse useCrc flag (default false = counter-only mode)
+  cmd.data.startCanIoInterval.useCrc = doc.containsKey("useCrc") ? doc["useCrc"].as<bool>() : false;
 
   if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN IO interval command queued (CAN=0x%03lX, canio=0x%02X, Interval=%lums)\n",
@@ -1595,8 +1607,11 @@ void canTask(void* parameter) {
             canIoInterval.cruisespeed = cmd.data.startCanIoInterval.cruisespeed;
             canIoInterval.regenpreset = cmd.data.startCanIoInterval.regenpreset;
             canIoInterval.intervalMs = cmd.data.startCanIoInterval.intervalMs;
+            canIoInterval.useCrc = cmd.data.startCanIoInterval.useCrc;
             canIoInterval.lastSentTime = millis();
-            canIoInterval.sequenceCounter = 0;
+            // Start with counter=1 to avoid matching the last message from a previous session
+            // This prevents ERR_CANCOUNTER if the last message before restart was also counter=0
+            canIoInterval.sequenceCounter = 1;
 
             DBG_OUTPUT_PORT.printf("[CAN Task] Started CAN IO interval: CAN=0x%03lX, canio=0x%02X, Interval=%lums\n",
                                    (unsigned long)canIoInterval.canId, canIoInterval.canio, (unsigned long)canIoInterval.intervalMs);
@@ -1646,9 +1661,10 @@ void canTask(void* parameter) {
       canIoInterval.lastSentTime = currentTime;
 
       // Build the CAN IO message with current state and sequence counter
+      // useCrc from user setting: false for counter-only mode (controlcheck=0), true for CRC mode (controlcheck=1)
       uint8_t msgData[8];
       buildCanIoMessage(msgData, canIoInterval.pot, canIoInterval.pot2, canIoInterval.canio,
-                        canIoInterval.sequenceCounter, canIoInterval.cruisespeed, canIoInterval.regenpreset);
+                        canIoInterval.sequenceCounter, canIoInterval.cruisespeed, canIoInterval.regenpreset, canIoInterval.useCrc);
 
       // Send the message
       OICan::SendCanMessage(canIoInterval.canId, msgData, 8);
