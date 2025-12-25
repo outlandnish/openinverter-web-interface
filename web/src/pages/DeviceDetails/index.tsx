@@ -9,6 +9,7 @@ import SpotValuesMonitor from '@components/SpotValuesMonitor'
 import OTAUpdate from '@components/OTAUpdate'
 import DeviceParameters from '@components/DeviceParameters'
 import CanMappingEditor from '@components/CanMappingEditor'
+import CanMessageSender from '@components/CanMessageSender'
 import Tabs from '@components/Tabs'
 import { useToast } from '@hooks/useToast'
 import { formatParameterValue } from '@/utils/parameterDisplay'
@@ -194,7 +195,6 @@ export default function DeviceDetails() {
           {
             id: 'overview',
             label: 'Overview',
-            icon: '📊',
             content: savedNodeId > 0 && routeParams?.serial ? (
               <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
             ) : (
@@ -207,7 +207,6 @@ export default function DeviceDetails() {
           {
             id: 'parameters',
             label: 'Parameters',
-            icon: '⚙️',
             content: routeParams?.serial && nodeId ? (
               <DeviceParameters
                 serial={routeParams.serial}
@@ -225,7 +224,6 @@ export default function DeviceDetails() {
           {
             id: 'can-mappings',
             label: 'CAN Mappings',
-            icon: '🔌',
             content: routeParams?.serial && savedNodeId > 0 ? (
               <CanMappingEditor serial={routeParams.serial} nodeId={savedNodeId} />
             ) : (
@@ -236,9 +234,20 @@ export default function DeviceDetails() {
             disabled: !savedNodeId || savedNodeId === 0
           },
           {
+            id: 'can-messages',
+            label: 'CAN Messages',
+            content: routeParams?.serial && savedNodeId > 0 ? (
+              <CanMessageSender serial={routeParams.serial} nodeId={savedNodeId} />
+            ) : (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                {content.noDataAvailable || 'No data available'}
+              </div>
+            ),
+            disabled: !savedNodeId || savedNodeId === 0
+          },
+          {
             id: 'ota-update',
             label: 'OTA Update',
-            icon: '🔄',
             content: <OTAUpdate />
           }
         ]}
