@@ -88,7 +88,7 @@ export default function DeviceParameters({
 
   const handleExportToJSON = () => {
     if (!localParams) {
-      showError('No parameters to export')
+      showError(content.noParametersToExport)
       return
     }
 
@@ -111,7 +111,7 @@ export default function DeviceParameters({
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
 
-    showSuccess('Parameters exported successfully')
+    showSuccess(content.parametersExported)
   }
 
   const handleImportFromJSON = () => {
@@ -129,7 +129,7 @@ export default function DeviceParameters({
       const importedData = JSON.parse(text)
 
       if (!localParams) {
-        showError('No parameter definitions loaded')
+        showError(content.noParameterDefinitions)
         return
       }
 
@@ -199,23 +199,23 @@ export default function DeviceParameters({
           try {
             await api.setParamById(paramId, value)
           } catch (error) {
-            showError(`Failed to update ${key}: ${(error as Error).message}`)
+            showError(content.failedToUpdate({ key, error: (error as Error).message }))
           }
         }
 
-        showSuccess(`Imported ${validCount} parameter${validCount === 1 ? '' : 's'} successfully. Don't forget to save to flash!`)
+        showSuccess(content.importedSuccessfully({ count: validCount, plural: validCount === 1 ? '' : 's' }))
       }
 
       if (invalidCount > 0) {
-        const errorMsg = `${invalidCount} parameter${invalidCount === 1 ? '' : 's'} failed validation:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n...and ${errors.length - 5} more` : ''}`
-        showError(errorMsg)
+        const errorList = errors.slice(0, 5).join('\n') + (errors.length > 5 ? `\n...and ${errors.length - 5} more` : '')
+        showError(content.validationFailed({ count: invalidCount, plural: invalidCount === 1 ? '' : 's', errors: errorList }))
       }
 
       if (validCount === 0 && invalidCount === 0) {
-        showError('No valid parameters found in file')
+        showError(content.noValidParameters)
       }
     } catch (error) {
-      showError('Failed to parse JSON file: ' + (error as Error).message)
+      showError(content.parseJSONFailed({ error: (error as Error).message }))
       target.value = ''
     }
   }
@@ -319,17 +319,17 @@ export default function DeviceParameters({
       </div>
 
       <div class="form-group" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #ddd' }}>
-        <label style={{ marginBottom: '1rem' }}>Import/Export Parameters</label>
+        <label style={{ marginBottom: '1rem' }}>{content.importExportParameters}</label>
         <div class="button-group" style={{ marginTop: 0 }}>
           <button class="btn-secondary" onClick={handleExportToJSON} disabled={!localParams}>
-            📥 Export to JSON
+            {content.exportToJSON}
           </button>
           <button class="btn-secondary" onClick={handleImportFromJSON} disabled={!localParams}>
-            📤 Import from JSON
+            {content.importFromJSON}
           </button>
         </div>
         <small class="hint" style={{ display: 'block', marginTop: '0.5rem' }}>
-          Export saves all parameter values to a JSON file. Import loads and validates parameters from a JSON file.
+          {content.importExportHint}
         </small>
         <input
           ref={fileInputRef}

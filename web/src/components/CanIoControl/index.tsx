@@ -1,4 +1,5 @@
 import { useEffect } from 'preact/hooks'
+import { useIntlayer } from 'preact-intlayer'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import { useToast } from '@hooks/useToast'
@@ -21,6 +22,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
   // Props available for future use
   void serial; void nodeId;
 
+  const content = useIntlayer('can-io-control')
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
   const { showError, showSuccess } = useToast()
 
@@ -66,27 +68,27 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
         case 'canIoIntervalStatus':
           setCanIoActive(message.data.active)
           if (message.data.active) {
-            showSuccess(`CAN IO interval started (${message.data.intervalMs}ms)`)
+            showSuccess(content.intervalStartedSuccess({ intervalMs: message.data.intervalMs }))
           } else {
-            showSuccess('CAN IO interval stopped')
+            showSuccess(content.intervalStoppedSuccess)
           }
           break
       }
     })
 
     return unsubscribe
-  }, [subscribe, setCanIoActive, showSuccess])
+  }, [subscribe, setCanIoActive, showSuccess, content])
 
   const handleStart = () => {
     if (!isConnected) {
-      showError('Not connected to device')
+      showError(content.notConnectedError)
       return
     }
 
     // Validate CAN ID
     const parsedCanId = parseInt(canId, 16)
     if (isNaN(parsedCanId) || parsedCanId < 0 || parsedCanId > 0x7FF) {
-      showError('Invalid CAN ID (must be 0x000 to 0x7FF)')
+      showError(content.invalidCanIdError)
       return
     }
 
@@ -116,7 +118,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
 
   const handleStop = () => {
     if (!isConnected) {
-      showError('Not connected to device')
+      showError(content.notConnectedError)
       return
     }
 
@@ -178,23 +180,23 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
 
   return (
     <div class="can-io-control">
-      <h3>CAN IO Control (Inverter)</h3>
+      <h3>{content.title}</h3>
 
       <div class="can-io-section">
-        <h4>Configuration</h4>
+        <h4>{content.configurationSection}</h4>
         <div class="can-io-row">
-          <label>CAN ID (hex):</label>
+          <label>{content.canIdLabel}</label>
           <input
             type="text"
             value={canId}
             onInput={(e) => setCanIoCanId((e.target as HTMLInputElement).value.toUpperCase())}
             disabled={active}
-            placeholder="3F"
+            placeholder={content.canIdPlaceholder}
             maxLength={3}
           />
         </div>
         <div class="can-io-row">
-          <label>Interval (ms):</label>
+          <label>{content.intervalLabel}</label>
           <input
             type="number"
             value={interval}
@@ -203,7 +205,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             min={10}
             max={500}
           />
-          <span class="hint">10-500ms (recommended: 50-100ms)</span>
+          <span class="hint">{content.intervalHint}</span>
         </div>
         <div class="can-io-row">
           <label>
@@ -213,14 +215,14 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => setCanIoUseCrc((e.target as HTMLInputElement).checked)}
               disabled={active}
             />
-            <span>Use CRC-32 (controlcheck=1)</span>
+            <span>{content.useCrcLabel}</span>
           </label>
-          <span class="hint">Disable for counter-only mode (controlcheck=0)</span>
+          <span class="hint">{content.useCrcHint}</span>
         </div>
       </div>
 
       <div class="can-io-section">
-        <h4>Control Flags</h4>
+        <h4>{content.controlFlagsSection}</h4>
         <div class="can-io-flags">
           <label class="can-io-checkbox">
             <input
@@ -229,7 +231,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => { const val = (e.target as HTMLInputElement).checked; setCanIoCruise(val); handleUpdateFlags({ cruise: val }); }}
               disabled={!active}
             />
-            <span>Cruise (0x01)</span>
+            <span>{content.cruiseFlag}</span>
           </label>
           <label class="can-io-checkbox">
             <input
@@ -238,7 +240,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => { const val = (e.target as HTMLInputElement).checked; setCanIoStart(val); handleUpdateFlags({ start: val }); }}
               disabled={!active}
             />
-            <span>Start (0x02)</span>
+            <span>{content.startFlag}</span>
           </label>
           <label class="can-io-checkbox">
             <input
@@ -247,7 +249,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => { const val = (e.target as HTMLInputElement).checked; setCanIoBrake(val); handleUpdateFlags({ brake: val }); }}
               disabled={!active}
             />
-            <span>Brake (0x04)</span>
+            <span>{content.brakeFlag}</span>
           </label>
           <label class="can-io-checkbox">
             <input
@@ -256,7 +258,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => { const val = (e.target as HTMLInputElement).checked; setCanIoForward(val); handleUpdateFlags({ forward: val }); }}
               disabled={!active}
             />
-            <span>Forward (0x08)</span>
+            <span>{content.forwardFlag}</span>
           </label>
           <label class="can-io-checkbox">
             <input
@@ -265,7 +267,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => { const val = (e.target as HTMLInputElement).checked; setCanIoReverse(val); handleUpdateFlags({ reverse: val }); }}
               disabled={!active}
             />
-            <span>Reverse (0x10)</span>
+            <span>{content.reverseFlag}</span>
           </label>
           <label class="can-io-checkbox">
             <input
@@ -274,15 +276,15 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
               onChange={(e) => { const val = (e.target as HTMLInputElement).checked; setCanIoBms(val); handleUpdateFlags({ bms: val }); }}
               disabled={!active}
             />
-            <span>BMS (0x20)</span>
+            <span>{content.bmsFlag}</span>
           </label>
         </div>
       </div>
 
       <div class="can-io-section">
-        <h4>Throttle & Parameters</h4>
+        <h4>{content.throttleSection}</h4>
         <div class="can-io-row">
-          <label>Throttle (%):</label>
+          <label>{content.throttleLabel}</label>
           <input
             type="range"
             value={throttlePercent}
@@ -294,7 +296,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           <span class="value">{throttlePercent}%</span>
         </div>
         <div class="can-io-row">
-          <label>Cruise Speed:</label>
+          <label>{content.cruiseSpeedLabel}</label>
           <input
             type="number"
             value={cruisespeed}
@@ -303,10 +305,10 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             min={0}
             max={16383}
           />
-          <span class="hint">0-16383</span>
+          <span class="hint">{content.cruiseSpeedHint}</span>
         </div>
         <div class="can-io-row">
-          <label>Regen Preset:</label>
+          <label>{content.regenPresetLabel}</label>
           <input
             type="number"
             value={regenpreset}
@@ -315,7 +317,7 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
             min={0}
             max={255}
           />
-          <span class="hint">0-255</span>
+          <span class="hint">{content.regenPresetHint}</span>
         </div>
       </div>
 
@@ -325,12 +327,12 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
           disabled={!isConnected}
           class={active ? 'stop-btn' : 'start-btn'}
         >
-          {active ? 'Stop CAN IO' : 'Start CAN IO'}
+          {active ? content.stopButton : content.startButton}
         </button>
         {active && (
           <div class="can-io-status-indicator active">
             <span class="pulse"></span>
-            Active (sending every {interval}ms)
+            {content.activeStatus({ interval })}
           </div>
         )}
       </div>

@@ -1,4 +1,5 @@
 import { useEffect } from 'preact/hooks'
+import { useIntlayer } from 'preact-intlayer'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import { useToast } from '@hooks/useToast'
@@ -13,6 +14,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
   // Props available for future use (validation, filtering, etc.)
   void serial; void nodeId;
 
+  const content = useIntlayer('can-message-sender')
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
   const { showError, showSuccess } = useToast()
 
@@ -38,16 +40,16 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
       switch (message.event) {
         case 'canMessageSent':
           if (message.data.success) {
-            showSuccess(`CAN message sent: ID 0x${message.data.canId.toString(16).toUpperCase()}`)
+            showSuccess(content.messageSentSuccess({ canId: `0x${message.data.canId.toString(16).toUpperCase()}` }))
           } else {
-            showError(`Failed to send CAN message: ${message.data.error || 'Unknown error'}`)
+            showError(content.messageSentError({ error: message.data.error || 'Unknown error' }))
           }
           break
       }
     })
 
     return unsubscribe
-  }, [subscribe])
+  }, [subscribe, content, showSuccess, showError])
 
   // Parse hex string to number
   const parseHex = (hex: string): number => {
@@ -115,17 +117,17 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
   // Send one-shot CAN message
   const handleSendOneShot = () => {
     if (!isConnected) {
-      showError('Not connected to device')
+      showError(content.notConnectedError)
       return
     }
 
     if (!validateCanId(canId)) {
-      showError('Invalid CAN ID (must be 0x000 to 0x7FF)')
+      showError(content.invalidCanIdError)
       return
     }
 
     if (!validateDataBytes(dataBytes)) {
-      showError('Invalid data bytes')
+      showError(content.invalidDataBytesError)
       return
     }
 
@@ -141,17 +143,17 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
   // Add periodic message
   const handleAddPeriodic = () => {
     if (!validateCanId(periodicFormData.canId)) {
-      showError('Invalid CAN ID (must be 0x000 to 0x7FF)')
+      showError(content.invalidCanIdError)
       return
     }
 
     if (!validateDataBytes(periodicFormData.data)) {
-      showError('Invalid data bytes')
+      showError(content.invalidDataBytesError)
       return
     }
 
     if (periodicFormData.interval < 10 || periodicFormData.interval > 10000) {
-      showError('Interval must be between 10ms and 10000ms')
+      showError(content.invalidIntervalError)
       return
     }
 
@@ -166,13 +168,13 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
     addPeriodicMessage(newMessage)
     setShowAddPeriodicForm(false)
     resetPeriodicFormData()
-    showSuccess('Periodic message added')
+    showSuccess(content.periodicAddedSuccess)
   }
 
   // Start/stop periodic message
   const handleTogglePeriodic = (message: { id: string; canId: number; data: number[]; interval: number; active: boolean }) => {
     if (!isConnected) {
-      showError('Not connected to device')
+      showError(content.notConnectedError)
       return
     }
 
@@ -207,25 +209,25 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
       })
     }
     removePeriodicMessage(messageId)
-    showSuccess('Periodic message removed')
+    showSuccess(content.periodicRemovedSuccess)
   }
 
   return (
     <section id="can-message-sender" class="card">
-      <h2 class="section-header">CAN Message Sender</h2>
+      <h2 class="section-header">{content.title}</h2>
 
       {/* One-Shot Messages */}
       <div class="message-section">
-        <h3>One-Shot Message</h3>
-        <p class="section-description">Send a single CAN message immediately</p>
+        <h3>{content.oneShotSection}</h3>
+        <p class="section-description">{content.oneShotDescription}</p>
 
         <div class="message-form">
           <div class="form-row">
             <label>
-              CAN ID (hex):
+              {content.canIdLabel}
               <input
                 type="text"
-                placeholder="0x180"
+                placeholder={content.canIdPlaceholder}
                 value={canId}
                 onChange={(e) => setCanId((e.currentTarget as HTMLInputElement).value)}
                 class="input-hex"
@@ -235,10 +237,10 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
           <div class="form-row">
             <label>
-              Data Bytes (hex):
+              {content.dataBytesLabel}
               <input
                 type="text"
-                placeholder="00 00 00 00 00 00 00 00"
+                placeholder={content.dataBytesPlaceholder}
                 value={dataBytes}
                 onChange={(e) => handleDataBytesChange((e.currentTarget as HTMLInputElement).value, setDataBytes)}
                 class="input-data"
@@ -253,7 +255,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
               onClick={handleSendOneShot}
               disabled={!isConnected}
             >
-              Send Message
+              {content.sendButton}
             </button>
           </div>
         </div>
@@ -261,20 +263,20 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
       {/* Periodic Messages */}
       <div class="message-section">
-        <h3>Periodic Messages</h3>
-        <p class="section-description">Configure messages to be sent at regular intervals</p>
+        <h3>{content.periodicSection}</h3>
+        <p class="section-description">{content.periodicDescription}</p>
 
         {periodicMessages.length === 0 ? (
-          <p class="no-messages">No periodic messages configured</p>
+          <p class="no-messages">{content.noPeriodicMessages}</p>
         ) : (
           <table class="messages-table">
             <thead>
               <tr>
-                <th>CAN ID</th>
-                <th>Data</th>
-                <th>Interval (ms)</th>
-                <th>Status</th>
-                <th>Actions</th>
+                <th>{content.tableHeaderCanId}</th>
+                <th>{content.tableHeaderData}</th>
+                <th>{content.tableHeaderInterval}</th>
+                <th>{content.tableHeaderStatus}</th>
+                <th>{content.tableHeaderActions}</th>
               </tr>
             </thead>
             <tbody>
@@ -285,7 +287,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
                   <td>{message.interval}</td>
                   <td>
                     <span class={`status-badge ${message.active ? 'status-active' : 'status-inactive'}`}>
-                      {message.active ? 'Active' : 'Stopped'}
+                      {message.active ? content.statusActive : content.statusStopped}
                     </span>
                   </td>
                   <td>
@@ -295,14 +297,14 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
                         onClick={() => handleTogglePeriodic(message)}
                         disabled={!isConnected}
                       >
-                        {message.active ? 'Stop' : 'Start'}
+                        {message.active ? content.stopButton : content.startButton}
                       </button>
                       <button
                         class="btn-remove"
                         onClick={() => handleRemovePeriodic(message.id)}
                         disabled={message.active}
                       >
-                        Remove
+                        {content.removeButton}
                       </button>
                     </div>
                   </td>
@@ -316,18 +318,18 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
         <div class="add-message-section">
           {!showAddPeriodicForm ? (
             <button class="btn-add" onClick={() => setShowAddPeriodicForm(true)}>
-              Add Periodic Message
+              {content.addPeriodicButton}
             </button>
           ) : (
             <div class="add-message-form">
-              <h4>Add New Periodic Message</h4>
+              <h4>{content.addPeriodicFormTitle}</h4>
 
               <div class="form-row">
                 <label>
-                  CAN ID (hex):
+                  {content.canIdLabel}
                   <input
                     type="text"
-                    placeholder="0x180"
+                    placeholder={content.canIdPlaceholder}
                     value={periodicFormData.canId}
                     onChange={(e) => setPeriodicFormData({
                       ...periodicFormData,
@@ -340,10 +342,10 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
               <div class="form-row">
                 <label>
-                  Data Bytes (hex):
+                  {content.dataBytesLabel}
                   <input
                     type="text"
-                    placeholder="00 00 00 00 00 00 00 00"
+                    placeholder={content.dataBytesPlaceholder}
                     value={periodicFormData.data}
                     onChange={(e) => handleDataBytesChange(
                       (e.currentTarget as HTMLInputElement).value,
@@ -357,7 +359,7 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
               <div class="form-row">
                 <label>
-                  Interval (ms):
+                  {content.intervalLabel}
                   <input
                     type="number"
                     min="10"
@@ -374,10 +376,10 @@ export default function CanMessageSender({ serial, nodeId }: CanMessageSenderPro
 
               <div class="form-actions">
                 <button class="btn-cancel" onClick={() => setShowAddPeriodicForm(false)}>
-                  Cancel
+                  {content.cancelButton}
                 </button>
                 <button class="btn-save" onClick={handleAddPeriodic}>
-                  Add Message
+                  {content.addMessageButton}
                 </button>
               </div>
             </div>

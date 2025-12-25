@@ -247,6 +247,62 @@ const deviceDetailsContent = {
       en: 'Failed to reload parameters',
       de: 'Fehler beim Neuladen der Parameter',
     }),
+    importExportParameters: t({
+      en: 'Import/Export Parameters',
+      de: 'Parameter importieren/exportieren',
+    }),
+    exportToJSON: t({
+      en: 'Export to JSON',
+      de: 'Als JSON exportieren',
+    }),
+    importFromJSON: t({
+      en: 'Import from JSON',
+      de: 'Aus JSON importieren',
+    }),
+    importExportHint: t({
+      en: 'Export saves all parameter values to a JSON file. Import loads and validates parameters from a JSON file.',
+      de: 'Export speichert alle Parameterwerte in einer JSON-Datei. Import lädt und validiert Parameter aus einer JSON-Datei.',
+    }),
+    noParametersToExport: t({
+      en: 'No parameters to export',
+      de: 'Keine Parameter zum Exportieren',
+    }),
+    parametersExported: t({
+      en: 'Parameters exported successfully',
+      de: 'Parameter erfolgreich exportiert',
+    }),
+    noParameterDefinitions: t({
+      en: 'No parameter definitions loaded',
+      de: 'Keine Parameterdefinitionen geladen',
+    }),
+    importedSuccessfully: insert(
+      t({
+        en: 'Imported {{count}} parameter{{plural}} successfully. Don\'t forget to save to flash!',
+        de: '{{count}} Parameter erfolgreich importiert. Vergessen Sie nicht, im Flash zu speichern!',
+      })
+    ),
+    validationFailed: insert(
+      t({
+        en: '{{count}} parameter{{plural}} failed validation:\n{{errors}}',
+        de: '{{count}} Parameter haben die Validierung nicht bestanden:\n{{errors}}',
+      })
+    ),
+    noValidParameters: t({
+      en: 'No valid parameters found in file',
+      de: 'Keine gültigen Parameter in der Datei gefunden',
+    }),
+    parseJSONFailed: insert(
+      t({
+        en: 'Failed to parse JSON file: {{error}}',
+        de: 'Fehler beim Parsen der JSON-Datei: {{error}}',
+      })
+    ),
+    failedToUpdate: insert(
+      t({
+        en: 'Failed to update {{key}}: {{error}}',
+        de: 'Fehler beim Aktualisieren von {{key}}: {{error}}',
+      })
+    ),
   },
 } satisfies DeclarationContent
 

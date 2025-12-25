@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks'
+import { useIntlayer } from 'preact-intlayer'
 import { useCanMappings, CanMapping } from '@hooks/useCanMappings'
 import { useParams } from '@hooks/useParams'
 import { useToast } from '@hooks/useToast'
@@ -11,6 +12,7 @@ interface CanMappingEditorProps {
 }
 
 export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorProps) {
+  const content = useIntlayer('can-mapping-editor')
   const { mappings, loading, error, addMapping, removeMapping } = useCanMappings()
   const { params } = useParams(serial, nodeId)
   const { showError, showSuccess } = useToast()
@@ -29,20 +31,20 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
   // Get parameter display name by ID
   const getParamName = (paramId: number): string => {
-    if (!params) return `Param ${paramId}`
+    if (!params) return content.paramFallback({ paramId })
 
     for (const [key, param] of Object.entries(params)) {
       if (param.id === paramId) {
         return getParameterDisplayName(key, param)
       }
     }
-    return `Param ${paramId}`
+    return content.paramFallback({ paramId })
   }
 
   const handleAddMapping = async () => {
     try {
       await addMapping(formData)
-      showSuccess('CAN mapping added successfully')
+      showSuccess(content.addSuccess)
       setShowAddForm(false)
       // Reset form
       setFormData({
@@ -55,20 +57,24 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
         offset: 0,
       })
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to add CAN mapping')
+      showError(err instanceof Error ? err.message : content.addError)
     }
   }
 
   const handleRemoveMapping = async (mapping: CanMapping) => {
-    if (!confirm(`Remove ${mapping.isrx ? 'RX' : 'TX'} mapping for ${getParamName(mapping.paramid)} (CAN ID 0x${mapping.id.toString(16).toUpperCase()})?`)) {
+    const direction = mapping.isrx ? 'RX' : 'TX'
+    const paramName = getParamName(mapping.paramid)
+    const canId = `0x${mapping.id.toString(16).toUpperCase()}`
+
+    if (!confirm(content.removeConfirmation({ direction, paramName, canId }))) {
       return
     }
 
     try {
       await removeMapping(mapping.index, mapping.subindex)
-      showSuccess('CAN mapping removed successfully')
+      showSuccess(content.removeSuccess)
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to remove CAN mapping')
+      showError(err instanceof Error ? err.message : content.removeError)
     }
   }
 
@@ -77,17 +83,17 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
   return (
     <section id="can-mappings" class="card">
-      <h2 class="section-header">CAN Mappings</h2>
+      <h2 class="section-header">{content.title}</h2>
 
       {loading && (
         <div class="loading">
-          <p>Loading CAN mappings...</p>
+          <p>{content.loading}</p>
         </div>
       )}
 
       {error && (
         <div class="error-message">
-          <p>Error: {error}</p>
+          <p>{content.errorPrefix} {error}</p>
         </div>
       )}
 
@@ -95,20 +101,20 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
         <div class="can-mappings-container">
           {/* TX Mappings */}
           <div class="mapping-section">
-            <h3>TX Mappings (Transmit)</h3>
+            <h3>{content.txSection}</h3>
             {txMappings.length === 0 ? (
-              <p class="no-mappings">No TX mappings configured</p>
+              <p class="no-mappings">{content.noTxMappings}</p>
             ) : (
               <table class="mappings-table">
                 <thead>
                   <tr>
-                    <th>CAN ID</th>
-                    <th>Parameter</th>
-                    <th>Position</th>
-                    <th>Length</th>
-                    <th>Gain</th>
-                    <th>Offset</th>
-                    <th>Actions</th>
+                    <th>{content.tableHeaderCanId}</th>
+                    <th>{content.tableHeaderParameter}</th>
+                    <th>{content.tableHeaderPosition}</th>
+                    <th>{content.tableHeaderLength}</th>
+                    <th>{content.tableHeaderGain}</th>
+                    <th>{content.tableHeaderOffset}</th>
+                    <th>{content.tableHeaderActions}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -117,7 +123,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                       <td>0x{mapping.id.toString(16).toUpperCase()}</td>
                       <td>{getParamName(mapping.paramid)}</td>
                       <td>{mapping.position}</td>
-                      <td>{mapping.length} bits</td>
+                      <td>{mapping.length} {content.bitsUnit}</td>
                       <td>{mapping.gain}</td>
                       <td>{mapping.offset}</td>
                       <td>
@@ -125,7 +131,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                           class="btn-remove"
                           onClick={() => handleRemoveMapping(mapping)}
                         >
-                          Remove
+                          {content.removeButton}
                         </button>
                       </td>
                     </tr>
@@ -137,20 +143,20 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
           {/* RX Mappings */}
           <div class="mapping-section">
-            <h3>RX Mappings (Receive)</h3>
+            <h3>{content.rxSection}</h3>
             {rxMappings.length === 0 ? (
-              <p class="no-mappings">No RX mappings configured</p>
+              <p class="no-mappings">{content.noRxMappings}</p>
             ) : (
               <table class="mappings-table">
                 <thead>
                   <tr>
-                    <th>CAN ID</th>
-                    <th>Parameter</th>
-                    <th>Position</th>
-                    <th>Length</th>
-                    <th>Gain</th>
-                    <th>Offset</th>
-                    <th>Actions</th>
+                    <th>{content.tableHeaderCanId}</th>
+                    <th>{content.tableHeaderParameter}</th>
+                    <th>{content.tableHeaderPosition}</th>
+                    <th>{content.tableHeaderLength}</th>
+                    <th>{content.tableHeaderGain}</th>
+                    <th>{content.tableHeaderOffset}</th>
+                    <th>{content.tableHeaderActions}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -159,7 +165,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                       <td>0x{mapping.id.toString(16).toUpperCase()}</td>
                       <td>{getParamName(mapping.paramid)}</td>
                       <td>{mapping.position}</td>
-                      <td>{mapping.length} bits</td>
+                      <td>{mapping.length} {content.bitsUnit}</td>
                       <td>{mapping.gain}</td>
                       <td>{mapping.offset}</td>
                       <td>
@@ -167,7 +173,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                           class="btn-remove"
                           onClick={() => handleRemoveMapping(mapping)}
                         >
-                          Remove
+                          {content.removeButton}
                         </button>
                       </td>
                     </tr>
@@ -181,28 +187,28 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
           <div class="add-mapping-section">
             {!showAddForm ? (
               <button class="btn-add" onClick={() => setShowAddForm(true)}>
-                Add CAN Mapping
+                {content.addMappingButton}
               </button>
             ) : (
               <div class="add-mapping-form">
-                <h3>Add New CAN Mapping</h3>
+                <h3>{content.addMappingFormTitle}</h3>
                 <div class="form-row">
                   <label>
-                    Direction:
+                    {content.directionLabel}
                     <select
                       value={formData.isrx ? 'rx' : 'tx'}
                       onChange={(e) => setFormData({ ...formData, isrx: (e.currentTarget as HTMLSelectElement).value === 'rx' })}
                     >
-                      <option value="tx">TX (Transmit)</option>
-                      <option value="rx">RX (Receive)</option>
+                      <option value="tx">{content.directionTx}</option>
+                      <option value="rx">{content.directionRx}</option>
                     </select>
                   </label>
 
                   <label>
-                    CAN ID (hex):
+                    {content.canIdLabel}
                     <input
                       type="text"
-                      placeholder="0x180"
+                      placeholder={content.canIdPlaceholder}
                       value={`0x${formData.id.toString(16).toUpperCase()}`}
                       onChange={(e) => {
                         const value = (e.currentTarget as HTMLInputElement).value
@@ -217,12 +223,12 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
                 <div class="form-row">
                   <label>
-                    Parameter:
+                    {content.parameterLabel}
                     <select
                       value={formData.paramid}
                       onChange={(e) => setFormData({ ...formData, paramid: parseInt((e.currentTarget as HTMLSelectElement).value) })}
                     >
-                      <option value={0}>Select parameter...</option>
+                      <option value={0}>{content.selectParameter}</option>
                       {params && Object.entries(params).map(([key, param]) => (
                         <option key={param.id} value={param.id}>
                           {getParameterDisplayName(key, param)} (ID: {param.id})
@@ -232,7 +238,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                   </label>
 
                   <label>
-                    Bit Position:
+                    {content.bitPositionLabel}
                     <input
                       type="number"
                       min="0"
@@ -243,7 +249,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                   </label>
 
                   <label>
-                    Bit Length:
+                    {content.bitLengthLabel}
                     <input
                       type="number"
                       min="1"
@@ -256,7 +262,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
                 <div class="form-row">
                   <label>
-                    Gain:
+                    {content.gainLabel}
                     <input
                       type="number"
                       step="0.001"
@@ -266,7 +272,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
                   </label>
 
                   <label>
-                    Offset:
+                    {content.offsetLabel}
                     <input
                       type="number"
                       value={formData.offset}
@@ -277,14 +283,14 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
                 <div class="form-actions">
                   <button class="btn-cancel" onClick={() => setShowAddForm(false)}>
-                    Cancel
+                    {content.cancelButton}
                   </button>
                   <button
                     class="btn-save"
                     onClick={handleAddMapping}
                     disabled={formData.paramid === 0}
                   >
-                    Add Mapping
+                    {content.addButton}
                   </button>
                 </div>
               </div>
