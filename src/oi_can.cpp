@@ -1063,12 +1063,12 @@ SetResult RemoveCanMapping(String json){
     // TX mapping (read index 0x3100+)
     writeIndex = SDO_INDEX_MAP_TX + (readIndex - SDO_INDEX_MAP_RD);
   } else {
-    DBG_OUTPUT_PORT.printf("Remove: Invalid index 0x%X\n", readIndex);
+    DBG_OUTPUT_PORT.printf("Remove: Invalid index 0x%lX\n", (unsigned long)readIndex);
     return UnknownIndex;
   }
   
-  DBG_OUTPUT_PORT.printf("Removing mapping: read index 0x%X -> write index 0x%X, subindex %d\n", 
-                         readIndex, writeIndex, doc["subindex"].as<uint8_t>());
+  DBG_OUTPUT_PORT.printf("Removing mapping: read index 0x%lX -> write index 0x%lX, subindex %d\n", 
+                         (unsigned long)readIndex, (unsigned long)writeIndex, doc["subindex"].as<uint8_t>());
 
   setValueSdo(_nodeId, writeIndex, doc["subindex"].as<uint8_t>(), 0U); //Writing 0 to map index removes the mapping
 
