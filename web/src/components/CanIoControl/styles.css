@@ -1,0 +1,179 @@
+.can-io-control {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+}
+
+.can-io-control h3 {
+  margin: 0 0 20px 0;
+  color: #333;
+  font-size: 18px;
+  border-bottom: 2px solid #007bff;
+  padding-bottom: 8px;
+}
+
+.can-io-section {
+  margin-bottom: 20px;
+}
+
+.can-io-section h4 {
+  margin: 0 0 12px 0;
+  color: #555;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.can-io-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.can-io-row label {
+  min-width: 140px;
+  color: #666;
+  font-size: 14px;
+}
+
+.can-io-row input[type="text"],
+.can-io-row input[type="number"] {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 100px;
+}
+
+.can-io-row input[type="range"] {
+  flex: 1;
+  min-width: 200px;
+}
+
+.can-io-row .value {
+  min-width: 50px;
+  font-weight: 600;
+  color: #007bff;
+}
+
+.can-io-row .hint {
+  color: #999;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.can-io-flags {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.can-io-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.can-io-checkbox:hover:not(:has(input:disabled)) {
+  border-color: #007bff;
+  background: #f0f7ff;
+}
+
+.can-io-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.can-io-checkbox input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.can-io-checkbox span {
+  font-size: 14px;
+  color: #333;
+  user-select: none;
+}
+
+.can-io-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #ddd;
+}
+
+.can-io-actions button {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.can-io-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.can-io-actions .start-btn {
+  background: #28a745;
+  color: white;
+}
+
+.can-io-actions .start-btn:hover:not(:disabled) {
+  background: #218838;
+}
+
+.can-io-actions .stop-btn {
+  background: #dc3545;
+  color: white;
+}
+
+.can-io-actions .stop-btn:hover:not(:disabled) {
+  background: #c82333;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #d4edda;
+  color: #155724;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.status-indicator .pulse {
+  width: 10px;
+  height: 10px;
+  background: #28a745;
+  border-radius: 50%;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+input:disabled {
+  background: #e9ecef;
+  cursor: not-allowed;
+}

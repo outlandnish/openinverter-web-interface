@@ -11,6 +11,7 @@ import OTAUpdate from '@components/OTAUpdate'
 import DeviceParameters from '@components/DeviceParameters'
 import CanMappingEditor from '@components/CanMappingEditor'
 import CanMessageSender from '@components/CanMessageSender'
+import CanIoControl from '@components/CanIoControl'
 import Tabs from '@components/Tabs'
 import { useToast } from '@hooks/useToast'
 import { formatParameterValue } from '@/utils/parameterDisplay'
@@ -239,7 +240,10 @@ export default function DeviceDetails() {
             id: 'can-messages',
             label: 'CAN Messages',
             content: routeParams?.serial && savedNodeId > 0 ? (
-              <CanMessageSender serial={routeParams.serial} nodeId={savedNodeId} />
+              <>
+                <CanIoControl serial={routeParams.serial} nodeId={savedNodeId} />
+                <CanMessageSender serial={routeParams.serial} nodeId={savedNodeId} />
+              </>
             ) : (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                 {content.noDataAvailable || 'No data available'}

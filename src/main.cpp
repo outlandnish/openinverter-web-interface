@@ -56,7 +56,9 @@ enum CANCommandType {
   CMD_RENAME_DEVICE,
   CMD_SEND_CAN_MESSAGE,
   CMD_START_CAN_INTERVAL,
-  CMD_STOP_CAN_INTERVAL
+  CMD_STOP_CAN_INTERVAL,
+  CMD_START_CANIO_INTERVAL,
+  CMD_STOP_CANIO_INTERVAL
 };
 
 // Event types from CAN task
@@ -74,7 +76,8 @@ enum CANEventType {
   EVT_DEVICE_DELETED,
   EVT_DEVICE_RENAMED,
   EVT_CAN_MESSAGE_SENT,
-  EVT_CAN_INTERVAL_STATUS
+  EVT_CAN_INTERVAL_STATUS,
+  EVT_CANIO_INTERVAL_STATUS
 };
 
 // Command message structure
@@ -124,6 +127,15 @@ struct CANCommand {
     struct {
       char intervalId[32]; // ID of interval to stop
     } stopCanInterval;
+    struct {
+      uint32_t canId;           // CAN ID (default 0x3F)
+      uint16_t pot;             // Throttle 1 (12 bits, 0-4095)
+      uint16_t pot2;            // Throttle 2 (12 bits, 0-4095)
+      uint8_t canio;            // Digital I/O flags (6 bits)
+      uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
+      uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
+      uint32_t intervalMs;      // Send interval in milliseconds
+    } startCanIoInterval;
   } data;
 };
 
@@ -192,6 +204,10 @@ struct CANEvent {
       char intervalId[32];
       uint32_t intervalMs;
     } canIntervalStatus;
+    struct {
+      bool active;
+      uint32_t intervalMs;
+    } canIoIntervalStatus;
   } data;
 };
 
@@ -225,6 +241,21 @@ struct IntervalCanMessage {
 };
 std::vector<IntervalCanMessage> intervalCanMessages;
 
+// CAN IO interval message sending
+struct CanIoInterval {
+  bool active;
+  uint32_t canId;
+  uint16_t pot;
+  uint16_t pot2;
+  uint8_t canio;
+  uint16_t cruisespeed;
+  uint8_t regenpreset;
+  uint32_t intervalMs;
+  uint32_t lastSentTime;
+  uint8_t sequenceCounter; // 2-bit counter (0-3)
+};
+CanIoInterval canIoInterval = {false, 0x3F, 0, 0, 0, 0, 0, 100, 0, 0};
+
 // Device locking for multi-client support
 std::map<uint8_t, uint32_t> deviceLocks; // nodeId -> WebSocket client ID
 std::map<uint32_t, uint8_t> clientDevices; // WebSocket client ID -> nodeId
@@ -255,6 +286,50 @@ void setStatusLED(Rgb color) {
 
 void statusLEDOff() {
   setStatusLED(LED_OFF);
+}
+
+// CRC8 calculation for CAN IO messages
+uint8_t calculateCRC8(const uint8_t* data, uint8_t length) {
+  uint8_t crc = 0xFF;
+  for (uint8_t i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++) {
+      if (crc & 0x80) {
+        crc = (crc << 1) ^ 0x2F;
+      } else {
+        crc <<= 1;
+      }
+    }
+  }
+  return crc;
+}
+
+// Build CAN IO message with bit packing
+void buildCanIoMessage(uint8_t* msg, uint16_t pot, uint16_t pot2, uint8_t canio,
+                       uint8_t ctr, uint16_t cruisespeed, uint8_t regenpreset) {
+  // Mask inputs to their bit limits
+  pot &= 0x0FFF;          // 12 bits
+  pot2 &= 0x0FFF;         // 12 bits
+  canio &= 0x3F;          // 6 bits
+  ctr &= 0x03;            // 2 bits
+  cruisespeed &= 0x3FFF;  // 14 bits
+  regenpreset &= 0xFF;    // 8 bits
+
+  // data[0] (32 bits): pot (0-11), pot2 (12-23), canio (24-29), ctr1 (30-31)
+  uint32_t data0 = pot | (pot2 << 12) | (canio << 24) | (ctr << 30);
+  msg[0] = data0 & 0xFF;
+  msg[1] = (data0 >> 8) & 0xFF;
+  msg[2] = (data0 >> 16) & 0xFF;
+  msg[3] = (data0 >> 24) & 0xFF;
+
+  // data[1] (32 bits): cruisespeed (0-13), ctr2 (14-15), regenpreset (16-23), crc (24-31)
+  uint32_t data1 = cruisespeed | (ctr << 14) | (regenpreset << 16);
+  msg[4] = data1 & 0xFF;
+  msg[5] = (data1 >> 8) & 0xFF;
+  msg[6] = (data1 >> 16) & 0xFF;
+
+  // Calculate CRC8 over first 6 bytes and place in byte 7
+  msg[7] = calculateCRC8(msg, 6);
 }
 
 // WebSocket broadcast helper
@@ -629,6 +704,48 @@ void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Stop CAN interval command queued (ID=%s)\n", cmd.data.stopCanInterval.intervalId);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN interval command");
+  }
+}
+
+void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+  CANCommand cmd;
+  cmd.type = CMD_START_CANIO_INTERVAL;
+
+  // Parse CAN ID (default 0x3F)
+  cmd.data.startCanIoInterval.canId = doc.containsKey("canId") ? doc["canId"].as<uint32_t>() : 0x3F;
+
+  // Parse throttle values
+  cmd.data.startCanIoInterval.pot = doc.containsKey("pot") ? doc["pot"].as<uint16_t>() : 0;
+  cmd.data.startCanIoInterval.pot2 = doc.containsKey("pot2") ? doc["pot2"].as<uint16_t>() : 0;
+
+  // Parse canio flags
+  cmd.data.startCanIoInterval.canio = doc.containsKey("canio") ? doc["canio"].as<uint8_t>() : 0;
+
+  // Parse cruise speed and regen preset
+  cmd.data.startCanIoInterval.cruisespeed = doc.containsKey("cruisespeed") ? doc["cruisespeed"].as<uint16_t>() : 0;
+  cmd.data.startCanIoInterval.regenpreset = doc.containsKey("regenpreset") ? doc["regenpreset"].as<uint8_t>() : 0;
+
+  // Parse interval (50-500ms recommended, enforce 10-500ms)
+  cmd.data.startCanIoInterval.intervalMs = doc.containsKey("interval") ? doc["interval"].as<uint32_t>() : 100;
+  if (cmd.data.startCanIoInterval.intervalMs < 10) cmd.data.startCanIoInterval.intervalMs = 10;
+  if (cmd.data.startCanIoInterval.intervalMs > 500) cmd.data.startCanIoInterval.intervalMs = 500;
+
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+    DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN IO interval command queued (CAN=0x%03lX, canio=0x%02X, Interval=%lums)\n",
+                           (unsigned long)cmd.data.startCanIoInterval.canId, cmd.data.startCanIoInterval.canio, (unsigned long)cmd.data.startCanIoInterval.intervalMs);
+  } else {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start CAN IO interval command");
+  }
+}
+
+void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+  CANCommand cmd;
+  cmd.type = CMD_STOP_CANIO_INTERVAL;
+
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+    DBG_OUTPUT_PORT.println("[WebSocket] Stop CAN IO interval command queued");
+  } else {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN IO interval command");
   }
 }
 
@@ -1087,6 +1204,10 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleStartCanInterval(client, doc);
       } else if (action == "stopCanInterval") {
         handleStopCanInterval(client, doc);
+      } else if (action == "startCanIoInterval") {
+        handleStartCanIoInterval(client, doc);
+      } else if (action == "stopCanIoInterval") {
+        handleStopCanIoInterval(client, doc);
       } else {
         DBG_OUTPUT_PORT.printf("[WebSocket] Unknown action: %s\n", action.c_str());
       }
@@ -1462,6 +1583,46 @@ void canTask(void* parameter) {
             }
           }
           break;
+
+        case CMD_START_CANIO_INTERVAL:
+          {
+            // Update CAN IO interval state
+            canIoInterval.active = true;
+            canIoInterval.canId = cmd.data.startCanIoInterval.canId;
+            canIoInterval.pot = cmd.data.startCanIoInterval.pot;
+            canIoInterval.pot2 = cmd.data.startCanIoInterval.pot2;
+            canIoInterval.canio = cmd.data.startCanIoInterval.canio;
+            canIoInterval.cruisespeed = cmd.data.startCanIoInterval.cruisespeed;
+            canIoInterval.regenpreset = cmd.data.startCanIoInterval.regenpreset;
+            canIoInterval.intervalMs = cmd.data.startCanIoInterval.intervalMs;
+            canIoInterval.lastSentTime = millis();
+            canIoInterval.sequenceCounter = 0;
+
+            DBG_OUTPUT_PORT.printf("[CAN Task] Started CAN IO interval: CAN=0x%03lX, canio=0x%02X, Interval=%lums\n",
+                                   (unsigned long)canIoInterval.canId, canIoInterval.canio, (unsigned long)canIoInterval.intervalMs);
+
+            // Send status event
+            CANEvent evt;
+            evt.type = EVT_CANIO_INTERVAL_STATUS;
+            evt.data.canIoIntervalStatus.active = true;
+            evt.data.canIoIntervalStatus.intervalMs = canIoInterval.intervalMs;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_STOP_CANIO_INTERVAL:
+          {
+            canIoInterval.active = false;
+            DBG_OUTPUT_PORT.println("[CAN Task] Stopped CAN IO interval");
+
+            // Send status event
+            CANEvent evt;
+            evt.type = EVT_CANIO_INTERVAL_STATUS;
+            evt.data.canIoIntervalStatus.active = false;
+            evt.data.canIoIntervalStatus.intervalMs = 0;
+            xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
       }
     }
 
@@ -1478,6 +1639,22 @@ void canTask(void* parameter) {
         msg.lastSentTime = currentTime;
         OICan::SendCanMessage(msg.canId, msg.data, msg.dataLength);
       }
+    }
+
+    // Send CAN IO interval message
+    if (canIoInterval.active && (currentTime - canIoInterval.lastSentTime) >= canIoInterval.intervalMs) {
+      canIoInterval.lastSentTime = currentTime;
+
+      // Build the CAN IO message with current state and sequence counter
+      uint8_t msgData[8];
+      buildCanIoMessage(msgData, canIoInterval.pot, canIoInterval.pot2, canIoInterval.canio,
+                        canIoInterval.sequenceCounter, canIoInterval.cruisespeed, canIoInterval.regenpreset);
+
+      // Send the message
+      OICan::SendCanMessage(canIoInterval.canId, msgData, 8);
+
+      // Increment sequence counter (0-3)
+      canIoInterval.sequenceCounter = (canIoInterval.sequenceCounter + 1) & 0x03;
     }
 
     // Run CAN processing loop
@@ -2055,6 +2232,14 @@ void processCANEvents() {
         data["intervalId"] = evt.data.canIntervalStatus.intervalId;
         if (evt.data.canIntervalStatus.active) {
           data["intervalMs"] = evt.data.canIntervalStatus.intervalMs;
+        }
+        break;
+
+      case EVT_CANIO_INTERVAL_STATUS:
+        doc["event"] = "canIoIntervalStatus";
+        data["active"] = evt.data.canIoIntervalStatus.active;
+        if (evt.data.canIoIntervalStatus.active) {
+          data["intervalMs"] = evt.data.canIoIntervalStatus.intervalMs;
         }
         break;
 
