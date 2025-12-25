@@ -171,11 +171,19 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
       // Handle schema data response
       else if (message.event === 'paramSchemaData') {
         const nodeId = message.data.nodeId
-        const schema = message.data.schema
+        const rawSchema = message.data.schema
 
         // Check if this response is for a pending request
         if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
           console.log('Received param schema via WebSocket for nodeId:', nodeId)
+
+          // Strip 'value' fields from schema on frontend
+          const schema: ParameterList = {}
+          for (const [key, param] of Object.entries(rawSchema as ParameterList)) {
+            const { value, ...schemaFields } = param
+            schema[key] = schemaFields as any
+          }
+
           pendingSchemaRequestRef.current.resolve(schema)
           pendingSchemaRequestRef.current = null
         }
@@ -197,11 +205,20 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
       // Handle values data response
       else if (message.event === 'paramValuesData') {
         const nodeId = message.data.nodeId
-        const values = message.data.values
+        const rawParams = message.data.rawParams
 
         // Check if this response is for a pending request
         if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
           console.log('Received param values via WebSocket for nodeId:', nodeId)
+
+          // Extract id -> value mapping from raw params on frontend
+          const values: Record<string, number | string> = {}
+          for (const param of Object.values(rawParams as ParameterList)) {
+            if (param.id !== undefined && param.value !== undefined) {
+              values[param.id.toString()] = param.value
+            }
+          }
+
           pendingValuesRequestRef.current.resolve(values)
           pendingValuesRequestRef.current = null
         }

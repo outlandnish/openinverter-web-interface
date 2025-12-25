@@ -918,45 +918,15 @@ void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
     client->text(errorOutput);
     DBG_OUTPUT_PORT.println("[WebSocket] Sent paramSchemaError - device busy");
   } else {
-    // Parse and filter schema using dynamic allocation
-    DynamicJsonDocument* paramsDoc = new DynamicJsonDocument(json.length() + 1024);
-    DeserializationError error = deserializeJson(*paramsDoc, json);
+    DBG_OUTPUT_PORT.printf("[WebSocket] Sending raw JSON as schema (%d bytes)\n", json.length());
 
-    if (error) {
-      DBG_OUTPUT_PORT.printf("[WebSocket] Failed to parse params JSON: %s\n", error.c_str());
-      delete paramsDoc;
-      return;
-    }
-
-    // Create schema by removing 'value' fields
-    DynamicJsonDocument* schemaDoc = new DynamicJsonDocument(json.length());
-    JsonObject schemaObj = schemaDoc->to<JsonObject>();
-
-    for (JsonPair kv : paramsDoc->as<JsonObject>()) {
-      JsonObject paramObj = schemaObj[kv.key()].to<JsonObject>();
-      JsonObject sourceParam = kv.value().as<JsonObject>();
-
-      for (JsonPair field : sourceParam) {
-        if (strcmp(field.key().c_str(), "value") != 0) {
-          paramObj[field.key()] = field.value();
-        }
-      }
-    }
-
-    delete paramsDoc; // Don't need this anymore
-
-    // Build response wrapper using dynamic allocation
-    DynamicJsonDocument* responseDoc = new DynamicJsonDocument(json.length() + 512);
-    (*responseDoc)["event"] = "paramSchemaData";
-    (*responseDoc)["data"]["nodeId"] = nodeId;
-    (*responseDoc)["data"]["schema"] = *schemaDoc;
-
-    String output;
-    serializeJson(*responseDoc, output);
-
-    // Clean up
-    delete schemaDoc;
-    delete responseDoc;
+    // Send raw JSON directly - frontend will strip 'value' fields
+    // This avoids stack overflow from parsing large JSON on ESP32
+    String output = "{\"event\":\"paramSchemaData\",\"data\":{\"nodeId\":";
+    output += nodeId;
+    output += ",\"schema\":";
+    output += json;  // Raw JSON string
+    output += "}}";
 
     client->text(output);
     DBG_OUTPUT_PORT.printf("[WebSocket] Sent param schema (%d bytes)\n", output.length());
@@ -981,44 +951,15 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
     client->text(errorOutput);
     DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - device busy");
   } else {
-    // Parse and extract values using dynamic allocation
-    DynamicJsonDocument* paramsDoc = new DynamicJsonDocument(json.length() + 1024);
-    DeserializationError error = deserializeJson(*paramsDoc, json);
+    DBG_OUTPUT_PORT.printf("[WebSocket] Sending raw JSON for values (%d bytes)\n", json.length());
 
-    if (error) {
-      DBG_OUTPUT_PORT.printf("[WebSocket] Failed to parse params JSON: %s\n", error.c_str());
-      delete paramsDoc;
-      return;
-    }
-
-    // Create values object - much smaller than schema
-    DynamicJsonDocument* valuesDoc = new DynamicJsonDocument(8192);
-    JsonObject valuesObj = valuesDoc->to<JsonObject>();
-
-    // Extract only paramId and value
-    for (JsonPair kv : paramsDoc->as<JsonObject>()) {
-      JsonObject sourceParam = kv.value().as<JsonObject>();
-
-      if (sourceParam.containsKey("id") && sourceParam.containsKey("value")) {
-        int paramId = sourceParam["id"];
-        valuesObj[String(paramId)] = sourceParam["value"];
-      }
-    }
-
-    delete paramsDoc; // Don't need this anymore
-
-    // Build response wrapper using dynamic allocation
-    DynamicJsonDocument* responseDoc = new DynamicJsonDocument(10240);
-    (*responseDoc)["event"] = "paramValuesData";
-    (*responseDoc)["data"]["nodeId"] = nodeId;
-    (*responseDoc)["data"]["values"] = *valuesDoc;
-
-    String output;
-    serializeJson(*responseDoc, output);
-
-    // Clean up
-    delete valuesDoc;
-    delete responseDoc;
+    // Send raw JSON directly - frontend will extract 'id' and 'value' fields
+    // This avoids stack overflow from parsing large JSON on ESP32
+    String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
+    output += nodeId;
+    output += ",\"rawParams\":";
+    output += json;  // Raw JSON string
+    output += "}}";
 
     client->text(output);
     DBG_OUTPUT_PORT.printf("[WebSocket] Sent param values (%d bytes)\n", output.length());
