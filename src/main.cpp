@@ -554,8 +554,8 @@ void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 
   if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Send CAN message command queued (ID=0x%03X, Len=%d)\n",
-                           cmd.data.sendCanMessage.canId, cmd.data.sendCanMessage.dataLength);
+    DBG_OUTPUT_PORT.printf("[WebSocket] Send CAN message command queued (ID=0x%03lX, Len=%d)\n",
+                           (unsigned long)cmd.data.sendCanMessage.canId, cmd.data.sendCanMessage.dataLength);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue send CAN message command");
   }
@@ -605,8 +605,8 @@ void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   if (cmd.data.startCanInterval.intervalMs > 60000) cmd.data.startCanInterval.intervalMs = 60000;
 
   if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN interval command queued (ID=%s, CAN=0x%03X, Interval=%dms)\n",
-                           cmd.data.startCanInterval.intervalId, cmd.data.startCanInterval.canId, cmd.data.startCanInterval.intervalMs);
+    DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN interval command queued (ID=%s, CAN=0x%03lX, Interval=%lums)\n",
+                           cmd.data.startCanInterval.intervalId, (unsigned long)cmd.data.startCanInterval.canId, (unsigned long)cmd.data.startCanInterval.intervalMs);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start CAN interval command");
   }
@@ -1427,8 +1427,8 @@ void canTask(void* parameter) {
             msg.lastSentTime = millis();
             intervalCanMessages.push_back(msg);
 
-            DBG_OUTPUT_PORT.printf("[CAN Task] Started interval message: ID=%s, CAN=0x%03X, Interval=%dms\n",
-                                   msg.id.c_str(), msg.canId, msg.intervalMs);
+            DBG_OUTPUT_PORT.printf("[CAN Task] Started interval message: ID=%s, CAN=0x%03lX, Interval=%lums\n",
+                                   msg.id.c_str(), (unsigned long)msg.canId, (unsigned long)msg.intervalMs);
 
             CANEvent evt;
             evt.type = EVT_CAN_INTERVAL_STATUS;

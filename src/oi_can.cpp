@@ -1127,10 +1127,10 @@ bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength) {
   esp_err_t result = twai_transmit(&frame, pdMS_TO_TICKS(10));
 
   if (result == ESP_OK) {
-    DBG_OUTPUT_PORT.printf("Sent CAN message: ID=0x%03X, Len=%d\n", canId, dataLength);
+    DBG_OUTPUT_PORT.printf("Sent CAN message: ID=0x%03lX, Len=%d\n", (unsigned long)canId, dataLength);
     return true;
   } else {
-    DBG_OUTPUT_PORT.printf("Failed to send CAN message: ID=0x%03X, Error=%d\n", canId, result);
+    DBG_OUTPUT_PORT.printf("Failed to send CAN message: ID=0x%03lX, Error=%d\n", (unsigned long)canId, result);
     return false;
   }
 }
