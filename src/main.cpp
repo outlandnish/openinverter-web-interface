@@ -58,7 +58,8 @@ enum CANCommandType {
   CMD_START_CAN_INTERVAL,
   CMD_STOP_CAN_INTERVAL,
   CMD_START_CANIO_INTERVAL,
-  CMD_STOP_CANIO_INTERVAL
+  CMD_STOP_CANIO_INTERVAL,
+  CMD_UPDATE_CANIO_FLAGS
 };
 
 // Event types from CAN task
@@ -137,6 +138,13 @@ struct CANCommand {
       uint32_t intervalMs;      // Send interval in milliseconds
       bool useCrc;              // Use CRC-32 (true) or counter-only (false)
     } startCanIoInterval;
+    struct {
+      uint16_t pot;             // Throttle 1 (12 bits, 0-4095)
+      uint16_t pot2;            // Throttle 2 (12 bits, 0-4095)
+      uint8_t canio;            // Digital I/O flags (6 bits)
+      uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
+      uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
+    } updateCanIoFlags;
   } data;
 };
 
@@ -761,6 +769,24 @@ void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
+void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc) {
+  CANCommand cmd;
+  cmd.type = CMD_UPDATE_CANIO_FLAGS;
+
+  // Parse values (same as startCanIoInterval)
+  cmd.data.updateCanIoFlags.pot = doc.containsKey("pot") ? doc["pot"].as<uint16_t>() : 0;
+  cmd.data.updateCanIoFlags.pot2 = doc.containsKey("pot2") ? doc["pot2"].as<uint16_t>() : 0;
+  cmd.data.updateCanIoFlags.canio = doc.containsKey("canio") ? doc["canio"].as<uint8_t>() : 0;
+  cmd.data.updateCanIoFlags.cruisespeed = doc.containsKey("cruisespeed") ? doc["cruisespeed"].as<uint16_t>() : 0;
+  cmd.data.updateCanIoFlags.regenpreset = doc.containsKey("regenpreset") ? doc["regenpreset"].as<uint8_t>() : 0;
+
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+    DBG_OUTPUT_PORT.printf("[WebSocket] Update CAN IO flags command queued (canio=0x%02X)\n", cmd.data.updateCanIoFlags.canio);
+  } else {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue update CAN IO flags command");
+  }
+}
+
 void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_START_SPOT_VALUES;
@@ -1220,6 +1246,8 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleStartCanIoInterval(client, doc);
       } else if (action == "stopCanIoInterval") {
         handleStopCanIoInterval(client, doc);
+      } else if (action == "updateCanIoFlags") {
+        handleUpdateCanIoFlags(client, doc);
       } else {
         DBG_OUTPUT_PORT.printf("[WebSocket] Unknown action: %s\n", action.c_str());
       }
@@ -1636,6 +1664,21 @@ void canTask(void* parameter) {
             evt.data.canIoIntervalStatus.active = false;
             evt.data.canIoIntervalStatus.intervalMs = 0;
             xQueueSend(canEventQueue, &evt, 0);
+          }
+          break;
+
+        case CMD_UPDATE_CANIO_FLAGS:
+          {
+            if (canIoInterval.active) {
+              canIoInterval.pot = cmd.data.updateCanIoFlags.pot;
+              canIoInterval.pot2 = cmd.data.updateCanIoFlags.pot2;
+              canIoInterval.canio = cmd.data.updateCanIoFlags.canio;
+              canIoInterval.cruisespeed = cmd.data.updateCanIoFlags.cruisespeed;
+              canIoInterval.regenpreset = cmd.data.updateCanIoFlags.regenpreset;
+              DBG_OUTPUT_PORT.printf("[CAN Task] Updated CAN IO flags (canio=0x%02X)\n", canIoInterval.canio);
+            } else {
+              DBG_OUTPUT_PORT.println("[CAN Task] Ignoring update - CAN IO interval not active");
+            }
           }
           break;
       }
