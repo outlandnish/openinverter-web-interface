@@ -918,14 +918,15 @@ void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
     client->text(errorOutput);
     DBG_OUTPUT_PORT.println("[WebSocket] Sent paramSchemaError - device busy");
   } else {
-    // Build response with schema inline to avoid extra JsonDocument allocation
-    String output = "{\"event\":\"paramSchemaData\",\"data\":{\"nodeId\":";
-    output += String(nodeId);
-    output += ",\"schema\":";
-
-    // Parse and filter schema in place using dynamic allocation
+    // Parse and filter schema using dynamic allocation
     DynamicJsonDocument* paramsDoc = new DynamicJsonDocument(json.length() + 1024);
-    deserializeJson(*paramsDoc, json);
+    DeserializationError error = deserializeJson(*paramsDoc, json);
+
+    if (error) {
+      DBG_OUTPUT_PORT.printf("[WebSocket] Failed to parse params JSON: %s\n", error.c_str());
+      delete paramsDoc;
+      return;
+    }
 
     // Create schema by removing 'value' fields
     DynamicJsonDocument* schemaDoc = new DynamicJsonDocument(json.length());
@@ -942,13 +943,20 @@ void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
       }
     }
 
-    // Serialize schema
-    serializeJson(*schemaDoc, output);
-    output += "}}";
+    delete paramsDoc; // Don't need this anymore
+
+    // Build response wrapper using dynamic allocation
+    DynamicJsonDocument* responseDoc = new DynamicJsonDocument(json.length() + 512);
+    (*responseDoc)["event"] = "paramSchemaData";
+    (*responseDoc)["data"]["nodeId"] = nodeId;
+    (*responseDoc)["data"]["schema"] = *schemaDoc;
+
+    String output;
+    serializeJson(*responseDoc, output);
 
     // Clean up
-    delete paramsDoc;
     delete schemaDoc;
+    delete responseDoc;
 
     client->text(output);
     DBG_OUTPUT_PORT.printf("[WebSocket] Sent param schema (%d bytes)\n", output.length());
@@ -973,14 +981,15 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
     client->text(errorOutput);
     DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - device busy");
   } else {
-    // Build response with values inline to avoid extra JsonDocument allocation
-    String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
-    output += String(nodeId);
-    output += ",\"values\":";
-
     // Parse and extract values using dynamic allocation
     DynamicJsonDocument* paramsDoc = new DynamicJsonDocument(json.length() + 1024);
-    deserializeJson(*paramsDoc, json);
+    DeserializationError error = deserializeJson(*paramsDoc, json);
+
+    if (error) {
+      DBG_OUTPUT_PORT.printf("[WebSocket] Failed to parse params JSON: %s\n", error.c_str());
+      delete paramsDoc;
+      return;
+    }
 
     // Create values object - much smaller than schema
     DynamicJsonDocument* valuesDoc = new DynamicJsonDocument(8192);
@@ -996,13 +1005,20 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
       }
     }
 
-    // Serialize values
-    serializeJson(*valuesDoc, output);
-    output += "}}";
+    delete paramsDoc; // Don't need this anymore
+
+    // Build response wrapper using dynamic allocation
+    DynamicJsonDocument* responseDoc = new DynamicJsonDocument(10240);
+    (*responseDoc)["event"] = "paramValuesData";
+    (*responseDoc)["data"]["nodeId"] = nodeId;
+    (*responseDoc)["data"]["values"] = *valuesDoc;
+
+    String output;
+    serializeJson(*responseDoc, output);
 
     // Clean up
-    delete paramsDoc;
     delete valuesDoc;
+    delete responseDoc;
 
     client->text(output);
     DBG_OUTPUT_PORT.printf("[WebSocket] Sent param values (%d bytes)\n", output.length());
