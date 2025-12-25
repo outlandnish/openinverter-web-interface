@@ -20,6 +20,7 @@ export interface DeviceContextValue {
   // Scanning state
   scanning: boolean
   devicesSeenInCurrentScan: Set<string>
+  devicesSeenInPreviousCycle: Set<string>
   lastScanStartTime: number
   currentScanNode: number | null
   scanRange: { start: number; end: number } | null
@@ -50,7 +51,9 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
   const [lastConnectedSerial, setLastConnectedSerial] = useState<string | null>(null)
   const [lastScanStartTime, setLastScanStartTime] = useState<number>(0)
   const [devicesSeenInCurrentScan, setDevicesSeenInCurrentScan] = useState<Set<string>>(new Set())
+  const [devicesSeenInPreviousCycle, setDevicesSeenInPreviousCycle] = useState<Set<string>>(new Set())
   const [currentScanNode, setCurrentScanNode] = useState<number | null>(null)
+  const [previousScanNode, setPreviousScanNode] = useState<number | null>(null)
   const [scanRange, setScanRange] = useState<{ start: number; end: number } | null>(null)
 
   // Use shared WebSocket connection
@@ -111,15 +114,40 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
             setLastScanStartTime(scanStartTime)
             // Clear the devices seen in current scan
             setDevicesSeenInCurrentScan(new Set())
+            setDevicesSeenInPreviousCycle(new Set())
+            setPreviousScanNode(null)
           } else {
             // Clear scan progress when scan stops
             setCurrentScanNode(null)
+            setPreviousScanNode(null)
             setScanRange(null)
+            // Clear devices seen when scan completes
+            setDevicesSeenInCurrentScan(new Set())
+            setDevicesSeenInPreviousCycle(new Set())
           }
           break
 
         case 'scanProgress':
-          setCurrentScanNode(message.data.currentNode)
+          const currentNode = message.data.currentNode
+          const startNode = message.data.startNode
+
+          // Detect cycle wrap: current node went back to start
+          setPreviousScanNode(prevNode => {
+            if (prevNode !== null && currentNode <= startNode && prevNode > startNode) {
+              // Cycle completed, move current to previous and start new cycle
+              console.log('[DeviceContext] Scan cycle completed, starting new cycle')
+              setDevicesSeenInCurrentScan(current => {
+                console.log('Previous cycle devices:', Array.from(current))
+                // Move current to previous
+                setDevicesSeenInPreviousCycle(new Set(current))
+                // Start new cycle
+                return new Set()
+              })
+            }
+            return currentNode
+          })
+
+          setCurrentScanNode(currentNode)
           setScanRange({
             start: message.data.startNode,
             end: message.data.endNode
@@ -233,14 +261,12 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
   }, [sendMessage])
 
   const isDeviceOnline = useCallback((serial: string): boolean => {
-    // Device is online if:
-    // 1. It was seen in the current scan, OR
-    // 2. It has a recent lastSeen timestamp (within last 30 seconds)
-
-    if (devicesSeenInCurrentScan.has(serial)) {
-      return true
+    // During active scanning, device is online if seen in current or previous cycle
+    if (scanning) {
+      return devicesSeenInCurrentScan.has(serial) || devicesSeenInPreviousCycle.has(serial)
     }
 
+    // When not scanning, use timestamp-based check
     const device = savedDevices[serial]
     if (!device || !device.lastSeen) {
       return false
@@ -251,7 +277,7 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
     const timeSinceLastSeen = now - device.lastSeen
 
     return timeSinceLastSeen < ONLINE_THRESHOLD_MS
-  }, [devicesSeenInCurrentScan, savedDevices])
+  }, [scanning, devicesSeenInCurrentScan, devicesSeenInPreviousCycle, savedDevices])
 
   const deleteDevice = useCallback((serial: string) => {
     // Send via WebSocket
@@ -297,6 +323,7 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
     mergedDevices: mergedDevices(),
     scanning,
     devicesSeenInCurrentScan,
+    devicesSeenInPreviousCycle,
     lastScanStartTime,
     currentScanNode,
     scanRange,

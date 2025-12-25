@@ -4,6 +4,7 @@ import { useIntlayer } from 'preact-intlayer'
 import { api, DeviceSettings } from '@api/inverter'
 import Layout from '@components/Layout'
 import DisconnectedState from '@components/DisconnectedState'
+import { LoadingSpinner } from '@components/LoadingSpinner'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useToast } from '@hooks/useToast'
 
@@ -71,7 +72,7 @@ export default function Settings() {
     return (
       <Layout>
         <div class="container">
-          <div class="loading">{content.loadingSettings}</div>
+          <LoadingSpinner size="large" label={content.loadingSettings} />
         </div>
       </Layout>
     )

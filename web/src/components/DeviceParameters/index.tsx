@@ -6,6 +6,7 @@ import { useToast } from '@hooks/useToast'
 import { api } from '@api/inverter'
 import ParameterCategory from './ParameterCategory'
 import { ProgressBar } from '@components/ProgressBar'
+import { LoadingSpinner } from '@components/LoadingSpinner'
 
 interface DeviceParametersProps {
   serial: string
@@ -255,13 +256,17 @@ export default function DeviceParameters({
       <section id="device-parameters" class="card">
         <h2 class="section-header">{content.deviceParameters}</h2>
         <div class="loading">
-          <div style={{ width: '100%', maxWidth: '500px' }}>
-            <ProgressBar
-              progress={downloadProgress}
-              label={label}
-              indeterminate={isIndeterminate}
-            />
-          </div>
+          {isIndeterminate ? (
+            <LoadingSpinner size="large" label={label} />
+          ) : (
+            <div style={{ width: '100%', maxWidth: '500px' }}>
+              <ProgressBar
+                progress={downloadProgress}
+                label={label}
+                indeterminate={false}
+              />
+            </div>
+          )}
         </div>
       </section>
     )
@@ -271,7 +276,9 @@ export default function DeviceParameters({
     return (
       <section id="device-parameters" class="card">
         <h2 class="section-header">{content.deviceParameters}</h2>
-        <div class="error-message">No parameters loaded</div>
+        <div class="loading">
+          <LoadingSpinner size="large" label="Waiting for device connection..." />
+        </div>
       </section>
     )
   }

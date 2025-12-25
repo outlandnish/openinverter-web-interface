@@ -309,6 +309,26 @@ const deviceDetailsContent = {
         de: 'Fehler beim Aktualisieren von {{key}}: {{error}}',
       })
     ),
+    resetDevice: t({
+      en: 'Reset Device',
+      de: 'Gerät zurücksetzen',
+    }),
+    resetDeviceConfirm: t({
+      en: 'Are you sure you want to reset the device? The device will restart and you may need to reconnect.',
+      de: 'Sind Sie sicher, dass Sie das Gerät zurücksetzen möchten? Das Gerät wird neu gestartet und Sie müssen möglicherweise die Verbindung wiederherstellen.',
+    }),
+    deviceResetSuccess: t({
+      en: 'Device reset command sent successfully',
+      de: 'Befehl zum Zurücksetzen des Geräts erfolgreich gesendet',
+    }),
+    deviceResetFailed: t({
+      en: 'Failed to reset device',
+      de: 'Fehler beim Zurücksetzen des Geräts',
+    }),
+    noDataAvailable: t({
+      en: 'No data available',
+      de: 'Keine Daten verfügbar',
+    }),
   },
 } satisfies DeclarationContent
 

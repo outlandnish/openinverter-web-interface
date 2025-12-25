@@ -6,6 +6,7 @@ import DeviceNaming from '@components/DeviceNaming'
 import DeviceListItem from '@components/DeviceListItem'
 import DisconnectedState from '@components/DisconnectedState'
 import Layout from '@components/Layout'
+import { LoadingSpinner } from '@components/LoadingSpinner'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceContext, type MergedDevice } from '@contexts/DeviceContext'
 import { api } from '@api/inverter'
@@ -36,6 +37,14 @@ export default function SystemOverview() {
     deleteDevice,
     renameDevice
   } = useDeviceContext()
+
+  // Auto-start scanning when page loads and WebSocket is connected
+  useEffect(() => {
+    if (isConnected && !scanning && configuredScanRange) {
+      console.log('[SystemOverview] Auto-starting scan on mount')
+      startScan(configuredScanRange.start, configuredScanRange.end)
+    }
+  }, [isConnected, configuredScanRange.start, configuredScanRange.end])
 
   // Stop scanning when component unmounts (navigating away)
   useEffect(() => {
@@ -148,9 +157,6 @@ export default function SystemOverview() {
 
         <DeviceScanner
           scanning={scanning}
-          onScan={handleScan}
-          deviceCount={mergedDevices.length}
-          disabled={!isConnected}
           currentScanNode={currentScanNode}
           {...(activeScanRange && { scanRange: activeScanRange })}
         />
@@ -162,7 +168,7 @@ export default function SystemOverview() {
             <div class="empty-state-centered">
               {scanning ? (
               <>
-                <div class="spinner-large"></div>
+                <LoadingSpinner size="large" />
                 <p class="empty-state-text">{content.scanningForDevices}</p>
                 <p class="empty-state-hint">{content.searchingNodes}</p>
               </>
@@ -174,12 +180,6 @@ export default function SystemOverview() {
                 </svg>
                 <p class="empty-state-text">{content.noDevicesFound}</p>
                 <p class="empty-state-hint">{content.startScanHint}</p>
-                <button class="btn-with-icon" onClick={handleScan}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                  </svg>
-                  <span>{content.scanDevices}</span>
-                </button>
               </>
               )}
             </div>

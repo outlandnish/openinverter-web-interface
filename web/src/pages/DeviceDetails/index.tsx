@@ -13,6 +13,7 @@ import CanMappingEditor from '@components/CanMappingEditor'
 import CanMessageSender from '@components/CanMessageSender'
 import CanIoControl from '@components/CanIoControl'
 import Tabs from '@components/Tabs'
+import { LoadingSpinner } from '@components/LoadingSpinner'
 import { useToast } from '@hooks/useToast'
 import { formatParameterValue } from '@/utils/parameterDisplay'
 import { api } from '@/api/inverter'
@@ -47,7 +48,7 @@ function DeviceDetailsContent() {
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
 
   // Use shared device details context
-  const { monitoring, canIo, setStreaming, clearHistoricalData, setCanIoActive } = useDeviceDetailsContext()
+  const { monitoring, canIo, setStreaming, clearHistoricalData, setCanIoActive, setConnectedSerial } = useDeviceDetailsContext()
 
   // Disconnect from device and stop all activities when component unmounts (navigating away)
   useEffect(() => {
@@ -74,6 +75,9 @@ function DeviceDetailsContent() {
 
       switch (message.event) {
         case 'connected':
+          // Always track which device is connected, regardless of which one we expected
+          setConnectedSerial(message.data.serial)
+          // Only set deviceConnected if it matches what we're viewing
           if (message.data.serial === routeParams?.serial) {
             setDeviceConnected(true)
           }
@@ -81,6 +85,12 @@ function DeviceDetailsContent() {
 
         case 'disconnected':
           setDeviceConnected(false)
+          setConnectedSerial(null)
+          // Stop streaming when disconnected
+          if (monitoring.streaming) {
+            setStreaming(false)
+            clearHistoricalData()
+          }
           showWarning(content.deviceDisconnected)
           break
 
@@ -160,6 +170,36 @@ function DeviceDetailsContent() {
     sendMessage('setNodeId', { id })
   }
 
+  const handleResetDevice = () => {
+    if (confirm(content.resetDeviceConfirm.value)) {
+      try {
+        // Stop all ongoing activities
+        sendMessage('stopSpotValues')
+        setStreaming(false)
+        clearHistoricalData()
+
+        // Stop CAN IO if active
+        sendMessage('stopCanIoInterval', {})
+        setCanIoActive(false)
+
+        // Send reset command
+        sendMessage('resetDevice', {})
+        showSuccess(content.deviceResetSuccess.value)
+
+        // Set loading state while device resets
+        setLoading(true)
+        setDeviceConnected(false)
+
+        // After a timeout, reload settings
+        setTimeout(() => {
+          loadSettings()
+        }, 3000)
+      } catch (error) {
+        showWarning(content.deviceResetFailed.value)
+      }
+    }
+  }
+
   return (
     <Layout currentSerial={routeParams?.serial}>
       <div class="container">
@@ -169,44 +209,78 @@ function DeviceDetailsContent() {
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            minHeight: '400px',
-            gap: '1rem'
+            minHeight: '400px'
           }}>
-            <div class="spinner" style={{
-              border: '4px solid rgba(0, 0, 0, 0.1)',
-              borderTop: '4px solid #007bff',
-              borderRadius: '50%',
-              width: '48px',
-              height: '48px',
-              animation: 'spin 1s linear infinite'
-            }} />
-            <div class="loading-text" style={{ fontSize: '1.2rem', color: '#666' }}>
-              {content.connectingToDevice}
-            </div>
+            <LoadingSpinner size="large" label={content.connectingToDevice} />
           </div>
         ) : (
           <>
             <div class="page-header">
-              <div class="page-title-row">
+              <div class="page-title-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h1 class="page-title">{deviceName || routeParams?.serial || content.deviceMonitor}</h1>
                 <ConnectionStatus
                   connected={deviceConnected}
                   label={deviceConnected ? content.connected : content.disconnected}
                 />
               </div>
-              <div class="device-info-inline">
-                <div class="info-badge">
-                  <span class="info-label">{content.serial}</span>
-                  <span class="info-value">{routeParams?.serial || content.unknown}</span>
+              <div class="device-info-inline" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                  <div class="info-badge">
+                    <span class="info-label">{content.serial}</span>
+                    <span class="info-value">{routeParams?.serial || content.unknown}</span>
+                  </div>
+                  <div class="info-badge">
+                    <span class="info-label">{content.nodeId}</span>
+                    <span class="info-value">{nodeId || 'N/A'}</span>
+                  </div>
+                  <div class="info-badge">
+                    <span class="info-label">{content.firmware}</span>
+                    <span class="info-value">{firmwareVersion || content.unknown}</span>
+                  </div>
                 </div>
-                <div class="info-badge">
-                  <span class="info-label">{content.nodeId}</span>
-                  <span class="info-value">{nodeId || 'N/A'}</span>
-                </div>
-                <div class="info-badge">
-                  <span class="info-label">{content.firmware}</span>
-                  <span class="info-value">{firmwareVersion || content.unknown}</span>
-                </div>
+                <button
+                  class="icon-button reset-button"
+                  onClick={handleResetDevice}
+                  disabled={!deviceConnected}
+                  title={content.resetDevice.value}
+                  style={{
+                    width: '2.5rem',
+                    height: '2.5rem',
+                    padding: '0.5rem',
+                    border: 'none',
+                    borderRadius: '0.5rem',
+                    background: 'var(--oi-beige)',
+                    color: 'var(--text-primary)',
+                    cursor: deviceConnected ? 'pointer' : 'not-allowed',
+                    opacity: deviceConnected ? 1 : 0.5,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (deviceConnected) {
+                      e.currentTarget.style.background = '#f5e5d3'
+                      e.currentTarget.style.transform = 'scale(1.05)'
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--oi-beige)'
+                    e.currentTarget.style.transform = 'scale(1)'
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    style={{ width: '1.25rem', height: '1.25rem' }}
+                  >
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                  </svg>
+                </button>
               </div>
             </div>
 

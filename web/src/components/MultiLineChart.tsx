@@ -14,6 +14,7 @@ interface MultiLineChartProps {
   series: DataSeries[]
   width?: number
   height?: number
+  showLegend?: boolean
 }
 
 const COLORS = [
@@ -25,12 +26,25 @@ const COLORS = [
   '#00BCD4', // Cyan
   '#FFEB3B', // Yellow
   '#795548', // Brown
+  '#E91E63', // Pink
+  '#3F51B5', // Indigo
+  '#009688', // Teal
+  '#FF5722', // Deep Orange
+  '#8BC34A', // Light Green
+  '#673AB7', // Deep Purple
+  '#FFC107', // Amber
+  '#607D8B', // Blue Grey
+  '#00E676', // Bright Green
+  '#FF4081', // Hot Pink
+  '#536DFE', // Bright Blue
+  '#FFD740', // Bright Yellow
 ]
 
 export default function MultiLineChart({
   series,
   width = 800,
-  height = 400
+  height = 400,
+  showLegend = true
 }: MultiLineChartProps) {
   if (series.length === 0 || series.every(s => s.data.length === 0)) {
     return (
@@ -40,7 +54,7 @@ export default function MultiLineChart({
     )
   }
 
-  const padding = { top: 20, right: 100, bottom: 60, left: 70 }
+  const padding = { top: 10, right: showLegend ? 100 : 15, bottom: 40, left: 35 }
   const chartWidth = width - padding.left - padding.right
   const chartHeight = height - padding.top - padding.bottom
 
@@ -225,7 +239,7 @@ export default function MultiLineChart({
         })}
 
         {/* Legend */}
-        {series.map((s, index) => {
+        {showLegend && series.map((s, index) => {
           const color = s.color || COLORS[index % COLORS.length]
           const yPos = padding.top + index * 25
 

@@ -3,6 +3,7 @@ import { useIntlayer } from 'preact-intlayer'
 import { useCanMappings, CanMapping } from '@hooks/useCanMappings'
 import { useParams } from '@hooks/useParams'
 import { useToast } from '@hooks/useToast'
+import { LoadingSpinner } from '@components/LoadingSpinner'
 import { getParameterDisplayName } from '@utils/paramStorage'
 import './styles.css'
 
@@ -87,7 +88,7 @@ export default function CanMappingEditor({ serial, nodeId }: CanMappingEditorPro
 
       {loading && (
         <div class="loading">
-          <p>{content.loading}</p>
+          <LoadingSpinner size="medium" label={content.loading} />
         </div>
       )}
 

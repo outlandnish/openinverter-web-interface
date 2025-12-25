@@ -65,6 +65,7 @@
 
 .tab-button.active:hover {
   background: var(--oi-blue);
+  color: white;
 }
 
 .tab-button.disabled {

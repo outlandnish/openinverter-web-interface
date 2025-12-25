@@ -900,6 +900,26 @@ void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.printf("[WebSocket] Sent reload response (success=%d)\n", success);
 }
 
+void handleResetDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Reset device request");
+
+  bool success = OICan::ResetDevice();
+
+  JsonDocument responseDoc;
+  if (success) {
+    responseDoc["event"] = "deviceReset";
+    responseDoc["data"]["message"] = "Device reset command sent";
+  } else {
+    responseDoc["event"] = "deviceResetError";
+    responseDoc["data"]["error"] = "Device busy or not connected";
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+  DBG_OUTPUT_PORT.printf("[WebSocket] Sent reset response (success=%d)\n", success);
+}
+
 void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Get param schema request for nodeId: %d\n", nodeId);
@@ -1259,6 +1279,8 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleGetParamValues(client, doc);
       } else if (action == "reloadParams") {
         handleReloadParams(client, doc);
+      } else if (action == "resetDevice") {
+        handleResetDevice(client, doc);
       } else if (action == "disconnect") {
         handleDisconnect(client, doc);
       } else if (action == "getCanMappings") {

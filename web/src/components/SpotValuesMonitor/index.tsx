@@ -3,10 +3,10 @@ import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
-import MultiLineChart, { COLORS } from '@components/MultiLineChart'
+import MultiLineChart from '@components/MultiLineChart'
+import { LoadingSpinner } from '@components/LoadingSpinner'
 import { convertSpotValue } from '@utils/spotValueConversions'
 import { formatParameterValue } from '@utils/parameterDisplay'
-import { ProgressBar } from '@components/ProgressBar'
 
 const MAX_HISTORY_POINTS = 100
 
@@ -49,18 +49,46 @@ export default function SpotValuesMonitor({
     setHistoricalData,
     clearHistoricalData,
     setSelectedParams,
-    setChartParams,
-    setConnectedSerial,
   } = useDeviceDetailsContext()
 
   // Destructure monitoring state for easier access
-  const { streaming, interval, spotValues, historicalData, selectedParams, chartParams, connectedSerial } = monitoring
+  const { streaming, interval, spotValues, historicalData, selectedParams, connectedSerial } = monitoring
 
   // Load device parameters using explicit nodeId for multi-client support
-  const { params, loading: paramsLoading, getDisplayName, downloadProgress } = useParams(serial, nodeId)
+  const { params, loading: paramsLoading, getDisplayName } = useParams(serial, nodeId)
 
   // WebSocket connection
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
+
+  // Helper function to get consistent color for a parameter
+  const getColorForParam = (key: string): string => {
+    // Simple hash function to generate consistent RGB color
+    let hash = 0
+    for (let i = 0; i < key.length; i++) {
+      hash = ((hash << 5) - hash) + key.charCodeAt(i)
+      hash = hash & hash // Convert to 32-bit integer
+    }
+
+    // Generate RGB values from hash, ensuring vibrant, visible colors
+    // Use different bit ranges for each color component
+    const r = (hash & 0xFF0000) >>> 16
+    const g = (hash & 0x00FF00) >>> 8
+    const b = hash & 0x0000FF
+
+    // Map values to range 60-200 to avoid colors that are too light or too dark
+    const normalize = (val: number) => 60 + (val / 255) * 140
+
+    // Ensure at least one component is in the darker range for contrast
+    const values = [normalize(r), normalize(g), normalize(b)]
+
+    // If all values are too high (too light), darken the lowest one
+    if (values.every(v => v > 150)) {
+      const minIndex = values.indexOf(Math.min(...values))
+      values[minIndex] = Math.max(60, values[minIndex] - 80)
+    }
+
+    return `rgb(${Math.round(values[0])}, ${Math.round(values[1])}, ${Math.round(values[2])})`
+  }
 
   // Subscribe to WebSocket messages
   useEffect(() => {
@@ -68,22 +96,6 @@ export default function SpotValuesMonitor({
       console.log('WebSocket event:', message.event, message.data)
 
       switch (message.event) {
-        case 'connected':
-          // Track which device is currently connected
-          setConnectedSerial(message.data.serial)
-          console.log('[SpotValuesMonitor] Device connected:', message.data.serial)
-          break
-
-        case 'disconnected':
-          setConnectedSerial(null)
-          // Stop streaming when disconnected
-          if (streaming) {
-            setStreaming(false)
-            clearHistoricalData()
-          }
-          console.log('[SpotValuesMonitor] Device disconnected')
-          break
-
         case 'spotValuesStatus':
           setStreaming(message.data.active)
           if (message.data.interval) {
@@ -155,47 +167,30 @@ export default function SpotValuesMonitor({
     return unsubscribe
   }, [subscribe, params, serial, connectedSerial, streaming])
 
-  // Auto-select all spot values (non-params) on load
+  // Auto-start monitoring ALL spot values when ready
   useEffect(() => {
-    if (params && selectedParams.size === 0) {
+    const deviceMatches = serial && normalizeSerial(connectedSerial) === normalizeSerial(serial)
+    const ready = params && deviceMatches && isConnected && !streaming
+
+    if (ready) {
+      // Get all spot value parameter IDs (non-params)
       const spotParamKeys = Object.keys(params).filter(key => !params[key].isparam)
-      setSelectedParams(new Set(spotParamKeys))
-    }
-  }, [params])
-
-  // Note: Removed cleanup that stops streaming on unmount
-  // Streaming state now persists in context across tab switches
-
-  const handleStartStop = () => {
-    if (streaming) {
-      // Stop streaming
-      sendMessage('stopSpotValues')
-    } else {
-      // CRITICAL: Verify correct device is connected before starting streaming
-      if (serial && normalizeSerial(connectedSerial) !== normalizeSerial(serial)) {
-        alert(content.wrongDeviceAlert({ serial, connectedSerial: connectedSerial || 'none' }))
-        return
-      }
-
-      // Start streaming
-      if (selectedParams.size === 0) {
-        alert(content.selectAtLeastOne)
-        return
-      }
-
-      // Convert param keys to IDs (use id or i field)
-      const paramIds = Array.from(selectedParams)
-        .map(key => params?.[key]?.id || params?.[key]?.i)
+      const paramIds = spotParamKeys
+        .map(key => params[key]?.id || params[key]?.i)
         .filter(id => id !== undefined) as number[]
 
-      sendMessage('startSpotValues', {
-        paramIds,
-        interval
-      })
+      if (paramIds.length > 0) {
+        console.log('[SpotValuesMonitor] Auto-starting monitoring with ALL', paramIds.length, 'spot values')
+        sendMessage('startSpotValues', {
+          paramIds,
+          interval
+        })
+      }
     }
-  }
+  }, [params, serial, connectedSerial, isConnected, streaming])
 
   const handleParamToggle = (paramKey: string) => {
+    // Toggle chart visibility only (streaming is always active for all params)
     setSelectedParams(prev => {
       const newSelected = new Set(prev)
       if (newSelected.has(paramKey)) {
@@ -207,43 +202,46 @@ export default function SpotValuesMonitor({
     })
   }
 
-  const handleSelectAll = () => {
-    if (params) {
-      const allKeys = Object.keys(params).filter(key => !params[key].isparam)
-      setSelectedParams(new Set(allKeys))
+  const handleClearData = () => {
+    clearHistoricalData()
+  }
+
+  const handleIntervalChange = (newInterval: number) => {
+    setInterval(newInterval)
+
+    // If streaming, restart with new interval
+    if (streaming && params) {
+      const spotParamKeys = Object.keys(params).filter(key => !params[key].isparam)
+      const paramIds = spotParamKeys
+        .map(key => params[key]?.id || params[key]?.i)
+        .filter(id => id !== undefined) as number[]
+
+      if (paramIds.length > 0) {
+        console.log('[SpotValuesMonitor] Restarting monitoring with new interval:', newInterval)
+        sendMessage('startSpotValues', {
+          paramIds,
+          interval: newInterval
+        })
+      }
     }
   }
 
-  const handleSelectNone = () => {
-    setSelectedParams(new Set())
-  }
-
-  const handleChartParamToggle = (paramKey: string) => {
-    setChartParams(prev => {
-      const newChartParams = new Set(prev)
-      if (newChartParams.has(paramKey)) {
-        newChartParams.delete(paramKey)
-      } else {
-        newChartParams.add(paramKey)
-      }
-      return newChartParams
-    })
-  }
-
-  if (paramsLoading) {
+  // Only show loading screen on initial load (when params don't exist yet)
+  if (paramsLoading && !params) {
     return (
-      <div class="loading">
-        <div style={{ width: '100%', maxWidth: '500px' }}>
-          <ProgressBar
-            progress={downloadProgress}
-            label={downloadProgress > 0 ? content.downloadingParameters : content.loadingParameters}
-          />
-          {serial && connectedSerial && normalizeSerial(connectedSerial) !== normalizeSerial(serial) && (
-            <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404' }}>
-              {content.loadingWrongDeviceWarningPrefix} <strong>{connectedSerial}</strong>{content.loadingWrongDeviceWarningSuffix} <strong>{serial}</strong>{content.loadingWrongDeviceWarningEnd}
-            </div>
-          )}
-        </div>
+      <div class="loading" style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '300px'
+      }}>
+        <LoadingSpinner size="large" label={content.loadingParameters} />
+        {serial && connectedSerial && normalizeSerial(connectedSerial) !== normalizeSerial(serial) && (
+          <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404', maxWidth: '500px' }}>
+            {content.loadingWrongDeviceWarningPrefix} <strong>{connectedSerial}</strong>{content.loadingWrongDeviceWarningEnd}
+          </div>
+        )}
       </div>
     )
   }
@@ -262,7 +260,7 @@ export default function SpotValuesMonitor({
   const categories = new Map<string, Array<[string, typeof params[string]]>>()
 
   spotParams.forEach(([key, param]) => {
-    const category = param.category || 'Other'
+    const category = param.category || 'Spot Values'
     if (!categories.has(category)) {
       categories.set(category, [])
     }
@@ -297,99 +295,19 @@ export default function SpotValuesMonitor({
           <input
             type="number"
             value={interval}
-            onInput={(e) => setInterval(parseInt((e.target as HTMLInputElement).value))}
+            onInput={(e) => handleIntervalChange(parseInt((e.target as HTMLInputElement).value))}
             min="100"
             max="10000"
             step="100"
-            disabled={streaming}
           />
         </div>
 
         <div class="button-group">
-          <button
-            class={streaming ? "btn-secondary" : "btn-primary"}
-            onClick={handleStartStop}
-            disabled={!isConnected || !!wrongDeviceConnected}
-            title={wrongDeviceConnected ? 'Cannot stream - wrong device connected' : ''}
-          >
-            {streaming ? <>⏸ {content.stopMonitoring}</> : <>▶ {content.startMonitoring}</>}
+          <button class="btn-secondary" onClick={handleClearData}>
+            Clear Data
           </button>
-          {!streaming && (
-            <>
-              <button class="btn-secondary" onClick={handleSelectAll}>
-                {content.selectAll}
-              </button>
-              <button class="btn-secondary" onClick={handleSelectNone}>
-                {content.selectNone}
-              </button>
-            </>
-          )}
         </div>
       </div>
-
-      {streaming && (
-        <div class="streaming-indicator">
-          <span class="pulse-dot"></span>
-          {content.streamingStatus({ count: selectedParams.size, interval })}
-        </div>
-      )}
-
-      {/* Chart Section - Show when there's data and parameters are selected for charting */}
-      {chartParams.size > 0 && Object.keys(historicalData).length > 0 && (
-        <div class="chart-section" style={{ marginBottom: '2rem' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: '1rem',
-            paddingBottom: '0.75rem',
-            borderBottom: '2px solid var(--oi-beige)'
-          }}>
-            <h3 style={{ margin: 0, color: 'var(--oi-blue)', fontSize: '1.1rem', fontWeight: 600 }}>
-              {content.timeSeriesChart}
-            </h3>
-            <div class="chart-param-selector" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', flex: 1, justifyContent: 'flex-end' }}>
-              {Array.from(selectedParams).map(key => {
-                const param = params[key]
-                const paramId = (param?.id || param?.i)?.toString()
-                const hasData = paramId && historicalData[paramId] && historicalData[paramId].length > 0
-
-                return (
-                  <label key={key} class="chart-param-option" style={{ fontSize: '0.85rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={chartParams.has(key)}
-                      onChange={() => handleChartParamToggle(key)}
-                      disabled={!hasData}
-                    />
-                    <span style={{ color: hasData ? COLORS[Array.from(chartParams).indexOf(key) % COLORS.length] : '#999' }}>
-                      {getDisplayName(key)}
-                      {!hasData && <> ({content.noData})</>}
-                    </span>
-                  </label>
-                )
-              })}
-            </div>
-          </div>
-          <MultiLineChart
-            series={Array.from(chartParams).map((key, index) => {
-              const param = params[key]
-              const paramId = (param?.id || param?.i)?.toString()
-              const converted = convertSpotValue(0, param.unit)
-              const displayUnit = converted.unit
-
-              return {
-                label: getDisplayName(key),
-                unit: displayUnit,
-                color: COLORS[index % COLORS.length],
-                data: (paramId && historicalData[paramId]) || []
-              }
-            })}
-            width={Math.min(window.innerWidth - 100, 1000)}
-            height={400}
-          />
-        </div>
-      )}
 
       {/* Spot Values Grid */}
       <div class="spot-values-categories">
@@ -418,7 +336,7 @@ export default function SpotValuesMonitor({
                 }
 
                 const isSelected = selectedParams.has(key)
-                const isCharted = chartParams.has(key)
+                const hasChartData = isSelected && paramId && historicalData[paramId] && historicalData[paramId].length > 0
 
                 return (
                   <div
@@ -429,23 +347,17 @@ export default function SpotValuesMonitor({
                       padding: '0.75rem',
                       borderRadius: '6px',
                       border: `2px solid ${isSelected ? 'var(--oi-blue)' : 'transparent'}`,
-                      cursor: streaming ? 'default' : 'pointer',
-                      transition: 'all 0.2s'
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.75rem'
                     }}
-                    onClick={() => !streaming && handleParamToggle(key)}
+                    onClick={() => handleParamToggle(key)}
                   >
-                    <div class="parameter-header" style={{ marginBottom: '0.5rem' }}>
-                      <label class="parameter-label" style={{ fontSize: '0.9rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div class="parameter-header" style={{ marginBottom: '0.25rem' }}>
+                      <label class="parameter-label" style={{ fontSize: '0.9rem', fontWeight: 500 }}>
                         {getDisplayName(key)}
-                        {isCharted && (
-                          <span style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            background: COLORS[Array.from(chartParams).indexOf(key) % COLORS.length],
-                            display: 'inline-block'
-                          }} />
-                        )}
                       </label>
                     </div>
                     <div class="parameter-value" style={{
@@ -456,6 +368,25 @@ export default function SpotValuesMonitor({
                     }}>
                       {displayValue}
                     </div>
+                    {hasChartData && (
+                      <div style={{
+                        width: '100%',
+                        marginTop: '0.5rem',
+                        overflow: 'hidden'
+                      }}>
+                        <MultiLineChart
+                          series={[{
+                            label: getDisplayName(key),
+                            unit: convertSpotValue(0, param.unit).unit,
+                            color: getColorForParam(key),
+                            data: historicalData[paramId]
+                          }]}
+                          width={350}
+                          height={150}
+                          showLegend={false}
+                        />
+                      </div>
+                    )}
                   </div>
                 )
               })}
