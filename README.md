@@ -33,7 +33,7 @@ So first try to reach it on http://inverter.local/
 # Hardware
 Out of the box, this works with:
 * ESP32-C3-DevKitM-1
-* [Canipulator](www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) (ESP32-C6)
+* [Canipulator](https://www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) (ESP32-C6)
 
 The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3.
 
