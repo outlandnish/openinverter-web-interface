@@ -241,10 +241,7 @@ uint32_t spotValuesInterval = 1000; // Default 1000ms
 uint32_t lastSpotValuesTime = 0; // Last time we collected spot values
 
 // Spot values batching to prevent WebSocket queue overflow
-std::map<int, double> spotValuesBatch; // Accumulated spot values waiting to be sent
-uint32_t lastSpotValuesBatchFlush = 0; // Last time we flushed the batch
-const uint32_t SPOT_VALUES_BATCH_INTERVAL = 100; // Flush batch every 100ms
-const size_t SPOT_VALUES_BATCH_MAX_SIZE = 20; // Or flush when batch reaches this size
+std::map<int, double> spotValuesBatch; // Accumulated spot values (map auto-replaces duplicates)
 
 // Interval CAN message sending
 struct IntervalCanMessage {
@@ -431,7 +428,6 @@ void flushSpotValuesBatch() {
 
   // Clear the batch
   spotValuesBatch.clear();
-  lastSpotValuesBatchFlush = millis();
 }
 
 // Process spot values queue - called every loop iteration
@@ -455,21 +451,9 @@ void processSpotValuesQueue() {
   double value;
 
   if (OICan::TryGetValueResponse(responseParamId, value, 0)) {
-    // Got a response - add to batch instead of sending immediately
+    // Got a response - add to batch (map auto-replaces if param already exists)
     DBG_OUTPUT_PORT.printf("[SpotValues] Received param %d = %.2f\n", responseParamId, value);
-
-    // Add to batch
     spotValuesBatch[responseParamId] = value;
-
-    // Flush if batch is full
-    if (spotValuesBatch.size() >= SPOT_VALUES_BATCH_MAX_SIZE) {
-      flushSpotValuesBatch();
-    }
-  }
-
-  // Flush batch if enough time has passed
-  if (!spotValuesBatch.empty() && (millis() - lastSpotValuesBatchFlush) >= SPOT_VALUES_BATCH_INTERVAL) {
-    flushSpotValuesBatch();
   }
 }
 
@@ -479,6 +463,9 @@ void reloadSpotValuesQueue() {
     DBG_OUTPUT_PORT.println("[SpotValues] Cannot reload queue - CAN not idle");
     return;
   }
+
+  // Flush any accumulated values from previous cycle at user-requested interval
+  flushSpotValuesBatch();
 
   // Clear existing queue and reload with all parameters
   spotValuesRequestQueue.clear();
