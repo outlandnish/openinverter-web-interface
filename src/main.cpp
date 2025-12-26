@@ -240,6 +240,12 @@ std::vector<int> spotValuesParamIds; // Parameter IDs to monitor
 uint32_t spotValuesInterval = 1000; // Default 1000ms
 uint32_t lastSpotValuesTime = 0; // Last time we collected spot values
 
+// Spot values batching to prevent WebSocket queue overflow
+std::map<int, double> spotValuesBatch; // Accumulated spot values waiting to be sent
+uint32_t lastSpotValuesBatchFlush = 0; // Last time we flushed the batch
+const uint32_t SPOT_VALUES_BATCH_INTERVAL = 100; // Flush batch every 100ms
+const size_t SPOT_VALUES_BATCH_MAX_SIZE = 20; // Or flush when batch reaches this size
+
 // Interval CAN message sending
 struct IntervalCanMessage {
   String id;
@@ -401,6 +407,33 @@ void broadcastDeviceDiscovery(uint8_t nodeId, const char* serial, uint32_t lastS
 // Queue-based spot values collection (asynchronous, non-blocking)
 static std::deque<int> spotValuesRequestQueue; // Queue of pending parameter requests
 
+// Flush accumulated spot values batch to WebSocket
+void flushSpotValuesBatch() {
+  if (spotValuesBatch.empty()) {
+    return;
+  }
+
+  // Build event with all accumulated values
+  CANEvent evt;
+  evt.type = EVT_SPOT_VALUES;
+  evt.data.spotValues.timestamp = millis();
+
+  // Build JSON string with all batched values
+  JsonDocument doc;
+  for (const auto& pair : spotValuesBatch) {
+    doc[String(pair.first)] = pair.second;
+  }
+  serializeJson(doc, evt.data.spotValues.valuesJson);
+
+  xQueueSend(canEventQueue, &evt, 0);
+
+  DBG_OUTPUT_PORT.printf("[SpotValues] Flushed batch with %d values\n", spotValuesBatch.size());
+
+  // Clear the batch
+  spotValuesBatch.clear();
+  lastSpotValuesBatchFlush = millis();
+}
+
 // Process spot values queue - called every loop iteration
 void processSpotValuesQueue() {
   // Try to send one request from queue (if rate limit allows)
@@ -417,25 +450,26 @@ void processSpotValuesQueue() {
     // If request failed (rate limit or TX queue full), leave it in queue and try next iteration
   }
 
-  // Try to receive and immediately broadcast any responses
+  // Try to receive and accumulate responses in batch
   int responseParamId;
   double value;
 
   if (OICan::TryGetValueResponse(responseParamId, value, 0)) {
-    // Got a response - broadcast immediately (streaming)
+    // Got a response - add to batch instead of sending immediately
     DBG_OUTPUT_PORT.printf("[SpotValues] Received param %d = %.2f\n", responseParamId, value);
 
-    // Build and send event with single value
-    CANEvent evt;
-    evt.type = EVT_SPOT_VALUES;
-    evt.data.spotValues.timestamp = millis();
+    // Add to batch
+    spotValuesBatch[responseParamId] = value;
 
-    // Build JSON string with single value
-    JsonDocument doc;
-    doc[String(responseParamId)] = value;
-    serializeJson(doc, evt.data.spotValues.valuesJson);
+    // Flush if batch is full
+    if (spotValuesBatch.size() >= SPOT_VALUES_BATCH_MAX_SIZE) {
+      flushSpotValuesBatch();
+    }
+  }
 
-    xQueueSend(canEventQueue, &evt, 0);
+  // Flush batch if enough time has passed
+  if (!spotValuesBatch.empty() && (millis() - lastSpotValuesBatchFlush) >= SPOT_VALUES_BATCH_INTERVAL) {
+    flushSpotValuesBatch();
   }
 }
 
@@ -1745,6 +1779,9 @@ void canTask(void* parameter) {
           break;
 
         case CMD_STOP_SPOT_VALUES:
+          // Flush any remaining batched values before stopping
+          flushSpotValuesBatch();
+
           spotValuesParamIds.clear();
           spotValuesRequestQueue.clear(); // Clear the request queue
 
