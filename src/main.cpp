@@ -242,6 +242,7 @@ uint32_t lastSpotValuesTime = 0; // Last time we collected spot values
 
 // Spot values batching to prevent WebSocket queue overflow
 std::map<int, double> spotValuesBatch; // Accumulated spot values (map auto-replaces duplicates)
+std::map<int, double> latestSpotValues; // Persistent cache of latest values (never cleared)
 
 // Interval CAN message sending
 struct IntervalCanMessage {
@@ -424,8 +425,6 @@ void flushSpotValuesBatch() {
 
   xQueueSend(canEventQueue, &evt, 0);
 
-  DBG_OUTPUT_PORT.printf("[SpotValues] Flushed batch with %d values\n", spotValuesBatch.size());
-
   // Clear the batch
   spotValuesBatch.clear();
 }
@@ -440,8 +439,6 @@ void processSpotValuesQueue() {
     if (OICan::RequestValue(paramId)) {
       // Request sent successfully, remove from queue
       spotValuesRequestQueue.pop_front();
-      DBG_OUTPUT_PORT.printf("[SpotValues] Sent request for param %d (%d remaining in queue)\n",
-                            paramId, spotValuesRequestQueue.size());
     }
     // If request failed (rate limit or TX queue full), leave it in queue and try next iteration
   }
@@ -452,15 +449,15 @@ void processSpotValuesQueue() {
 
   if (OICan::TryGetValueResponse(responseParamId, value, 0)) {
     // Got a response - add to batch (map auto-replaces if param already exists)
-    DBG_OUTPUT_PORT.printf("[SpotValues] Received param %d = %.2f\n", responseParamId, value);
     spotValuesBatch[responseParamId] = value;
+    // Also update persistent cache for getParamValues
+    latestSpotValues[responseParamId] = value;
   }
 }
 
 // Reload the request queue with all parameter IDs
 void reloadSpotValuesQueue() {
   if (!OICan::IsIdle()) {
-    DBG_OUTPUT_PORT.println("[SpotValues] Cannot reload queue - CAN not idle");
     return;
   }
 
@@ -472,8 +469,6 @@ void reloadSpotValuesQueue() {
   for (int paramId : spotValuesParamIds) {
     spotValuesRequestQueue.push_back(paramId);
   }
-
-  DBG_OUTPUT_PORT.printf("[SpotValues] Queue reloaded with %d parameters\n", spotValuesRequestQueue.size());
 }
 
 // WebSocket message handlers
@@ -978,12 +973,32 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   } else {
     DBG_OUTPUT_PORT.printf("[WebSocket] Sending raw JSON for values (%d bytes)\n", json.length());
 
+    // Update cached param values with latest spot values to avoid stale data
+    if (!latestSpotValues.empty()) {
+      JsonDocument paramsDoc;
+      DeserializationError error = deserializeJson(paramsDoc, json);
+
+      if (!error) {
+        // Update each spot value in the cached params
+        for (const auto& pair : latestSpotValues) {
+          String paramId = String(pair.first);
+          if (paramsDoc.containsKey(paramId)) {
+            paramsDoc[paramId]["value"] = pair.second;
+          }
+        }
+
+        // Re-serialize with updated values
+        json = "";
+        serializeJson(paramsDoc, json);
+      }
+    }
+
     // Send raw JSON directly - frontend will extract 'id' and 'value' fields
     // This avoids stack overflow from parsing large JSON on ESP32
     String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
     output += nodeId;
     output += ",\"rawParams\":";
-    output += json;  // Raw JSON string
+    output += json;  // Raw JSON string (now with updated spot values)
     output += "}}";
 
     client->text(output);
@@ -1771,6 +1786,7 @@ void canTask(void* parameter) {
 
           spotValuesParamIds.clear();
           spotValuesRequestQueue.clear(); // Clear the request queue
+          latestSpotValues.clear(); // Clear persistent cache
 
           {
             CANEvent evt;
