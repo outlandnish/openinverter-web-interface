@@ -1,0 +1,136 @@
+#device-control {
+  margin-bottom: 2rem;
+}
+
+.device-control-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.device-control-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.errors-section {
+  margin-bottom: 2rem;
+}
+
+.errors-section h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #333;
+}
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.errors-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.error-item {
+  background: #fff5f5;
+  border: 1px solid #feb2b2;
+  border-radius: 6px;
+  padding: 1rem;
+  transition: box-shadow 0.2s;
+}
+
+.error-item:hover {
+  box-shadow: 0 2px 8px rgba(254, 178, 178, 0.3);
+}
+
+.error-number {
+  font-weight: 600;
+  color: #c53030;
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.error-description {
+  color: #742a2a;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.error-time {
+  font-size: 0.85rem;
+  color: #9b2c2c;
+}
+
+.no-errors {
+  padding: 2rem;
+  text-align: center;
+  color: #48bb78;
+  background: #f0fff4;
+  border: 1px solid #9ae6b4;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.actions-section h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #333;
+}
+
+.action-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.action-buttons .btn {
+  padding: 0.75rem 1rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn-warning {
+  background: #ed8936;
+  color: white;
+  border: none;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background: #dd6b20;
+}
+
+.btn-danger {
+  background: #e53e3e;
+  color: white;
+  border: none;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #c53030;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .device-control-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .action-buttons {
+    grid-template-columns: 1fr;
+  }
+}

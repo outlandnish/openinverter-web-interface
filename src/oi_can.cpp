@@ -54,6 +54,8 @@
 #define SDO_INDEX_SERIAL      0x5000
 #define SDO_INDEX_STRINGS     0x5001
 #define SDO_INDEX_COMMANDS    0x5002
+#define SDO_INDEX_ERROR_NUM   0x5003
+#define SDO_INDEX_ERROR_TIME  0x5004
 #define SDO_CMD_SAVE          0
 #define SDO_CMD_LOAD          1
 #define SDO_CMD_RESET         2
@@ -137,11 +139,60 @@ static void requestSdoElement(uint8_t nodeId, uint16_t index, uint8_t subIndex) 
   printCanTx(&tx_frame);
 }
 
-// Send SDO request for a parameter value (non-blocking)
-void RequestValue(int paramId) {
+// Non-blocking version for parameter requests (doesn't block if TX queue is full)
+static bool requestSdoElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
+  tx_frame.extd = false;
+  tx_frame.identifier = 0x600 | nodeId;
+  tx_frame.data_length_code = 8;
+  tx_frame.data[0] = SDO_READ;
+  tx_frame.data[1] = index & 0xFF;
+  tx_frame.data[2] = index >> 8;
+  tx_frame.data[3] = subIndex;
+  tx_frame.data[4] = 0;
+  tx_frame.data[5] = 0;
+  tx_frame.data[6] = 0;
+  tx_frame.data[7] = 0;
+
+  // Non-blocking transmit (timeout = 0)
+  esp_err_t result = twai_transmit(&tx_frame, 0);
+  if (result == ESP_OK) {
+    printCanTx(&tx_frame);
+    return true;
+  }
+  return false; // TX queue full, message not sent
+}
+
+// Rate limiting for parameter requests
+static unsigned long lastParamRequestTime = 0;
+static unsigned long minParamRequestIntervalUs = 500; // Default: 500 microseconds between requests
+
+// Send SDO request for a parameter value (truly non-blocking with rate limiting)
+bool RequestValue(int paramId) {
+  // Rate limiting: check if enough time has passed since last request
+  unsigned long currentTime = micros();
+  unsigned long timeSinceLastRequest = currentTime - lastParamRequestTime;
+
+  if (timeSinceLastRequest < minParamRequestIntervalUs) {
+    // Too soon - return false without blocking
+    return false;
+  }
+
   uint16_t index = SDO_INDEX_PARAM_UID | (paramId >> 8);
   uint8_t subIndex = paramId & 0xFF;
-  requestSdoElement(_nodeId, index, subIndex);
+
+  bool success = requestSdoElementNonBlocking(_nodeId, index, subIndex);
+
+  if (success) {
+    lastParamRequestTime = micros();
+  }
+
+  return success;
+}
+
+// Configure rate limiting for parameter requests
+void SetParameterRequestRateLimit(unsigned long intervalUs) {
+  minParamRequestIntervalUs = intervalUs;
+  DBG_OUTPUT_PORT.printf("Parameter request rate limit set to %lu microseconds\n", intervalUs);
 }
 
 static void setValueSdo(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value) {
@@ -1056,7 +1107,7 @@ SetResult RemoveCanMapping(String json){
   uint32_t readIndex = doc["index"].as<uint32_t>();
   uint32_t writeIndex;
   bool isRx;
-  
+
   if (readIndex >= SDO_INDEX_MAP_RD + 0x80) {
     // RX mapping (read index 0x3180+)
     writeIndex = readIndex;  // Use the read index directly for removal
@@ -1069,8 +1120,8 @@ SetResult RemoveCanMapping(String json){
     DBG_OUTPUT_PORT.printf("Remove: Invalid index 0x%lX\n", (unsigned long)readIndex);
     return UnknownIndex;
   }
-  
-  DBG_OUTPUT_PORT.printf("Removing %s mapping at index 0x%lX, subindex 0\n", 
+
+  DBG_OUTPUT_PORT.printf("Removing %s mapping at index 0x%lX, subindex 0\n",
                          isRx ? "RX" : "TX", (unsigned long)writeIndex);
 
   // Write 0 to subindex 0 (COB ID) to remove the entire mapping
@@ -1089,6 +1140,46 @@ SetResult RemoveCanMapping(String json){
   }
   DBG_OUTPUT_PORT.println("Comm Error");
   return CommError;
+}
+
+bool ClearCanMap(bool isRx) {
+  if (state != IDLE) return false;
+
+  twai_message_t rxframe;
+  int baseIndex = isRx ? (SDO_INDEX_MAP_RD + 0x80) : SDO_INDEX_MAP_RD;
+  int removedCount = 0;
+  const int MAX_ITERATIONS = 100; // Safety limit to prevent infinite loops
+
+  DBG_OUTPUT_PORT.printf("Clearing all %s CAN mappings\n", isRx ? "RX" : "TX");
+
+  // Repeatedly delete the first entry (index + 0, subindex 0) until we get an abort
+  for (int i = 0; i < MAX_ITERATIONS; i++) {
+    // Write 0 to the first mapping slot (index 0x3100 or 0x3180, subindex 0)
+    setValueSdo(_nodeId, baseIndex, 0, 0U);
+
+    if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+      printCanRx(&rxframe);
+
+      if (rxframe.data[0] == SDO_ABORT) {
+        // Abort means no more entries to delete
+        DBG_OUTPUT_PORT.printf("All %s mappings cleared (%d removed)\n", isRx ? "RX" : "TX", removedCount);
+        return true;
+      } else {
+        // Successfully removed one entry
+        removedCount++;
+        DBG_OUTPUT_PORT.printf("Removed %s mapping #%d\n", isRx ? "RX" : "TX", removedCount);
+      }
+    } else {
+      // Communication timeout
+      DBG_OUTPUT_PORT.printf("Communication timeout while clearing %s mappings\n", isRx ? "RX" : "TX");
+      return false;
+    }
+  }
+
+  // Hit maximum iterations - probably a bug
+  DBG_OUTPUT_PORT.printf("Warning: Hit maximum iterations (%d) while clearing %s mappings\n",
+                         MAX_ITERATIONS, isRx ? "RX" : "TX");
+  return false;
 }
 
 SetResult SetValue(int paramId, double value) {
@@ -1126,6 +1217,171 @@ bool SaveToFlash() {
   else {
     return false;
   }
+}
+
+bool LoadFromFlash() {
+  if (state != IDLE) return false;
+
+  twai_message_t rxframe;
+
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_LOAD, 0U);
+
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
+    printCanRx(&rxframe);
+    return true;
+  }
+  else {
+    return false;
+  }
+}
+
+bool LoadDefaults() {
+  if (state != IDLE) return false;
+
+  twai_message_t rxframe;
+
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_DEFAULTS, 0U);
+
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
+    printCanRx(&rxframe);
+    return true;
+  }
+  else {
+    return false;
+  }
+}
+
+bool StartDevice(uint32_t mode) {
+  if (state != IDLE) return false;
+
+  twai_message_t rxframe;
+
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_START, mode);
+
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
+    printCanRx(&rxframe);
+    return true;
+  }
+  else {
+    return false;
+  }
+}
+
+bool StopDevice() {
+  if (state != IDLE) return false;
+
+  twai_message_t rxframe;
+
+  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_STOP, 0U);
+
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
+    printCanRx(&rxframe);
+    return true;
+  }
+  else {
+    return false;
+  }
+}
+
+String ListErrors() {
+  if (state != IDLE) {
+    DBG_OUTPUT_PORT.println("ListErrors called while not IDLE, ignoring");
+    return "[]";
+  }
+
+  twai_message_t rxframe;
+  JsonDocument doc;
+  JsonArray errors = doc.to<JsonArray>();
+
+  // Build error description map from parameter JSON (lasterr field)
+  std::map<int, String> errorDescriptions;
+  if (!paramJson.isNull() && paramJson.containsKey("lasterr")) {
+    JsonObject lasterr = paramJson["lasterr"].as<JsonObject>();
+    for (JsonPair kv : lasterr) {
+      int errorNum = atoi(kv.key().c_str());
+      errorDescriptions[errorNum] = kv.value().as<String>();
+    }
+    DBG_OUTPUT_PORT.printf("Loaded %d error descriptions from lasterr\n", errorDescriptions.size());
+  }
+
+  // Determine tick duration from uptime parameter's unit (default: 10ms)
+  int tickDurationMs = 10; // Default to 10ms
+  if (!paramJson.isNull() && paramJson.containsKey("uptime")) {
+    JsonObject uptime = paramJson["uptime"].as<JsonObject>();
+    if (uptime.containsKey("unit")) {
+      String unit = uptime["unit"].as<String>();
+      if (unit == "sec" || unit == "s") {
+        tickDurationMs = 1000; // 1 second
+        DBG_OUTPUT_PORT.println("Using 1-second tick duration based on uptime unit");
+      }
+    }
+  }
+
+  DBG_OUTPUT_PORT.printf("Retrieving error log (tick duration: %dms)\n", tickDurationMs);
+
+  // Iterate through error indices (0-254)
+  for (uint8_t i = 0; i < 255; i++) {
+    uint32_t errorTime = 0;
+    uint32_t errorNum = 0;
+    bool hasErrorTime = false;
+    bool hasErrorNum = false;
+
+    // Request error timestamp
+    requestSdoElement(_nodeId, SDO_INDEX_ERROR_TIME, i);
+    if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+      printCanRx(&rxframe);
+      if (rxframe.data[0] != SDO_ABORT &&
+          (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_ERROR_TIME &&
+          rxframe.data[3] == i) {
+        errorTime = *(uint32_t*)&rxframe.data[4];
+        hasErrorTime = true;
+      }
+    }
+
+    // Request error number
+    requestSdoElement(_nodeId, SDO_INDEX_ERROR_NUM, i);
+    if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+      printCanRx(&rxframe);
+      if (rxframe.data[0] != SDO_ABORT &&
+          (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_ERROR_NUM &&
+          rxframe.data[3] == i) {
+        errorNum = *(uint32_t*)&rxframe.data[4];
+        hasErrorNum = true;
+      }
+    }
+
+    // If we got an abort for both or no data, we've reached the end
+    if (!hasErrorTime && !hasErrorNum) {
+      DBG_OUTPUT_PORT.printf("Reached end of error log at index %d\n", i);
+      break;
+    }
+
+    // If we have error data, add it to the result
+    if (hasErrorTime && hasErrorNum && errorNum != 0) {
+      JsonObject errorObj = errors.add<JsonObject>();
+      errorObj["index"] = i;
+      errorObj["errorNum"] = errorNum;
+      errorObj["errorTime"] = errorTime;
+      errorObj["elapsedTimeMs"] = errorTime * tickDurationMs;
+
+      // Add description if available
+      if (errorDescriptions.count(errorNum) > 0) {
+        errorObj["description"] = errorDescriptions[errorNum];
+      } else {
+        errorObj["description"] = "Unknown error " + String(errorNum);
+      }
+
+      DBG_OUTPUT_PORT.printf("Error %d at index %d: time=%lu ticks (%lu ms), desc=%s\n",
+                             errorNum, i, (unsigned long)errorTime,
+                             (unsigned long)(errorTime * tickDurationMs),
+                             errorObj["description"].as<const char*>());
+    }
+  }
+
+  String result;
+  serializeJson(doc, result);
+  DBG_OUTPUT_PORT.printf("Retrieved %d errors\n", errors.size());
+  return result;
 }
 
 bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength) {

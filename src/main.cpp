@@ -13,6 +13,7 @@
 #include <time.h>
 #include <map>
 #include <set>
+#include <deque>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -397,78 +398,61 @@ void broadcastDeviceDiscovery(uint8_t nodeId, const char* serial, uint32_t lastS
   DBG_OUTPUT_PORT.printf("Broadcast device discovery: %s\n", output.c_str());
 }
 
-// Collect spot values (called periodically from CAN task)
-void collectSpotValues() {
-  if (spotValuesParamIds.empty()) return;
-  
-  // Check if CAN is idle
-  if (!OICan::IsIdle()) {
-    // Send error event
+// Queue-based spot values collection (asynchronous, non-blocking)
+static std::deque<int> spotValuesRequestQueue; // Queue of pending parameter requests
+
+// Process spot values queue - called every loop iteration
+void processSpotValuesQueue() {
+  // Try to send one request from queue (if rate limit allows)
+  if (!spotValuesRequestQueue.empty()) {
+    int paramId = spotValuesRequestQueue.front();
+
+    // Try to send request (non-blocking, respects rate limit)
+    if (OICan::RequestValue(paramId)) {
+      // Request sent successfully, remove from queue
+      spotValuesRequestQueue.pop_front();
+      DBG_OUTPUT_PORT.printf("[SpotValues] Sent request for param %d (%d remaining in queue)\n",
+                            paramId, spotValuesRequestQueue.size());
+    }
+    // If request failed (rate limit or TX queue full), leave it in queue and try next iteration
+  }
+
+  // Try to receive and immediately broadcast any responses
+  int responseParamId;
+  double value;
+
+  if (OICan::TryGetValueResponse(responseParamId, value, 0)) {
+    // Got a response - broadcast immediately (streaming)
+    DBG_OUTPUT_PORT.printf("[SpotValues] Received param %d = %.2f\n", responseParamId, value);
+
+    // Build and send event with single value
     CANEvent evt;
-    evt.type = EVT_ERROR;
-    strncpy(evt.data.error.message, "CAN not idle", sizeof(evt.data.error.message) - 1);
+    evt.type = EVT_SPOT_VALUES;
+    evt.data.spotValues.timestamp = millis();
+
+    // Build JSON string with single value
+    JsonDocument doc;
+    doc[String(responseParamId)] = value;
+    serializeJson(doc, evt.data.spotValues.valuesJson);
+
     xQueueSend(canEventQueue, &evt, 0);
+  }
+}
+
+// Reload the request queue with all parameter IDs
+void reloadSpotValuesQueue() {
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[SpotValues] Cannot reload queue - CAN not idle");
     return;
   }
 
-  // Send all requests at once
-  std::set<int> requestedParams;
-  for (size_t i = 0; i < spotValuesParamIds.size(); i++) {
-    OICan::RequestValue(spotValuesParamIds[i]);
-    requestedParams.insert(spotValuesParamIds[i]);
-  }
-  
-  // Collect whatever responses come back within timeout period
-  std::map<int, double> receivedValues;
-  unsigned long startTime = millis();
-  const unsigned long TIMEOUT_MS = 300; // Total time to wait for responses
-  
-  while ((millis() - startTime) < TIMEOUT_MS) {
-    double value;
-    int responseParamId;
-    
-    // Try to get response with short timeout
-    if (OICan::TryGetValueResponse(responseParamId, value, 5)) {
-      receivedValues[responseParamId] = value;
-    } else {
-      // Let CAN loop run and yield to other tasks
-      OICan::Loop();
-      vTaskDelay(pdMS_TO_TICKS(1));
-    }
-  }
-  
-  // Debug logging: show which parameters failed
-  if (receivedValues.size() < spotValuesParamIds.size()) {
-    DBG_OUTPUT_PORT.printf("[SpotValues] Retrieved %d/%d values (%d missing)\n", 
-                          receivedValues.size(), spotValuesParamIds.size(), 
-                          spotValuesParamIds.size() - receivedValues.size());
-    
-    // Log missing parameters
-    DBG_OUTPUT_PORT.print("[SpotValues] Missing params: ");
-    bool first = true;
-    for (int paramId : requestedParams) {
-      if (receivedValues.find(paramId) == receivedValues.end()) {
-        if (!first) DBG_OUTPUT_PORT.print(", ");
-        DBG_OUTPUT_PORT.print(paramId);
-        first = false;
-      }
-    }
-    DBG_OUTPUT_PORT.println();
+  // Clear existing queue and reload with all parameters
+  spotValuesRequestQueue.clear();
+  for (int paramId : spotValuesParamIds) {
+    spotValuesRequestQueue.push_back(paramId);
   }
 
-  // Build and send event with received values
-  CANEvent evt;
-  evt.type = EVT_SPOT_VALUES;
-  evt.data.spotValues.timestamp = millis();
-  
-  // Build JSON string of values
-  JsonDocument doc;
-  for (const auto& pair : receivedValues) {
-    doc[String(pair.first)] = pair.second;
-  }
-  serializeJson(doc, evt.data.spotValues.valuesJson);
-  
-  xQueueSend(canEventQueue, &evt, 0);
+  DBG_OUTPUT_PORT.printf("[SpotValues] Queue reloaded with %d parameters\n", spotValuesRequestQueue.size());
 }
 
 // WebSocket message handlers
@@ -1189,6 +1173,183 @@ void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
+void handleLoadFromFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Load from flash request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot load from flash - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "loadFromFlashError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Load parameters from flash
+  bool success = OICan::LoadFromFlash();
+
+  JsonDocument responseDoc;
+  if (success) {
+    responseDoc["event"] = "loadFromFlashSuccess";
+    responseDoc["data"]["message"] = "Parameters loaded from flash";
+    DBG_OUTPUT_PORT.println("[WebSocket] Parameters loaded from flash successfully");
+  } else {
+    responseDoc["event"] = "loadFromFlashError";
+    responseDoc["data"]["error"] = "Failed to load parameters";
+    DBG_OUTPUT_PORT.println("[WebSocket] Failed to load parameters from flash");
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
+void handleLoadDefaults(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Load defaults request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot load defaults - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "loadDefaultsError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Load default parameters
+  bool success = OICan::LoadDefaults();
+
+  JsonDocument responseDoc;
+  if (success) {
+    responseDoc["event"] = "loadDefaultsSuccess";
+    responseDoc["data"]["message"] = "Default parameters loaded";
+    DBG_OUTPUT_PORT.println("[WebSocket] Default parameters loaded successfully");
+  } else {
+    responseDoc["event"] = "loadDefaultsError";
+    responseDoc["data"]["error"] = "Failed to load defaults";
+    DBG_OUTPUT_PORT.println("[WebSocket] Failed to load default parameters");
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
+void handleStartDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Start device request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot start device - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "startDeviceError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Get optional mode parameter (default to 0)
+  uint32_t mode = doc.containsKey("mode") ? doc["mode"].as<uint32_t>() : 0;
+
+  // Start device
+  bool success = OICan::StartDevice(mode);
+
+  JsonDocument responseDoc;
+  if (success) {
+    responseDoc["event"] = "startDeviceSuccess";
+    responseDoc["data"]["message"] = "Device started";
+    DBG_OUTPUT_PORT.println("[WebSocket] Device started successfully");
+  } else {
+    responseDoc["event"] = "startDeviceError";
+    responseDoc["data"]["error"] = "Failed to start device";
+    DBG_OUTPUT_PORT.println("[WebSocket] Failed to start device");
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
+void handleStopDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] Stop device request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot stop device - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "stopDeviceError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // Stop device
+  bool success = OICan::StopDevice();
+
+  JsonDocument responseDoc;
+  if (success) {
+    responseDoc["event"] = "stopDeviceSuccess";
+    responseDoc["data"]["message"] = "Device stopped";
+    DBG_OUTPUT_PORT.println("[WebSocket] Device stopped successfully");
+  } else {
+    responseDoc["event"] = "stopDeviceError";
+    responseDoc["data"]["error"] = "Failed to stop device";
+    DBG_OUTPUT_PORT.println("[WebSocket] Failed to stop device");
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
+void handleListErrors(AsyncWebSocketClient* client, JsonDocument& doc) {
+  DBG_OUTPUT_PORT.println("[WebSocket] List errors request");
+
+  // Check if CAN is idle
+  if (!OICan::IsIdle()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot list errors - device busy");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "listErrorsError";
+    errorDoc["data"]["error"] = "Device is busy";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  // List errors
+  String errorsJson = OICan::ListErrors();
+
+  JsonDocument responseDoc;
+  responseDoc["event"] = "listErrorsSuccess";
+
+  // Parse the errors JSON array and attach it to the response
+  JsonDocument errorsArray;
+  DeserializationError error = deserializeJson(errorsArray, errorsJson);
+
+  if (!error) {
+    responseDoc["data"]["errors"] = errorsArray.as<JsonArray>();
+    DBG_OUTPUT_PORT.printf("[WebSocket] Listed errors successfully (%d bytes)\n", errorsJson.length());
+  } else {
+    responseDoc["data"]["errors"] = JsonArray();
+    DBG_OUTPUT_PORT.printf("[WebSocket] Failed to parse errors JSON: %s\n", error.c_str());
+  }
+
+  String output;
+  serializeJson(responseDoc, output);
+  client->text(output);
+}
+
 // WebSocket event handler
 void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
   if (type == WS_EVT_CONNECT) {
@@ -1291,6 +1452,16 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
         handleRemoveCanMapping(client, doc);
       } else if (action == "saveToFlash") {
         handleSaveToFlash(client, doc);
+      } else if (action == "loadFromFlash") {
+        handleLoadFromFlash(client, doc);
+      } else if (action == "loadDefaults") {
+        handleLoadDefaults(client, doc);
+      } else if (action == "startDevice") {
+        handleStartDevice(client, doc);
+      } else if (action == "stopDevice") {
+        handleStopDevice(client, doc);
+      } else if (action == "listErrors") {
+        handleListErrors(client, doc);
       } else if (action == "sendCanMessage") {
         handleSendCanMessage(client, doc);
       } else if (action == "startCanInterval") {
@@ -1560,6 +1731,9 @@ void canTask(void* parameter) {
           }
           lastSpotValuesTime = millis();
 
+          // Load initial request queue
+          reloadSpotValuesQueue();
+
           {
             CANEvent evt;
             evt.type = EVT_SPOT_VALUES_STATUS;
@@ -1572,6 +1746,7 @@ void canTask(void* parameter) {
 
         case CMD_STOP_SPOT_VALUES:
           spotValuesParamIds.clear();
+          spotValuesRequestQueue.clear(); // Clear the request queue
 
           {
             CANEvent evt;
@@ -1739,10 +1914,15 @@ void canTask(void* parameter) {
       }
     }
 
-    // Collect spot values if enabled and interval has elapsed
-    if (!spotValuesParamIds.empty() && (millis() - lastSpotValuesTime) >= spotValuesInterval) {
-      lastSpotValuesTime = millis();
-      collectSpotValues();
+    // Process spot values queue (non-blocking, called every loop iteration)
+    if (!spotValuesParamIds.empty()) {
+      // Check if it's time to reload the queue
+      if ((millis() - lastSpotValuesTime) >= spotValuesInterval) {
+        lastSpotValuesTime = millis();
+        reloadSpotValuesQueue();
+      }
+      // Always process queue and responses
+      processSpotValuesQueue();
     }
 
     // Send interval CAN messages

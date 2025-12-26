@@ -7,6 +7,7 @@ import { DeviceDetailsProvider, useDeviceDetailsContext } from '@contexts/Device
 import Layout from '@components/Layout'
 import ConnectionStatus from '@components/ConnectionStatus'
 import SpotValuesMonitor from '@components/SpotValuesMonitor'
+import DeviceControl from '@components/DeviceControl'
 import OTAUpdate from '@components/OTAUpdate'
 import DeviceParameters from '@components/DeviceParameters'
 import CanMappingEditor from '@components/CanMappingEditor'
@@ -171,36 +172,6 @@ function DeviceDetailsContent() {
     sendMessage('setNodeId', { id })
   }
 
-  const handleResetDevice = () => {
-    if (confirm(content.resetDeviceConfirm.value)) {
-      try {
-        // Stop all ongoing activities
-        sendMessage('stopSpotValues')
-        setStreaming(false)
-        clearHistoricalData()
-
-        // Stop CAN IO if active
-        sendMessage('stopCanIoInterval', {})
-        setCanIoActive(false)
-
-        // Send reset command
-        sendMessage('resetDevice', {})
-        showSuccess(content.deviceResetSuccess.value)
-
-        // Set loading state while device resets
-        setLoading(true)
-        setDeviceConnected(false)
-
-        // After a timeout, reload settings
-        setTimeout(() => {
-          loadSettings()
-        }, 3000)
-      } catch (error) {
-        showWarning(content.deviceResetFailed.value)
-      }
-    }
-  }
-
   return (
     <Layout
       currentSerial={routeParams?.serial}
@@ -244,35 +215,6 @@ function DeviceDetailsContent() {
                     <span class="info-value">{firmwareVersion || content.unknown}</span>
                   </div>
                 </div>
-                <button
-                  class="icon-button reset-button"
-                  onClick={handleResetDevice}
-                  disabled={!deviceConnected}
-                  title={content.resetDevice.value}
-                  onMouseEnter={(e) => {
-                    if (deviceConnected) {
-                      e.currentTarget.style.background = '#f5e5d3'
-                      e.currentTarget.style.transform = 'scale(1.05)'
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'var(--oi-beige)'
-                    e.currentTarget.style.transform = 'scale(1)'
-                  }}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class="reset-icon"
-                  >
-                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-                  </svg>
-                  <span class="reset-button-text">{content.resetDevice.value}</span>
-                </button>
               </div>
             </div>
 
@@ -283,7 +225,10 @@ function DeviceDetailsContent() {
             id: 'overview',
             label: 'Overview',
             content: savedNodeId > 0 && routeParams?.serial ? (
-              <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
+              <>
+                <DeviceControl serial={routeParams.serial} nodeId={savedNodeId} />
+                <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
+              </>
             ) : (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                 {content.noDataAvailable || 'No data available'}

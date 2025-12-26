@@ -37,10 +37,17 @@ SetResult AddCanMapping(String json);
 SetResult RemoveCanMapping(String json);
 SetResult SetValue(int paramId, double value);
 double GetValue(int paramId);
-void RequestValue(int paramId); // Send SDO request without waiting (async)
+bool RequestValue(int paramId); // Send SDO request without waiting (async, non-blocking with rate limiting, returns false if TX queue full)
 bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs); // Try to receive response (async)
+void SetParameterRequestRateLimit(unsigned long intervalUs); // Configure minimum interval between parameter requests (default: 500us)
 bool IsIdle(); // Check if CAN state machine is idle
 bool SaveToFlash();
+bool LoadFromFlash();
+bool LoadDefaults();
+bool StartDevice(uint32_t mode = 0);
+bool StopDevice();
+bool ClearCanMap(bool isRx);
+String ListErrors();
 bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength); // Send arbitrary CAN message
 String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
