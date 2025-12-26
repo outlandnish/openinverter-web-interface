@@ -79,11 +79,11 @@ static uint32_t serial[4]; //contains id sum as well
 static char jsonFileName[20];
 static twai_message_t tx_frame;
 static File updateFile;
-static int currentPage = 0;
+static int currentFlashPage = 0;
 static const size_t PAGE_SIZE_BYTES = 1024;
 static int retries = 0;
-static JsonDocument paramJson; // In-memory parameter JSON storage
-static String jsonBuffer;      // Buffer for receiving JSON segments
+static JsonDocument cachedParamJson; // In-memory parameter JSON storage
+static String jsonReceiveBuffer;      // Buffer for receiving JSON segments
 static int jsonTotalSize = 0;  // Total size of JSON being downloaded (from SDO response)
 
 // Continuous scanning state
@@ -91,7 +91,7 @@ static bool continuousScanActive = false;
 static uint8_t scanStartNode = 1;
 static uint8_t scanEndNode = 32;
 static uint8_t currentScanNode = 1;
-static uint8_t scanSerialPart = 0; // Which part of serial we're reading (0-3)
+static uint8_t currentSerialPartIndex = 0; // Which part of serial we're reading (0-3)
 static uint32_t scanDeviceSerial[4];
 static unsigned long lastScanTime = 0;
 
@@ -124,7 +124,7 @@ static bool isValidSerialResponse(const twai_message_t& frame, uint8_t nodeId, u
 }
 
 static void advanceScanNode() {
-  scanSerialPart = 0;
+  currentSerialPartIndex = 0;
   currentScanNode++;
   if (currentScanNode > scanEndNode) {
     currentScanNode = scanStartNode; // Wrap around to start
@@ -287,14 +287,14 @@ static void handleSdoResponse(twai_message_t *rxframe) {
         DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Receiving last segment");
         int size = 7 - ((rxframe->data[0] >> 1) & 0x7);
         for (int i = 0; i < size; i++) {
-          jsonBuffer += (char)rxframe->data[1 + i];
+          jsonReceiveBuffer += (char)rxframe->data[1 + i];
         }
 
         DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
-        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonBuffer.length());
+        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer.length());
 
-        // Parse JSON into paramJson for future use
-        DeserializationError error = deserializeJson(paramJson, jsonBuffer);
+        // Parse JSON into cachedParamJson for future use
+        DeserializationError error = deserializeJson(cachedParamJson, jsonReceiveBuffer);
         if (error) {
           DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
         } else {
@@ -305,9 +305,9 @@ static void handleSdoResponse(twai_message_t *rxframe) {
       }
       //Receiving a segment
       else if (rxframe->data[0] == (toggleBit << 4) && (rxframe->data[0] & SDO_READ) == 0) {
-        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Segment received (buffer: %d bytes)\n", jsonBuffer.length());
+        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Segment received (buffer: %d bytes)\n", jsonReceiveBuffer.length());
         for (int i = 0; i < 7; i++) {
-          jsonBuffer += (char)rxframe->data[1 + i];
+          jsonReceiveBuffer += (char)rxframe->data[1 + i];
         }
         toggleBit = !toggleBit;
         requestNextSegment(toggleBit);
@@ -393,7 +393,7 @@ static void handleUpdate(twai_message_t *rxframe) {
         updstate = SEND_PAGE;
         crc = 0xFFFFFFFF;
         currentByte = 0;
-        currentPage = 0;
+        currentFlashPage = 0;
         DBG_OUTPUT_PORT.printf("Sending size %u\r\n", tx_frame.data[0]);
         twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
         printCanTx(&tx_frame);
@@ -446,16 +446,16 @@ static void handleUpdate(twai_message_t *rxframe) {
       break;
     case CHECK_CRC:
       crc = 0xFFFFFFFF;
-      DBG_OUTPUT_PORT.printf("Sent bytes %u-%u... ", currentPage * PAGE_SIZE_BYTES, currentByte);
+      DBG_OUTPUT_PORT.printf("Sent bytes %u-%u... ", currentFlashPage * PAGE_SIZE_BYTES, currentByte);
       if (rxframe->data[0] == 'P') {
         updstate = SEND_PAGE;
-        currentPage++;
+        currentFlashPage++;
         DBG_OUTPUT_PORT.printf("CRC Good\r\n");
         handleUpdate(rxframe);
       }
       else if (rxframe->data[0] == 'E') {
         updstate = SEND_PAGE;
-        currentByte = currentPage * PAGE_SIZE_BYTES;
+        currentByte = currentFlashPage * PAGE_SIZE_BYTES;
         DBG_OUTPUT_PORT.printf("CRC Error\r\n");
         handleUpdate(rxframe);
       }
@@ -478,7 +478,7 @@ static void handleUpdate(twai_message_t *rxframe) {
 
 int StartUpdate(String fileName) {
   updateFile = LittleFS.open(fileName, "r");
-  currentPage = 0;
+  currentFlashPage = 0;
 
   // Set state BEFORE reset so we catch the bootloader's magic response
   updstate = SEND_MAGIC;
@@ -496,7 +496,7 @@ int StartUpdate(String fileName) {
 }
 
 int GetCurrentUpdatePage() {
-  return currentPage;
+  return currentFlashPage;
 }
 
 bool IsUpdateInProgress() {
@@ -505,9 +505,9 @@ bool IsUpdateInProgress() {
 
 String GetRawJson() {
   // Return cached JSON if available (avoid blocking download)
-  if (!jsonBuffer.isEmpty()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", jsonBuffer.length());
-    return jsonBuffer;
+  if (!jsonReceiveBuffer.isEmpty()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", jsonReceiveBuffer.length());
+    return jsonReceiveBuffer;
   }
 
   if (state != IDLE) {
@@ -518,8 +518,8 @@ String GetRawJson() {
   // Trigger JSON download from device
   DBG_OUTPUT_PORT.printf("[GetRawJson] Starting JSON download from node %d\n", _nodeId);
   state = OBTAIN_JSON;
-  jsonBuffer = ""; // Clear buffer
-  paramJson.clear(); // Clear parsed JSON
+  jsonReceiveBuffer = ""; // Clear buffer
+  cachedParamJson.clear(); // Clear parsed JSON
   jsonTotalSize = 0; // Reset total size (will be updated from SDO response if available)
   requestSdoElement(_nodeId, SDO_INDEX_STRINGS, 0);
   DBG_OUTPUT_PORT.println("[GetRawJson] Sent SDO request, waiting for response...");
@@ -538,34 +538,34 @@ String GetRawJson() {
     Loop(); // Process CAN messages
 
     // Check if we received a new segment (buffer grew)
-    if (jsonBuffer.length() > lastBufferSize) {
-      int newDataSize = jsonBuffer.length() - lastBufferSize;
-      lastBufferSize = jsonBuffer.length();
+    if (jsonReceiveBuffer.length() > lastBufferSize) {
+      int newDataSize = jsonReceiveBuffer.length() - lastBufferSize;
+      lastBufferSize = jsonReceiveBuffer.length();
       lastSegmentTime = millis(); // Reset timeout on new data
 
       // Stream new data chunk to callback if registered
-      if (jsonStreamCallback && jsonBuffer.length() > lastStreamedSize) {
-        int chunkSize = jsonBuffer.length() - lastStreamedSize;
-        const char* chunkStart = jsonBuffer.c_str() + lastStreamedSize;
+      if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
+        int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
+        const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
         jsonStreamCallback(chunkStart, chunkSize, false); // isComplete = false
-        lastStreamedSize = jsonBuffer.length();
+        lastStreamedSize = jsonReceiveBuffer.length();
       }
 
       // Send progress update via callback (throttled)
       if (jsonProgressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-        jsonProgressCallback(jsonBuffer.length());
+        jsonProgressCallback(jsonReceiveBuffer.length());
         lastProgressUpdate = millis();
       }
 
       if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", jsonBuffer.length());
+        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", jsonReceiveBuffer.length());
       }
     }
 
     // Check for segment timeout (no data received for too long)
     if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
       DBG_OUTPUT_PORT.printf("[GetRawJson] Segment timeout! No data for %lu ms, buffer size=%d\n",
-        millis() - lastSegmentTime, jsonBuffer.length());
+        millis() - lastSegmentTime, jsonReceiveBuffer.length());
       state = IDLE;
       return "{}";
     }
@@ -580,17 +580,17 @@ String GetRawJson() {
   }
 
   if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", state, jsonBuffer.length());
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", state, jsonReceiveBuffer.length());
     state = IDLE;
     return "{}";
   }
 
-  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", jsonBuffer.length());
+  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", jsonReceiveBuffer.length());
 
   // Send final chunk with completion flag if streaming
-  if (jsonStreamCallback && jsonBuffer.length() > lastStreamedSize) {
-    int chunkSize = jsonBuffer.length() - lastStreamedSize;
-    const char* chunkStart = jsonBuffer.c_str() + lastStreamedSize;
+  if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
+    int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
+    const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
     jsonStreamCallback(chunkStart, chunkSize, true); // isComplete = true
   } else if (jsonStreamCallback) {
     // No remaining data, but signal completion
@@ -602,7 +602,7 @@ String GetRawJson() {
     jsonProgressCallback(0);
   }
 
-  return jsonBuffer;
+  return jsonReceiveBuffer;
 }
 
 // Overloaded version that fetches JSON from a specific device by nodeId
@@ -613,7 +613,7 @@ String GetRawJson(uint8_t nodeId) {
   }
 
   // If we're already connected to the requested node, just use the regular GetRawJson
-  if (_nodeId == nodeId && !jsonBuffer.isEmpty()) {
+  if (_nodeId == nodeId && !jsonReceiveBuffer.isEmpty()) {
     DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Already connected to node %d, using cached JSON\n", nodeId);
     return GetRawJson();
   }
@@ -621,8 +621,8 @@ String GetRawJson(uint8_t nodeId) {
   // If we're connected to the requested node but cache is empty, fetch without switching
   if (_nodeId == nodeId) {
     DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Already connected to node %d, fetching fresh JSON\n", nodeId);
-    jsonBuffer = "";
-    paramJson.clear();
+    jsonReceiveBuffer = "";
+    cachedParamJson.clear();
     
     // Trigger JSON download
     state = OBTAIN_JSON;
@@ -640,26 +640,26 @@ String GetRawJson(uint8_t nodeId) {
     while (state == OBTAIN_JSON) {
       Loop();
 
-      if (jsonBuffer.length() > lastBufferSize) {
-        lastBufferSize = jsonBuffer.length();
+      if (jsonReceiveBuffer.length() > lastBufferSize) {
+        lastBufferSize = jsonReceiveBuffer.length();
         lastSegmentTime = millis();
 
         // Stream new data chunk to callback if registered
-        if (jsonStreamCallback && jsonBuffer.length() > lastStreamedSize) {
-          int chunkSize = jsonBuffer.length() - lastStreamedSize;
-          const char* chunkStart = jsonBuffer.c_str() + lastStreamedSize;
+        if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
+          int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
+          const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
           jsonStreamCallback(chunkStart, chunkSize, false);
-          lastStreamedSize = jsonBuffer.length();
+          lastStreamedSize = jsonReceiveBuffer.length();
         }
 
         // Send progress update via callback (throttled)
         if (jsonProgressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-          jsonProgressCallback(jsonBuffer.length());
+          jsonProgressCallback(jsonReceiveBuffer.length());
           lastProgressUpdate = millis();
         }
 
         if (loopCount % 100 == 0) {
-          DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Progress: buffer size: %d bytes\n", jsonBuffer.length());
+          DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Progress: buffer size: %d bytes\n", jsonReceiveBuffer.length());
         }
       }
 
@@ -680,12 +680,12 @@ String GetRawJson(uint8_t nodeId) {
       return "{}";
     }
 
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Download complete! Buffer size: %d bytes\n", jsonBuffer.length());
+    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Download complete! Buffer size: %d bytes\n", jsonReceiveBuffer.length());
 
     // Send final chunk with completion flag if streaming
-    if (jsonStreamCallback && jsonBuffer.length() > lastStreamedSize) {
-      int chunkSize = jsonBuffer.length() - lastStreamedSize;
-      const char* chunkStart = jsonBuffer.c_str() + lastStreamedSize;
+    if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
+      int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
+      const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
       jsonStreamCallback(chunkStart, chunkSize, true);
     } else if (jsonStreamCallback) {
       jsonStreamCallback("", 0, true);
@@ -696,18 +696,18 @@ String GetRawJson(uint8_t nodeId) {
       jsonProgressCallback(0);
     }
 
-    return jsonBuffer;
+    return jsonReceiveBuffer;
   }
 
   // Save current state for switching to different node
   uint8_t savedNodeId = _nodeId;
-  String savedJsonBuffer = jsonBuffer;
+  String savedJsonBuffer = jsonReceiveBuffer;
 
   // Switch to target device and clear cache
   DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Switching from node %d to node %d\n", _nodeId, nodeId);
   _nodeId = nodeId;
-  jsonBuffer = "";
-  paramJson.clear();
+  jsonReceiveBuffer = "";
+  cachedParamJson.clear();
 
   // Trigger JSON download from target device
   DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Starting JSON download from node %d\n", _nodeId);
@@ -727,26 +727,26 @@ String GetRawJson(uint8_t nodeId) {
   while (state == OBTAIN_JSON) {
     Loop();
 
-    if (jsonBuffer.length() > lastBufferSize) {
-      lastBufferSize = jsonBuffer.length();
+    if (jsonReceiveBuffer.length() > lastBufferSize) {
+      lastBufferSize = jsonReceiveBuffer.length();
       lastSegmentTime = millis();
 
       // Stream new data chunk to callback if registered
-      if (jsonStreamCallback && jsonBuffer.length() > lastStreamedSize) {
-        int chunkSize = jsonBuffer.length() - lastStreamedSize;
-        const char* chunkStart = jsonBuffer.c_str() + lastStreamedSize;
+      if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
+        int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
+        const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
         jsonStreamCallback(chunkStart, chunkSize, false);
-        lastStreamedSize = jsonBuffer.length();
+        lastStreamedSize = jsonReceiveBuffer.length();
       }
 
       // Send progress update via callback (throttled)
       if (jsonProgressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-        jsonProgressCallback(jsonBuffer.length());
+        jsonProgressCallback(jsonReceiveBuffer.length());
         lastProgressUpdate = millis();
       }
 
       if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Progress: buffer size: %d bytes\n", jsonBuffer.length());
+        DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Progress: buffer size: %d bytes\n", jsonReceiveBuffer.length());
       }
     }
 
@@ -755,7 +755,7 @@ String GetRawJson(uint8_t nodeId) {
       state = IDLE;
       // Restore previous state
       _nodeId = savedNodeId;
-      jsonBuffer = savedJsonBuffer;
+      jsonReceiveBuffer = savedJsonBuffer;
       return "{}";
     }
 
@@ -769,17 +769,17 @@ String GetRawJson(uint8_t nodeId) {
     state = IDLE;
     // Restore previous state
     _nodeId = savedNodeId;
-    jsonBuffer = savedJsonBuffer;
+    jsonReceiveBuffer = savedJsonBuffer;
     return "{}";
   }
 
-  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Download complete! Buffer size: %d bytes\n", jsonBuffer.length());
-  String result = jsonBuffer;
+  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Download complete! Buffer size: %d bytes\n", jsonReceiveBuffer.length());
+  String result = jsonReceiveBuffer;
 
   // Send final chunk with completion flag if streaming
-  if (jsonStreamCallback && jsonBuffer.length() > lastStreamedSize) {
-    int chunkSize = jsonBuffer.length() - lastStreamedSize;
-    const char* chunkStart = jsonBuffer.c_str() + lastStreamedSize;
+  if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
+    int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
+    const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
     jsonStreamCallback(chunkStart, chunkSize, true);
   } else if (jsonStreamCallback) {
     jsonStreamCallback("", 0, true);
@@ -792,7 +792,7 @@ String GetRawJson(uint8_t nodeId) {
 
   // Restore previous state
   _nodeId = savedNodeId;
-  jsonBuffer = savedJsonBuffer;
+  jsonReceiveBuffer = savedJsonBuffer;
   DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Restored to node %d\n", _nodeId);
 
   return result;
@@ -805,12 +805,12 @@ bool SendJson(WiFiClient client) {
   twai_message_t rxframe;
 
   // Use in-memory JSON if available
-  if (paramJson.isNull() || paramJson.size() == 0) {
+  if (cachedParamJson.isNull() || cachedParamJson.size() == 0) {
     DBG_OUTPUT_PORT.println("No parameter JSON in memory");
     return false;
   }
 
-  JsonObject root = paramJson.as<JsonObject>();
+  JsonObject root = cachedParamJson.as<JsonObject>();
   int failed = 0;
 
   for (JsonPair kv : root) {
@@ -1313,8 +1313,8 @@ String ListErrors() {
 
   // Build error description map from parameter JSON (lasterr field)
   std::map<int, String> errorDescriptions;
-  if (!paramJson.isNull() && paramJson.containsKey("lasterr")) {
-    JsonObject lasterr = paramJson["lasterr"].as<JsonObject>();
+  if (!cachedParamJson.isNull() && cachedParamJson.containsKey("lasterr")) {
+    JsonObject lasterr = cachedParamJson["lasterr"].as<JsonObject>();
     for (JsonPair kv : lasterr) {
       int errorNum = atoi(kv.key().c_str());
       errorDescriptions[errorNum] = kv.value().as<String>();
@@ -1324,8 +1324,8 @@ String ListErrors() {
 
   // Determine tick duration from uptime parameter's unit (default: 10ms)
   int tickDurationMs = 10; // Default to 10ms
-  if (!paramJson.isNull() && paramJson.containsKey("uptime")) {
-    JsonObject uptime = paramJson["uptime"].as<JsonObject>();
+  if (!cachedParamJson.isNull() && cachedParamJson.containsKey("uptime")) {
+    JsonObject uptime = cachedParamJson["uptime"].as<JsonObject>();
     if (uptime.containsKey("unit")) {
       String unit = uptime["unit"].as<String>();
       if (unit == "sec" || unit == "s") {
@@ -1678,8 +1678,8 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 
   // Clear cached JSON when switching to a different device
   if (_nodeId != nodeId) {
-    jsonBuffer = "";
-    paramJson.clear();
+    jsonReceiveBuffer = "";
+    cachedParamJson.clear();
     DBG_OUTPUT_PORT.println("Cleared cached JSON (switching devices)");
   }
 
@@ -1774,8 +1774,8 @@ bool ReloadJson(uint8_t nodeId) {
   // Clear the cached JSON buffer for the requested node
   if (_nodeId == nodeId) {
     // If it's the currently connected node, clear the cache
-    jsonBuffer = "";
-    paramJson.clear();
+    jsonReceiveBuffer = "";
+    cachedParamJson.clear();
     DBG_OUTPUT_PORT.printf("[ReloadJson(nodeId)] Cleared cache for node %d\n", nodeId);
     return true;
   } else {
@@ -2044,7 +2044,7 @@ bool StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
   scanStartNode = startNodeId;
   scanEndNode = endNodeId;
   currentScanNode = startNodeId;
-  scanSerialPart = 0;
+  currentSerialPartIndex = 0;
   lastScanTime = 0;
 
   DBG_OUTPUT_PORT.printf("Started continuous CAN scan (nodes %d-%d)\n", startNodeId, endNodeId);
@@ -2102,10 +2102,10 @@ void ProcessContinuousScan() {
   lastScanTime = currentTime;
 
   // Request serial number part from current scan node
-  requestSdoElement(currentScanNode, SDO_INDEX_SERIAL, scanSerialPart);
+  requestSdoElement(currentScanNode, SDO_INDEX_SERIAL, currentSerialPartIndex);
 
   // Notify scan progress when starting a new node (first serial part)
-  if (scanSerialPart == 0 && scanProgressCallback) {
+  if (currentSerialPartIndex == 0 && scanProgressCallback) {
     scanProgressCallback(currentScanNode, scanStartNode, scanEndNode);
   }
 
@@ -2113,13 +2113,13 @@ void ProcessContinuousScan() {
   if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
     printCanRx(&rxframe);
 
-    if (isValidSerialResponse(rxframe, currentScanNode, scanSerialPart)) {
+    if (isValidSerialResponse(rxframe, currentScanNode, currentSerialPartIndex)) {
 
-      scanDeviceSerial[scanSerialPart] = *(uint32_t*)&rxframe.data[4];
-      scanSerialPart++;
+      scanDeviceSerial[currentSerialPartIndex] = *(uint32_t*)&rxframe.data[4];
+      currentSerialPartIndex++;
 
       // If we've read all 4 parts, we found a device
-      if (scanSerialPart >= 4) {
+      if (currentSerialPartIndex >= 4) {
         char serialStr[40];
         sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
                 scanDeviceSerial[0], scanDeviceSerial[1], scanDeviceSerial[2], scanDeviceSerial[3]);
