@@ -142,36 +142,36 @@ export default function DeviceControl({ serial, nodeId }: DeviceControlProps) {
         </button>
       </div>
 
-      {/* Error Display */}
-      <div class="errors-section">
-        <h3>{content.currentErrors}</h3>
-        {loadingErrors ? (
-          <div class="loading-container">
-            <LoadingSpinner />
-          </div>
-        ) : errors.length > 0 ? (
-          <div class="errors-list">
-            {errors.map((error, index) => (
-              <div key={index} class="error-item">
-                <div class="error-number">
-                  {content.errorCode}: {error.errorNum}
+      {/* Error Display - Only show when loading or errors exist */}
+      {(loadingErrors || errors.length > 0) && (
+        <div class="errors-section">
+          <h3>{content.currentErrors}</h3>
+          {loadingErrors ? (
+            <div class="loading-container">
+              <LoadingSpinner />
+            </div>
+          ) : (
+            <div class="errors-list">
+              {errors.map((error, index) => (
+                <div key={index} class="error-item">
+                  <div class="error-number">
+                    {content.errorCode}: {error.errorNum}
+                  </div>
+                  {error.description && (
+                    <div class="error-description">{error.description}</div>
+                  )}
+                  <div class="error-time">
+                    {content.errorTime}: {formatTimestamp(error.errorTime)}
+                  </div>
                 </div>
-                {error.description && (
-                  <div class="error-description">{error.description}</div>
-                )}
-                <div class="error-time">
-                  {content.errorTime}: {formatTimestamp(error.errorTime)}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div class="no-errors">{content.noErrors}</div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Action Buttons */}
-      <div class="actions-section">
+      {/* Action Buttons - Temporarily hidden until ready */}
+      {/* <div class="actions-section">
         <h3>{content.deviceActions}</h3>
         <div class="action-buttons">
           <button
@@ -214,7 +214,7 @@ export default function DeviceControl({ serial, nodeId }: DeviceControlProps) {
             {loadingAction === 'reset' ? <LoadingSpinner size="small" /> : content.resetDevice}
           </button>
         </div>
-      </div>
+      </div> */}
     </section>
   )
 }

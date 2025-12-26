@@ -1,8 +1,9 @@
-import { useEffect } from 'preact/hooks'
+import { useEffect, useMemo } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import { useToast } from '@hooks/useToast'
+import { useParams } from '@hooks/useParams'
 import './styles.css'
 
 interface CanIoControlProps {
@@ -19,12 +20,12 @@ const CAN_IO_REV = 0x10
 const CAN_IO_BMS = 0x20
 
 export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
-  // Props available for future use
-  void serial; void nodeId;
-
   const content = useIntlayer('can-io-control')
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
   const { showError, showSuccess } = useToast()
+
+  // Get device parameters for pot min/max scaling
+  const { params } = useParams(serial, nodeId)
 
   // Get state from context
   const {
@@ -60,6 +61,36 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
     regenpreset,
     useCrc,
   } = canIo
+
+  // Calculate pot min/max ranges from parameters
+  const potRanges = useMemo(() => {
+    if (!params) {
+      return {
+        pot1Min: 0,
+        pot1Max: 4095,
+        pot2Min: 0,
+        pot2Max: 4095
+      }
+    }
+
+    // Look for potmin/potmax parameters (common variations)
+    const pot1Min = params['potmin']?.value ?? params['pot1min']?.value ?? 0
+    const pot1Max = params['potmax']?.value ?? params['pot1max']?.value ?? 4095
+    const pot2Min = params['pot2min']?.value ?? 0
+    const pot2Max = params['pot2max']?.value ?? 4095
+
+    return {
+      pot1Min: typeof pot1Min === 'number' ? pot1Min : 0,
+      pot1Max: typeof pot1Max === 'number' ? pot1Max : 4095,
+      pot2Min: typeof pot2Min === 'number' ? pot2Min : 0,
+      pot2Max: typeof pot2Max === 'number' ? pot2Max : 4095
+    }
+  }, [params])
+
+  // Helper function to scale throttle percentage to pot value based on min/max
+  const scaleThrottle = (percent: number, min: number, max: number): number => {
+    return Math.round(min + (percent / 100) * (max - min))
+  }
 
   // Subscribe to WebSocket messages
   useEffect(() => {
@@ -101,13 +132,14 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
     if (reverse) canio |= CAN_IO_REV
     if (bms) canio |= CAN_IO_BMS
 
-    // Scale throttle percent (0-100) to pot values (0-4095)
-    const pot = Math.round((throttlePercent / 100) * 4095)
+    // Scale throttle percent based on pot min/max parameters
+    const pot = scaleThrottle(throttlePercent, potRanges.pot1Min, potRanges.pot1Max)
+    const pot2 = scaleThrottle(throttlePercent, potRanges.pot2Min, potRanges.pot2Max)
 
     sendMessage('startCanIoInterval', {
       canId: parsedCanId,
       pot,
-      pot2: pot, // pot2 same as pot
+      pot2,
       canio,
       cruisespeed,
       regenpreset,
@@ -166,12 +198,13 @@ export default function CanIoControl({ serial, nodeId }: CanIoControlProps) {
     if (currentReverse) canio |= CAN_IO_REV
     if (currentBms) canio |= CAN_IO_BMS
 
-    // Scale throttle percent (0-100) to pot values (0-4095)
-    const pot = Math.round((currentThrottle / 100) * 4095)
+    // Scale throttle percent based on pot min/max parameters
+    const pot = scaleThrottle(currentThrottle, potRanges.pot1Min, potRanges.pot1Max)
+    const pot2 = scaleThrottle(currentThrottle, potRanges.pot2Min, potRanges.pot2Max)
 
     sendMessage('updateCanIoFlags', {
       pot,
-      pot2: pot,
+      pot2,
       canio,
       cruisespeed: currentCruisespeed,
       regenpreset: currentRegenpreset

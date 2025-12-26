@@ -7,7 +7,7 @@ import { DeviceDetailsProvider, useDeviceDetailsContext } from '@contexts/Device
 import Layout from '@components/Layout'
 import ConnectionStatus from '@components/ConnectionStatus'
 import SpotValuesMonitor from '@components/SpotValuesMonitor'
-import DeviceControl from '@components/DeviceControl'
+// import DeviceControl from '@components/DeviceControl'
 import OTAUpdate from '@components/OTAUpdate'
 import DeviceParameters from '@components/DeviceParameters'
 import CanMappingEditor from '@components/CanMappingEditor'
@@ -226,7 +226,7 @@ function DeviceDetailsContent() {
             label: 'Overview',
             content: savedNodeId > 0 && routeParams?.serial ? (
               <>
-                <DeviceControl serial={routeParams.serial} nodeId={savedNodeId} />
+                {/* <DeviceControl serial={routeParams.serial} nodeId={savedNodeId} /> */}
                 <SpotValuesMonitor serial={routeParams.serial} nodeId={savedNodeId} showHeader={false} />
               </>
             ) : (
