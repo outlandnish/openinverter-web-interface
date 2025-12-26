@@ -20,6 +20,11 @@
 #include "driver/uart.h"
 #include "oi_can.h"
 #include "config.h"
+#include "models/can_types.h"
+#include "models/can_command.h"
+#include "models/can_event.h"
+#include "models/interval_messages.h"
+#include "utils/string_utils.h"
 
 #define DBG_OUTPUT_PORT Serial
 #define INVERTER_PORT UART_NUM_1
@@ -42,185 +47,6 @@
 // FreeRTOS Queue handles
 QueueHandle_t canCommandQueue = nullptr;
 QueueHandle_t canEventQueue = nullptr;
-
-// Command types for CAN task
-enum CANCommandType {
-  CMD_START_SCAN,
-  CMD_STOP_SCAN,
-  CMD_CONNECT,
-  CMD_SET_NODE_ID,
-  CMD_SET_DEVICE_NAME,
-  CMD_GET_NODE_ID,
-  CMD_START_SPOT_VALUES,
-  CMD_STOP_SPOT_VALUES,
-  CMD_DELETE_DEVICE,
-  CMD_RENAME_DEVICE,
-  CMD_SEND_CAN_MESSAGE,
-  CMD_START_CAN_INTERVAL,
-  CMD_STOP_CAN_INTERVAL,
-  CMD_START_CANIO_INTERVAL,
-  CMD_STOP_CANIO_INTERVAL,
-  CMD_UPDATE_CANIO_FLAGS
-};
-
-// Event types from CAN task
-enum CANEventType {
-  EVT_DEVICE_DISCOVERED,
-  EVT_SCAN_STATUS,
-  EVT_SCAN_PROGRESS,
-  EVT_CONNECTED,
-  EVT_NODE_ID_INFO,
-  EVT_NODE_ID_SET,
-  EVT_SPOT_VALUES_STATUS,
-  EVT_SPOT_VALUES,
-  EVT_DEVICE_NAME_SET,
-  EVT_ERROR,
-  EVT_DEVICE_DELETED,
-  EVT_DEVICE_RENAMED,
-  EVT_CAN_MESSAGE_SENT,
-  EVT_CAN_INTERVAL_STATUS,
-  EVT_CANIO_INTERVAL_STATUS
-};
-
-// Command message structure
-struct CANCommand {
-  CANCommandType type;
-  union {
-    struct {
-      uint8_t start;
-      uint8_t end;
-    } scan;
-    struct {
-      uint8_t nodeId;
-      char serial[50];
-    } connect;
-    struct {
-      uint8_t nodeId;
-    } setNodeId;
-    struct {
-      char serial[50];
-      char name[50];
-      int nodeId;
-    } setDeviceName;
-    struct {
-      int paramIds[100];
-      int paramCount;
-      uint32_t interval;
-    } spotValues;
-    struct {
-      char serial[50];
-    } deleteDevice;
-    struct {
-      char serial[50];
-      char name[50];
-    } renameDevice;
-    struct {
-      uint32_t canId;
-      uint8_t data[8];
-      uint8_t dataLength;
-    } sendCanMessage;
-    struct {
-      uint32_t canId;
-      uint8_t data[8];
-      uint8_t dataLength;
-      uint32_t intervalMs;
-      char intervalId[32]; // Unique ID for this interval message
-    } startCanInterval;
-    struct {
-      char intervalId[32]; // ID of interval to stop
-    } stopCanInterval;
-    struct {
-      uint32_t canId;           // CAN ID (default 0x3F)
-      uint16_t pot;             // Throttle 1 (12 bits, 0-4095)
-      uint16_t pot2;            // Throttle 2 (12 bits, 0-4095)
-      uint8_t canio;            // Digital I/O flags (6 bits)
-      uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
-      uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
-      uint32_t intervalMs;      // Send interval in milliseconds
-      bool useCrc;              // Use CRC-32 (true) or counter-only (false)
-    } startCanIoInterval;
-    struct {
-      uint16_t pot;             // Throttle 1 (12 bits, 0-4095)
-      uint16_t pot2;            // Throttle 2 (12 bits, 0-4095)
-      uint8_t canio;            // Digital I/O flags (6 bits)
-      uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
-      uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
-    } updateCanIoFlags;
-  } data;
-};
-
-// Event message structure
-struct CANEvent {
-  CANEventType type;
-  union {
-    struct {
-      uint8_t nodeId;
-      char serial[50];
-      uint32_t lastSeen;
-      char name[50];
-    } deviceDiscovered;
-    struct {
-      bool active;
-    } scanStatus;
-    struct {
-      uint8_t currentNode;
-      uint8_t startNode;
-      uint8_t endNode;
-    } scanProgress;
-    struct {
-      uint8_t nodeId;
-      char serial[50];
-    } connected;
-    struct {
-      uint8_t id;
-      uint8_t speed;
-    } nodeIdInfo;
-    struct {
-      uint8_t id;
-      uint8_t speed;
-    } nodeIdSet;
-    struct {
-      bool active;
-      uint32_t interval;
-      int paramCount;
-    } spotValuesStatus;
-    struct {
-      uint32_t timestamp;
-      char valuesJson[1024]; // JSON string of values
-    } spotValues;
-    struct {
-      bool success;
-      char serial[50];
-      char name[50];
-    } deviceNameSet;
-    struct {
-      char message[200];
-    } error;
-    struct {
-      bool success;
-      char serial[50];
-    } deviceDeleted;
-    struct {
-      bool success;
-      char serial[50];
-      char name[50];
-    } deviceRenamed;
-    struct {
-      bool success;
-      uint32_t canId;
-    } canMessageSent;
-    struct {
-      bool active;
-      char intervalId[32];
-      uint32_t intervalMs;
-    } canIntervalStatus;
-    struct {
-      bool active;
-      uint32_t intervalMs;
-    } canIoIntervalStatus;
-  } data;
-};
-
 
 //HardwareSerial Inverter(INVERTER_PORT);
 
@@ -245,30 +71,9 @@ std::map<int, double> spotValuesBatch; // Accumulated spot values (map auto-repl
 std::map<int, double> latestSpotValues; // Persistent cache of latest values (never cleared)
 
 // Interval CAN message sending
-struct IntervalCanMessage {
-  String id;
-  uint32_t canId;
-  uint8_t data[8];
-  uint8_t dataLength;
-  uint32_t intervalMs;
-  uint32_t lastSentTime;
-};
 std::vector<IntervalCanMessage> intervalCanMessages;
 
 // CAN IO interval message sending
-struct CanIoInterval {
-  bool active;
-  uint32_t canId;
-  uint16_t pot;
-  uint16_t pot2;
-  uint8_t canio;
-  uint16_t cruisespeed;
-  uint8_t regenpreset;
-  uint32_t intervalMs;
-  uint32_t lastSentTime;
-  uint8_t sequenceCounter; // 2-bit counter (0-3)
-  bool useCrc;             // Use CRC-32 (true) or counter-only (false)
-};
 CanIoInterval canIoInterval = {false, 0x3F, 0, 0, 0, 0, 0, 100, 0, 0, false};
 
 // Device locking for multi-client support
@@ -323,12 +128,12 @@ uint32_t crc32_word(uint32_t crc, uint32_t word) {
 void buildCanIoMessage(uint8_t* msg, uint16_t pot, uint16_t pot2, uint8_t canio,
                        uint8_t ctr, uint16_t cruisespeed, uint8_t regenpreset, bool useCRC = false) {
   // Mask inputs to their bit limits
-  pot &= 0x0FFF;          // 12 bits
-  pot2 &= 0x0FFF;         // 12 bits
-  canio &= 0x3F;          // 6 bits
-  ctr &= 0x03;            // 2 bits
-  cruisespeed &= 0x3FFF;  // 14 bits
-  regenpreset &= 0xFF;    // 8 bits
+  pot &= CAN_IO_POT_MASK;          // 12 bits
+  pot2 &= CAN_IO_POT_MASK;         // 12 bits
+  canio &= CAN_IO_CANIO_MASK;      // 6 bits
+  ctr &= CAN_IO_COUNTER_MASK;      // 2 bits
+  cruisespeed &= CAN_IO_CRUISE_MASK;  // 14 bits
+  regenpreset &= CAN_IO_REGEN_MASK;   // 8 bits
 
   // data[0] (32 bits): pot (0-11), pot2 (12-23), canio (24-29), ctr1 (30-31)
   uint32_t data0 = pot | (pot2 << 12) | (canio << 24) | (ctr << 30);
@@ -481,7 +286,7 @@ void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.data.scan.start = start;
   cmd.data.scan.end = end;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.println("[WebSocket] Scan start command queued");
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan start command");
@@ -492,7 +297,7 @@ void handleStopScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_SCAN;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.println("[WebSocket] Scan stop command queued");
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan stop command");
@@ -535,9 +340,9 @@ void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_CONNECT;
   cmd.data.connect.nodeId = nodeId;
-  strncpy(cmd.data.connect.serial, serial.c_str(), sizeof(cmd.data.connect.serial) - 1);
+  safeCopyString(cmd.data.connect.serial, serial);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Connect command queued (node %d)\n", nodeId);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue connect command");
@@ -554,11 +359,11 @@ void handleSetDeviceName(AsyncWebSocketClient* client, JsonDocument& doc) {
 
   CANCommand cmd;
   cmd.type = CMD_SET_DEVICE_NAME;
-  strncpy(cmd.data.setDeviceName.serial, serial.c_str(), sizeof(cmd.data.setDeviceName.serial) - 1);
-  strncpy(cmd.data.setDeviceName.name, name.c_str(), sizeof(cmd.data.setDeviceName.name) - 1);
+  safeCopyString(cmd.data.setDeviceName.serial, serial);
+  safeCopyString(cmd.data.setDeviceName.name, name);
   cmd.data.setDeviceName.nodeId = nodeId;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Set device name command queued (%s)\n", serial.c_str());
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set device name command");
@@ -570,9 +375,9 @@ void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
 
   CANCommand cmd;
   cmd.type = CMD_DELETE_DEVICE;
-  strncpy(cmd.data.deleteDevice.serial, serial.c_str(), sizeof(cmd.data.deleteDevice.serial) - 1);
+  safeCopyString(cmd.data.deleteDevice.serial, serial);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Delete device command queued (%s)\n", serial.c_str());
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue delete device command");
@@ -585,10 +390,10 @@ void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
 
   CANCommand cmd;
   cmd.type = CMD_RENAME_DEVICE;
-  strncpy(cmd.data.renameDevice.serial, serial.c_str(), sizeof(cmd.data.renameDevice.serial) - 1);
-  strncpy(cmd.data.renameDevice.name, name.c_str(), sizeof(cmd.data.renameDevice.name) - 1);
+  safeCopyString(cmd.data.renameDevice.serial, serial);
+  safeCopyString(cmd.data.renameDevice.name, name);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Rename device command queued (%s -> %s)\n", serial.c_str(), name.c_str());
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue rename device command");
@@ -599,7 +404,7 @@ void handleGetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_GET_NODE_ID;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.println("[WebSocket] Get node ID command queued");
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue get node ID command");
@@ -613,7 +418,7 @@ void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.type = CMD_SET_NODE_ID;
   cmd.data.setNodeId.nodeId = id;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Set node ID command queued (node %d)\n", id);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set node ID command");
@@ -645,7 +450,7 @@ void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
     }
   }
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Send CAN message command queued (ID=0x%03lX, Len=%d)\n",
                            (unsigned long)cmd.data.sendCanMessage.canId, cmd.data.sendCanMessage.dataLength);
   } else {
@@ -663,8 +468,7 @@ void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
     return;
   }
   String intervalId = doc["intervalId"].as<String>();
-  strncpy(cmd.data.startCanInterval.intervalId, intervalId.c_str(), 31);
-  cmd.data.startCanInterval.intervalId[31] = '\0';
+  safeCopyString(cmd.data.startCanInterval.intervalId, intervalId);
 
   // Parse CAN ID
   if (!doc.containsKey("canId")) {
@@ -693,10 +497,10 @@ void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
     return;
   }
   cmd.data.startCanInterval.intervalMs = doc["interval"].as<uint32_t>();
-  if (cmd.data.startCanInterval.intervalMs < 10) cmd.data.startCanInterval.intervalMs = 10;
-  if (cmd.data.startCanInterval.intervalMs > 60000) cmd.data.startCanInterval.intervalMs = 60000;
+  if (cmd.data.startCanInterval.intervalMs < CAN_INTERVAL_MIN_MS) cmd.data.startCanInterval.intervalMs = CAN_INTERVAL_MIN_MS;
+  if (cmd.data.startCanInterval.intervalMs > CAN_INTERVAL_MAX_MS) cmd.data.startCanInterval.intervalMs = CAN_INTERVAL_MAX_MS;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN interval command queued (ID=%s, CAN=0x%03lX, Interval=%lums)\n",
                            cmd.data.startCanInterval.intervalId, (unsigned long)cmd.data.startCanInterval.canId, (unsigned long)cmd.data.startCanInterval.intervalMs);
   } else {
@@ -714,10 +518,9 @@ void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
     return;
   }
   String intervalId = doc["intervalId"].as<String>();
-  strncpy(cmd.data.stopCanInterval.intervalId, intervalId.c_str(), 31);
-  cmd.data.stopCanInterval.intervalId[31] = '\0';
+  safeCopyString(cmd.data.stopCanInterval.intervalId, intervalId);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Stop CAN interval command queued (ID=%s)\n", cmd.data.stopCanInterval.intervalId);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN interval command");
@@ -744,13 +547,13 @@ void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
 
   // Parse interval (50-500ms recommended, enforce 10-500ms)
   cmd.data.startCanIoInterval.intervalMs = doc.containsKey("interval") ? doc["interval"].as<uint32_t>() : 100;
-  if (cmd.data.startCanIoInterval.intervalMs < 10) cmd.data.startCanIoInterval.intervalMs = 10;
-  if (cmd.data.startCanIoInterval.intervalMs > 500) cmd.data.startCanIoInterval.intervalMs = 500;
+  if (cmd.data.startCanIoInterval.intervalMs < CAN_IO_INTERVAL_MIN_MS) cmd.data.startCanIoInterval.intervalMs = CAN_IO_INTERVAL_MIN_MS;
+  if (cmd.data.startCanIoInterval.intervalMs > CAN_IO_INTERVAL_MAX_MS) cmd.data.startCanIoInterval.intervalMs = CAN_IO_INTERVAL_MAX_MS;
 
   // Parse useCrc flag (default false = counter-only mode)
   cmd.data.startCanIoInterval.useCrc = doc.containsKey("useCrc") ? doc["useCrc"].as<bool>() : false;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN IO interval command queued (CAN=0x%03lX, canio=0x%02X, Interval=%lums)\n",
                            (unsigned long)cmd.data.startCanIoInterval.canId, cmd.data.startCanIoInterval.canio, (unsigned long)cmd.data.startCanIoInterval.intervalMs);
   } else {
@@ -762,7 +565,7 @@ void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_CANIO_INTERVAL;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.println("[WebSocket] Stop CAN IO interval command queued");
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN IO interval command");
@@ -780,7 +583,7 @@ void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.data.updateCanIoFlags.cruisespeed = doc.containsKey("cruisespeed") ? doc["cruisespeed"].as<uint16_t>() : 0;
   cmd.data.updateCanIoFlags.regenpreset = doc.containsKey("regenpreset") ? doc["regenpreset"].as<uint8_t>() : 0;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Update CAN IO flags command queued (canio=0x%02X)\n", cmd.data.updateCanIoFlags.canio);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue update CAN IO flags command");
@@ -803,13 +606,13 @@ void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
 
   if (doc.containsKey("interval")) {
     cmd.data.spotValues.interval = doc["interval"].as<uint32_t>();
-    if (cmd.data.spotValues.interval < 100) cmd.data.spotValues.interval = 100;
-    if (cmd.data.spotValues.interval > 10000) cmd.data.spotValues.interval = 10000;
+    if (cmd.data.spotValues.interval < SPOT_VALUES_INTERVAL_MIN_MS) cmd.data.spotValues.interval = SPOT_VALUES_INTERVAL_MIN_MS;
+    if (cmd.data.spotValues.interval > SPOT_VALUES_INTERVAL_MAX_MS) cmd.data.spotValues.interval = SPOT_VALUES_INTERVAL_MAX_MS;
   } else {
     cmd.data.spotValues.interval = 1000; // Default 1000ms
   }
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Start spot values command queued (%d params)\n", cmd.data.spotValues.paramCount);
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start spot values command");
@@ -820,7 +623,7 @@ void handleStopSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_SPOT_VALUES;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
     DBG_OUTPUT_PORT.println("[WebSocket] Stop spot values command queued");
   } else {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop spot values command");
@@ -1681,7 +1484,7 @@ void canTask(void* parameter) {
               DBG_OUTPUT_PORT.println("[CAN Task] Scan failed to start - device busy");
               CANEvent evt;
               evt.type = EVT_ERROR;
-              strncpy(evt.data.error.message, "Cannot start scan - device is busy. Please wait or disconnect from the current device.", sizeof(evt.data.error.message) - 1);
+              safeCopyString(evt.data.error.message, "Cannot start scan - device is busy. Please wait or disconnect from the current device.");
               xQueueSend(canEventQueue, &evt, 0);
             }
           }
@@ -1752,8 +1555,8 @@ void canTask(void* parameter) {
             CANEvent evt;
             evt.type = EVT_DEVICE_NAME_SET;
             evt.data.deviceNameSet.success = success;
-            strcpy(evt.data.deviceNameSet.serial, cmd.data.setDeviceName.serial);
-            strcpy(evt.data.deviceNameSet.name, cmd.data.setDeviceName.name);
+            safeCopyString(evt.data.deviceNameSet.serial, cmd.data.setDeviceName.serial);
+            safeCopyString(evt.data.deviceNameSet.name, cmd.data.setDeviceName.name);
             xQueueSend(canEventQueue, &evt, 0);
           }
           break;
@@ -1802,7 +1605,7 @@ void canTask(void* parameter) {
             CANEvent evt;
             evt.type = EVT_DEVICE_DELETED;
             evt.data.deviceDeleted.success = success;
-            strcpy(evt.data.deviceDeleted.serial, cmd.data.deleteDevice.serial);
+            safeCopyString(evt.data.deviceDeleted.serial, cmd.data.deleteDevice.serial);
             xQueueSend(canEventQueue, &evt, 0);
           }
           break;
@@ -1813,8 +1616,8 @@ void canTask(void* parameter) {
             CANEvent evt;
             evt.type = EVT_DEVICE_RENAMED;
             evt.data.deviceRenamed.success = success;
-            strcpy(evt.data.deviceRenamed.serial, cmd.data.renameDevice.serial);
-            strcpy(evt.data.deviceRenamed.name, cmd.data.renameDevice.name);
+            safeCopyString(evt.data.deviceRenamed.serial, cmd.data.renameDevice.serial);
+            safeCopyString(evt.data.deviceRenamed.name, cmd.data.renameDevice.name);
             xQueueSend(canEventQueue, &evt, 0);
           }
           break;
@@ -1864,7 +1667,7 @@ void canTask(void* parameter) {
             CANEvent evt;
             evt.type = EVT_CAN_INTERVAL_STATUS;
             evt.data.canIntervalStatus.active = true;
-            strcpy(evt.data.canIntervalStatus.intervalId, cmd.data.startCanInterval.intervalId);
+            safeCopyString(evt.data.canIntervalStatus.intervalId, cmd.data.startCanInterval.intervalId);
             evt.data.canIntervalStatus.intervalMs = cmd.data.startCanInterval.intervalMs;
             xQueueSend(canEventQueue, &evt, 0);
           }
@@ -1887,7 +1690,7 @@ void canTask(void* parameter) {
               CANEvent evt;
               evt.type = EVT_CAN_INTERVAL_STATUS;
               evt.data.canIntervalStatus.active = false;
-              strcpy(evt.data.canIntervalStatus.intervalId, cmd.data.stopCanInterval.intervalId);
+              safeCopyString(evt.data.canIntervalStatus.intervalId, cmd.data.stopCanInterval.intervalId);
               evt.data.canIntervalStatus.intervalMs = 0;
               xQueueSend(canEventQueue, &evt, 0);
             }
@@ -2129,7 +1932,7 @@ void setup(void){
     CANEvent evt;
     evt.type = EVT_DEVICE_DISCOVERED;
     evt.data.deviceDiscovered.nodeId = nodeId;
-    strncpy(evt.data.deviceDiscovered.serial, serial, sizeof(evt.data.deviceDiscovered.serial) - 1);
+    safeCopyString(evt.data.deviceDiscovered.serial, serial);
     evt.data.deviceDiscovered.lastSeen = lastSeen;
     evt.data.deviceDiscovered.name[0] = '\0'; // Will be filled from devices.json
 
@@ -2143,7 +1946,7 @@ void setup(void){
         if (doc.containsKey("devices") && doc["devices"].containsKey(serial)) {
           const char* name = doc["devices"][serial]["name"];
           if (name) {
-            strncpy(evt.data.deviceDiscovered.name, name, sizeof(evt.data.deviceDiscovered.name) - 1);
+            safeCopyString(evt.data.deviceDiscovered.name, name);
           }
         }
       }
@@ -2168,8 +1971,7 @@ void setup(void){
     CANEvent evt;
     evt.type = EVT_CONNECTED;
     evt.data.connected.nodeId = nodeId;
-    strncpy(evt.data.connected.serial, serial, sizeof(evt.data.connected.serial) - 1);
-    evt.data.connected.serial[sizeof(evt.data.connected.serial) - 1] = '\0';
+    safeCopyString(evt.data.connected.serial, serial);
     xQueueSend(canEventQueue, &evt, 0);
   });
 

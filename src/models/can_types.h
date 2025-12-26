@@ -1,0 +1,62 @@
+#ifndef CAN_TYPES_H
+#define CAN_TYPES_H
+
+#include <cstdint>
+
+// Configuration constants
+#define MAX_PARAM_IDS 100
+#define SPOT_VALUES_INTERVAL_MIN_MS 100
+#define SPOT_VALUES_INTERVAL_MAX_MS 10000
+#define CAN_INTERVAL_MIN_MS 10
+#define CAN_INTERVAL_MAX_MS 60000
+#define CAN_IO_INTERVAL_MIN_MS 10
+#define CAN_IO_INTERVAL_MAX_MS 500
+#define QUEUE_SEND_TIMEOUT_MS 100
+
+// CAN IO message bit masks
+#define CAN_IO_POT_MASK 0x0FFF       // 12 bits for throttle values
+#define CAN_IO_CANIO_MASK 0x3F       // 6 bits for digital I/O
+#define CAN_IO_COUNTER_MASK 0x03     // 2 bits for sequence counter
+#define CAN_IO_CRUISE_MASK 0x3FFF    // 14 bits for cruise speed
+#define CAN_IO_REGEN_MASK 0xFF       // 8 bits for regen preset
+
+// Command types for CAN task
+enum CANCommandType {
+  CMD_START_SCAN,
+  CMD_STOP_SCAN,
+  CMD_CONNECT,
+  CMD_SET_NODE_ID,
+  CMD_SET_DEVICE_NAME,
+  CMD_GET_NODE_ID,
+  CMD_START_SPOT_VALUES,
+  CMD_STOP_SPOT_VALUES,
+  CMD_DELETE_DEVICE,
+  CMD_RENAME_DEVICE,
+  CMD_SEND_CAN_MESSAGE,
+  CMD_START_CAN_INTERVAL,
+  CMD_STOP_CAN_INTERVAL,
+  CMD_START_CANIO_INTERVAL,
+  CMD_STOP_CANIO_INTERVAL,
+  CMD_UPDATE_CANIO_FLAGS
+};
+
+// Event types from CAN task
+enum CANEventType {
+  EVT_DEVICE_DISCOVERED,
+  EVT_SCAN_STATUS,
+  EVT_SCAN_PROGRESS,
+  EVT_CONNECTED,
+  EVT_NODE_ID_INFO,
+  EVT_NODE_ID_SET,
+  EVT_SPOT_VALUES_STATUS,
+  EVT_SPOT_VALUES,
+  EVT_DEVICE_NAME_SET,
+  EVT_ERROR,
+  EVT_DEVICE_DELETED,
+  EVT_DEVICE_RENAMED,
+  EVT_CAN_MESSAGE_SENT,
+  EVT_CAN_INTERVAL_STATUS,
+  EVT_CANIO_INTERVAL_STATUS
+};
+
+#endif // CAN_TYPES_H
