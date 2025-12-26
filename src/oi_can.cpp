@@ -114,6 +114,23 @@ struct Device {
 };
 static std::map<String, Device> deviceList; // Key: serial number
 
+// Helper functions for CAN response validation
+static bool isValidSerialResponse(const twai_message_t& frame, uint8_t nodeId, uint8_t partIndex) {
+  uint16_t rxIndex = (frame.data[1] | (frame.data[2] << 8));
+  return frame.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
+         frame.data[0] != SDO_ABORT &&
+         rxIndex == SDO_INDEX_SERIAL &&
+         frame.data[3] == partIndex;
+}
+
+static void advanceScanNode() {
+  scanSerialPart = 0;
+  currentScanNode++;
+  if (currentScanNode > scanEndNode) {
+    currentScanNode = scanStartNode; // Wrap around to start
+  }
+}
+
 // CAN debug helpers
 static void printCanTx(const twai_message_t* frame) {
   // Debug output disabled
@@ -1834,10 +1851,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
       if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
-            rxframe.data[0] != SDO_ABORT &&
-            (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
-            rxframe.data[3] == part) {
+        if (isValidSerialResponse(rxframe, nodeId, part)) {
           deviceSerial[part] = *(uint32_t*)&rxframe.data[4];
         } else {
           deviceFound = false;
@@ -2099,10 +2113,7 @@ void ProcessContinuousScan() {
   if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
     printCanRx(&rxframe);
 
-    if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | currentScanNode) &&
-        rxframe.data[0] != SDO_ABORT &&
-        (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
-        rxframe.data[3] == scanSerialPart) {
+    if (isValidSerialResponse(rxframe, currentScanNode, scanSerialPart)) {
 
       scanDeviceSerial[scanSerialPart] = *(uint32_t*)&rxframe.data[4];
       scanSerialPart++;
@@ -2124,27 +2135,15 @@ void ProcessContinuousScan() {
         }
 
         // Move to next node
-        scanSerialPart = 0;
-        currentScanNode++;
-        if (currentScanNode > scanEndNode) {
-          currentScanNode = scanStartNode; // Wrap around to start
-        }
+        advanceScanNode();
       }
     } else {
       // No response or error - move to next node
-      scanSerialPart = 0;
-      currentScanNode++;
-      if (currentScanNode > scanEndNode) {
-        currentScanNode = scanStartNode; // Wrap around to start
-      }
+      advanceScanNode();
     }
   } else {
     // Timeout - move to next node
-    scanSerialPart = 0;
-    currentScanNode++;
-    if (currentScanNode > scanEndNode) {
-      currentScanNode = scanStartNode; // Wrap around to start
-    }
+    advanceScanNode();
   }
 }
 

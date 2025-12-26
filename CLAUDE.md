@@ -2,3 +2,5 @@
 * Preact web project in /web for the interface
 * Do not add emoji into text or UI elements unless explicitly asked to do so.
 * Use intlayer translations / keys for text
+* If you need to test code compilation, ask me to do it for you.
+* Use `#pragma once` for header guards

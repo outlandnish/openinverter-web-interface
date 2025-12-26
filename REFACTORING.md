@@ -50,46 +50,19 @@
    - Replaced all magic number occurrences in `src/oi_can.cpp`
    - Total: 15+ occurrences replaced with named constants
 
+8. **Extracted CAN Response Validation Helpers**
+   - Created `isValidSerialResponse()` helper function in `src/oi_can.cpp`
+   - Created `advanceScanNode()` helper function in `src/oi_can.cpp`
+   - Replaced 2 complex nested validation patterns (lines 1854, 2116)
+   - Replaced 3 duplicate node advancement blocks (lines 2138, 2142, 2146)
+   - Eliminated ~25 lines of duplicate code
+   - Improved code readability and maintainability
+
 ---
 
 ## Remaining Refactorings 📋
 
 ### Priority 3: Extract Validation Helpers (Medium Risk)
-
-#### Task 4: Extract CAN Response Validation Helpers
-**File:** `src/oi_can.cpp`
-**Lines:** 2101-2104, 1836-1839, 2295-2298
-**Effort:** 1 hour
-**Risk:** Low-Medium
-
-**Problem:**
-Complex nested conditional repeated 3+ times:
-```cpp
-if (rxframe.identifier == (0x580 | currentScanNode) &&
-    rxframe.data[0] != SDO_ABORT &&
-    (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
-    rxframe.data[3] == scanSerialPart) {
-```
-
-**Solution:**
-Create helper functions in `src/oi_can.cpp`:
-```cpp
-bool isValidSerialResponse(const twai_message_t& frame, uint8_t nodeId, uint8_t partIndex) {
-  uint16_t rxIndex = (frame.data[1] | (frame.data[2] << 8));
-  return frame.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
-         frame.data[0] != SDO_ABORT &&
-         rxIndex == SDO_INDEX_SERIAL &&
-         frame.data[3] == partIndex;
-}
-
-void advanceScanNode() {
-  scanSerialPart = 0;
-  currentScanNode++;
-  if (currentScanNode > scanEndNode) {
-    currentScanNode = scanStartNode;
-  }
-}
-```
 
 ---
 
@@ -569,11 +542,12 @@ DeviceLockManager deviceLockManager;
 **Completed: 1.75 hours | Remaining: ~0.75 hours**
 
 ### Week 2: Validation & Helper Extraction
-1. Task 4: Extract CAN response validation (1 hour)
+1. ✅ ~~Task 4: Extract CAN response validation (1 hour)~~ - **COMPLETED**
 2. Task 8: Refactor ProcessContinuousScan() (2 hours)
 3. Task 9: Refactor ScanDevices() (2-3 hours)
 
 **Total: ~5-6 hours, Medium risk, Improves oi_can.cpp**
+**Completed: 1 hour | Remaining: ~4-5 hours**
 
 ### Week 3: Major Restructuring (High Risk)
 1. Task 6: Break up canTask() (3-4 hours + testing)
