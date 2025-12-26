@@ -1371,8 +1371,8 @@ String ListErrors() {
         errorObj["description"] = "Unknown error " + String(errorNum);
       }
 
-      DBG_OUTPUT_PORT.printf("Error %d at index %d: time=%lu ticks (%lu ms), desc=%s\n",
-                             errorNum, i, (unsigned long)errorTime,
+      DBG_OUTPUT_PORT.printf("Error %lu at index %d: time=%lu ticks (%lu ms), desc=%s\n",
+                             (unsigned long)errorNum, i, (unsigned long)errorTime,
                              (unsigned long)(errorTime * tickDurationMs),
                              errorObj["description"].as<const char*>());
     }
