@@ -2,7 +2,7 @@
 
 ## Completed Refactorings ✅
 
-### Phase 1: Code Organization & Safety (Completed)
+### Phase 1: Code Organization & Safety
 
 1. **Fixed Unsafe String Operations**
    - Replaced all `strcpy()` calls with `safeCopyString()` using `snprintf`
@@ -27,111 +27,32 @@
    - `src/utils/string_utils.h` - Safe string operations
    - Support for `std::string`, `const char*`, and Arduino `String`
 
+5. **Extracted Duplicate Error Response Helpers**
+   - Created `src/utils/websocket_helpers.h` with helper functions
+   - `sendWebSocketError()` - General error response helper
+   - `sendDeviceBusyError()` - Specialized "Device is busy" error helper
+   - Replaced 9 duplicate "Device is busy" error patterns in `src/main.cpp`
+   - Eliminated ~90 lines of duplicate code
+
+6. **Extracted Queue Command Helper**
+   - Created `queueCanCommand()` helper function
+   - Replaced 16 duplicate queue send patterns with single helper
+   - Improved error handling consistency
+   - Eliminated ~80 lines of duplicate code
+   - Organized all main.cpp helper functions into `src/main.h` as inline functions
+   - Includes: `queueCanCommand()`, `setStatusLED()`, `statusLEDOff()`
+
+7. **Defined CAN Protocol Constants**
+   - Added CAN ID constants to `src/models/can_types.h`
+   - `SDO_REQUEST_BASE_ID (0x600)`, `SDO_RESPONSE_BASE_ID (0x580)`
+   - `SDO_RESPONSE_MAX_ID (0x5FF)`, `BOOTLOADER_COMMAND_ID (0x7DD)`
+   - `BOOTLOADER_RESPONSE_ID (0x7DE)`
+   - Replaced all magic number occurrences in `src/oi_can.cpp`
+   - Total: 15+ occurrences replaced with named constants
+
 ---
 
 ## Remaining Refactorings 📋
-
-### Priority 1: Extract Helper Functions (Low Risk)
-
-#### Task 1: Extract Duplicate Error Response Helpers
-**File:** `src/main.cpp`
-**Lines:** Multiple (1077-1085, 1132-1140, 1182-1190, etc.)
-**Effort:** 30 minutes
-**Risk:** Low
-
-**Problem:**
-```cpp
-// This pattern is repeated 5+ times:
-if (!OICan::IsIdle()) {
-  DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot add mapping - device busy");
-  JsonDocument errorDoc;
-  errorDoc["event"] = "canMappingError";
-  errorDoc["data"]["error"] = "Device is busy";
-  String errorOutput;
-  serializeJson(errorDoc, errorOutput);
-  client->text(errorOutput);
-  return;
-}
-```
-
-**Solution:**
-Create in `src/utils/websocket_helpers.h`:
-```cpp
-void sendDeviceBusyError(AsyncWebSocketClient* client, const char* eventName, const char* customMessage = nullptr);
-void sendWebSocketError(AsyncWebSocketClient* client, const char* eventName, const char* errorMessage);
-```
-
----
-
-#### Task 2: Extract Queue Command Helper
-**File:** `src/main.cpp`
-**Lines:** 15+ occurrences
-**Effort:** 30 minutes
-**Risk:** Low
-
-**Problem:**
-```cpp
-// Repeated pattern:
-if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-  DBG_OUTPUT_PORT.println("[WebSocket] ... command queued");
-} else {
-  DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue ... command");
-}
-```
-
-**Solution:**
-Create helper function:
-```cpp
-bool queueCanCommand(const CANCommand& cmd, const char* commandName) {
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] %s command queued\n", commandName);
-    return true;
-  } else {
-    DBG_OUTPUT_PORT.printf("[WebSocket] ERROR: Failed to queue %s command\n", commandName);
-    return false;
-  }
-}
-```
-
----
-
-### Priority 2: CAN Protocol Constants (Low Risk)
-
-#### Task 3: Define CAN Protocol Constants
-**File:** `src/oi_can.cpp`
-**Lines:** Throughout file
-**Effort:** 45 minutes
-**Risk:** Low
-
-**Problem:** Magic CAN IDs hardcoded throughout:
-- `0x600 | nodeId` (SDO request)
-- `0x580`, `0x5FF` (SDO response)
-- `0x7de` (bootloader)
-
-**Solution:**
-Add to `src/models/can_types.h`:
-```cpp
-// SDO (Service Data Object) CAN IDs
-#define SDO_REQUEST_BASE_ID 0x600
-#define SDO_RESPONSE_BASE_ID 0x580
-#define SDO_RESPONSE_MAX_ID 0x5FF
-#define BOOTLOADER_RESPONSE_ID 0x7DE
-
-// SDO Protocol constants
-#define SDO_ABORT 0x80
-#define SDO_INDEX_SERIAL 0x5000  // Or whatever it is
-```
-
-Then replace all occurrences:
-```cpp
-// Before:
-if (rxframe.identifier == (0x580 | nodeId))
-
-// After:
-if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | nodeId))
-```
-
----
 
 ### Priority 3: Extract Validation Helpers (Medium Risk)
 
@@ -639,12 +560,13 @@ DeviceLockManager deviceLockManager;
 ## Implementation Order Recommendation
 
 ### Week 1: Low-Hanging Fruit
-1. Task 1: Extract error response helpers (30 min)
-2. Task 2: Extract queue command helper (30 min)
-3. Task 3: Define CAN protocol constants (45 min)
+1. ✅ ~~Task 1: Extract error response helpers (30 min)~~ - **COMPLETED**
+2. ✅ ~~Task 2: Extract queue command helper (30 min)~~ - **COMPLETED**
+3. ✅ ~~Task 3: Define CAN protocol constants (45 min)~~ - **COMPLETED**
 4. Task 5: Improve variable names (30 min)
 
 **Total: ~2.5 hours, Low risk, Good cleanup**
+**Completed: 1.75 hours | Remaining: ~0.75 hours**
 
 ### Week 2: Validation & Helper Extraction
 1. Task 4: Extract CAN response validation (1 hour)

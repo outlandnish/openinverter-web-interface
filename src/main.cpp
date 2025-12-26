@@ -25,8 +25,9 @@
 #include "models/can_event.h"
 #include "models/interval_messages.h"
 #include "utils/string_utils.h"
+#include "utils/websocket_helpers.h"
+#include "main.h"
 
-#define DBG_OUTPUT_PORT Serial
 #define INVERTER_PORT UART_NUM_1
 #define INVERTER_RX 16
 #define INVERTER_TX 17
@@ -97,16 +98,6 @@ const Rgb LED_WIFI_CONNECTING = Rgb(255, 128, 0); // Orange - WiFi connecting
 const Rgb LED_WIFI_CONNECTED = Rgb(0, 255, 0);    // Green - WiFi connected
 const Rgb LED_SUCCESS = Rgb(0, 255, 0);         // Green - success
 const Rgb LED_ERROR = Rgb(255, 0, 0);           // Red - error
-
-// Helper functions for status LED
-void setStatusLED(Rgb color) {
-  statusLED[0] = color;
-  statusLED.show();
-}
-
-void statusLEDOff() {
-  setStatusLED(LED_OFF);
-}
 
 // CRC-32 calculation for CAN IO messages (STM32 polynomial 0x04C11DB7)
 // This matches the IEEE 802.3 / Ethernet CRC-32 polynomial
@@ -286,22 +277,14 @@ void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.data.scan.start = start;
   cmd.data.scan.end = end;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.println("[WebSocket] Scan start command queued");
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan start command");
-  }
+  queueCanCommand(cmd, "Scan start");
 }
 
 void handleStopScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_SCAN;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.println("[WebSocket] Scan stop command queued");
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue scan stop command");
-  }
+  queueCanCommand(cmd, "Scan stop");
 }
 
 void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -342,10 +325,7 @@ void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.data.connect.nodeId = nodeId;
   safeCopyString(cmd.data.connect.serial, serial);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Connect command queued (node %d)\n", nodeId);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue connect command");
+  if (!queueCanCommand(cmd, "Connect")) {
     // Release lock on failure
     deviceLocks.erase(nodeId);
     clientDevices.erase(clientId);
@@ -363,11 +343,7 @@ void handleSetDeviceName(AsyncWebSocketClient* client, JsonDocument& doc) {
   safeCopyString(cmd.data.setDeviceName.name, name);
   cmd.data.setDeviceName.nodeId = nodeId;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Set device name command queued (%s)\n", serial.c_str());
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set device name command");
-  }
+  queueCanCommand(cmd, "Set device name");
 }
 
 void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -377,11 +353,7 @@ void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.type = CMD_DELETE_DEVICE;
   safeCopyString(cmd.data.deleteDevice.serial, serial);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Delete device command queued (%s)\n", serial.c_str());
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue delete device command");
-  }
+  queueCanCommand(cmd, "Delete device");
 }
 
 void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -393,22 +365,14 @@ void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   safeCopyString(cmd.data.renameDevice.serial, serial);
   safeCopyString(cmd.data.renameDevice.name, name);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Rename device command queued (%s -> %s)\n", serial.c_str(), name.c_str());
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue rename device command");
-  }
+  queueCanCommand(cmd, "Rename device");
 }
 
 void handleGetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_GET_NODE_ID;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.println("[WebSocket] Get node ID command queued");
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue get node ID command");
-  }
+  queueCanCommand(cmd, "Get node ID");
 }
 
 void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -418,11 +382,7 @@ void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.type = CMD_SET_NODE_ID;
   cmd.data.setNodeId.nodeId = id;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Set node ID command queued (node %d)\n", id);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue set node ID command");
-  }
+  queueCanCommand(cmd, "Set node ID");
 }
 
 void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -450,12 +410,7 @@ void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
     }
   }
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Send CAN message command queued (ID=0x%03lX, Len=%d)\n",
-                           (unsigned long)cmd.data.sendCanMessage.canId, cmd.data.sendCanMessage.dataLength);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue send CAN message command");
-  }
+  queueCanCommand(cmd, "Send CAN message");
 }
 
 void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -500,12 +455,7 @@ void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   if (cmd.data.startCanInterval.intervalMs < CAN_INTERVAL_MIN_MS) cmd.data.startCanInterval.intervalMs = CAN_INTERVAL_MIN_MS;
   if (cmd.data.startCanInterval.intervalMs > CAN_INTERVAL_MAX_MS) cmd.data.startCanInterval.intervalMs = CAN_INTERVAL_MAX_MS;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN interval command queued (ID=%s, CAN=0x%03lX, Interval=%lums)\n",
-                           cmd.data.startCanInterval.intervalId, (unsigned long)cmd.data.startCanInterval.canId, (unsigned long)cmd.data.startCanInterval.intervalMs);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start CAN interval command");
-  }
+  queueCanCommand(cmd, "Start CAN interval");
 }
 
 void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -520,11 +470,7 @@ void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   String intervalId = doc["intervalId"].as<String>();
   safeCopyString(cmd.data.stopCanInterval.intervalId, intervalId);
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Stop CAN interval command queued (ID=%s)\n", cmd.data.stopCanInterval.intervalId);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN interval command");
-  }
+  queueCanCommand(cmd, "Stop CAN interval");
 }
 
 void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -553,23 +499,14 @@ void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Parse useCrc flag (default false = counter-only mode)
   cmd.data.startCanIoInterval.useCrc = doc.containsKey("useCrc") ? doc["useCrc"].as<bool>() : false;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Start CAN IO interval command queued (CAN=0x%03lX, canio=0x%02X, Interval=%lums)\n",
-                           (unsigned long)cmd.data.startCanIoInterval.canId, cmd.data.startCanIoInterval.canio, (unsigned long)cmd.data.startCanIoInterval.intervalMs);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start CAN IO interval command");
-  }
+  queueCanCommand(cmd, "Start CAN IO interval");
 }
 
 void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_CANIO_INTERVAL;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.println("[WebSocket] Stop CAN IO interval command queued");
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop CAN IO interval command");
-  }
+  queueCanCommand(cmd, "Stop CAN IO interval");
 }
 
 void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -583,11 +520,7 @@ void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc) {
   cmd.data.updateCanIoFlags.cruisespeed = doc.containsKey("cruisespeed") ? doc["cruisespeed"].as<uint16_t>() : 0;
   cmd.data.updateCanIoFlags.regenpreset = doc.containsKey("regenpreset") ? doc["regenpreset"].as<uint8_t>() : 0;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Update CAN IO flags command queued (canio=0x%02X)\n", cmd.data.updateCanIoFlags.canio);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue update CAN IO flags command");
-  }
+  queueCanCommand(cmd, "Update CAN IO flags");
 }
 
 void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -612,22 +545,14 @@ void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
     cmd.data.spotValues.interval = 1000; // Default 1000ms
   }
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.printf("[WebSocket] Start spot values command queued (%d params)\n", cmd.data.spotValues.paramCount);
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue start spot values command");
-  }
+  queueCanCommand(cmd, "Start spot values");
 }
 
 void handleStopSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_SPOT_VALUES;
 
-  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-    DBG_OUTPUT_PORT.println("[WebSocket] Stop spot values command queued");
-  } else {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue stop spot values command");
-  }
+  queueCanCommand(cmd, "Stop spot values");
 }
 
 void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -847,12 +772,7 @@ void handleGetCanMappings(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot get mappings - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "canMappingsError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "canMappingsError");
     return;
   }
 
@@ -879,12 +799,7 @@ void handleAddCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot add mapping - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "canMappingError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "canMappingError");
     return;
   }
 
@@ -934,12 +849,7 @@ void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot remove mapping - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "canMappingError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "canMappingError");
     return;
   }
 
@@ -984,12 +894,7 @@ void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot save to flash - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "saveToFlashError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "saveToFlashError");
     return;
   }
 
@@ -1018,12 +923,7 @@ void handleLoadFromFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot load from flash - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "loadFromFlashError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "loadFromFlashError");
     return;
   }
 
@@ -1052,12 +952,7 @@ void handleLoadDefaults(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot load defaults - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "loadDefaultsError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "loadDefaultsError");
     return;
   }
 
@@ -1086,12 +981,7 @@ void handleStartDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot start device - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "startDeviceError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "startDeviceError");
     return;
   }
 
@@ -1123,12 +1013,7 @@ void handleStopDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot stop device - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "stopDeviceError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "stopDeviceError");
     return;
   }
 
@@ -1157,12 +1042,7 @@ void handleListErrors(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Check if CAN is idle
   if (!OICan::IsIdle()) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot list errors - device busy");
-    JsonDocument errorDoc;
-    errorDoc["event"] = "listErrorsError";
-    errorDoc["data"]["error"] = "Device is busy";
-    String errorOutput;
-    serializeJson(errorDoc, errorOutput);
-    client->text(errorOutput);
+    sendDeviceBusyError(client, "listErrorsError");
     return;
   }
 

@@ -27,6 +27,7 @@
 #include <map>
 #include <vector>
 #include "oi_can.h"
+#include "models/can_types.h"
 
 #define DBG_OUTPUT_PORT Serial
 #define SDO_REQUEST_DOWNLOAD  (1 << 5)
@@ -124,7 +125,7 @@ static void printCanRx(const twai_message_t* frame) {
 
 static void requestSdoElement(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
   tx_frame.extd = false;
-  tx_frame.identifier = 0x600 | nodeId;
+  tx_frame.identifier = SDO_REQUEST_BASE_ID | nodeId;
   tx_frame.data_length_code = 8;
   tx_frame.data[0] = SDO_READ;
   tx_frame.data[1] = index & 0xFF;
@@ -142,7 +143,7 @@ static void requestSdoElement(uint8_t nodeId, uint16_t index, uint8_t subIndex) 
 // Non-blocking version for parameter requests (doesn't block if TX queue is full)
 static bool requestSdoElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
   tx_frame.extd = false;
-  tx_frame.identifier = 0x600 | nodeId;
+  tx_frame.identifier = SDO_REQUEST_BASE_ID | nodeId;
   tx_frame.data_length_code = 8;
   tx_frame.data[0] = SDO_READ;
   tx_frame.data[1] = index & 0xFF;
@@ -197,7 +198,7 @@ void SetParameterRequestRateLimit(unsigned long intervalUs) {
 
 static void setValueSdo(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value) {
   tx_frame.extd = false;
-  tx_frame.identifier = 0x600 | nodeId;
+  tx_frame.identifier = SDO_REQUEST_BASE_ID | nodeId;
   tx_frame.data_length_code = 8;
   tx_frame.data[0] = SDO_WRITE;
   tx_frame.data[1] = index & 0xFF;
@@ -213,7 +214,7 @@ static void setValueSdo(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32
 
 static void requestNextSegment(bool toggleBit) {
   tx_frame.extd = false;
-  tx_frame.identifier = 0x600 | _nodeId;
+  tx_frame.identifier = SDO_REQUEST_BASE_ID | _nodeId;
   tx_frame.data_length_code = 8;
   tx_frame.data[0] = SDO_REQUEST_SEGMENT | toggleBit << 4;
   tx_frame.data[1] = 0;
@@ -349,7 +350,7 @@ static void handleUpdate(twai_message_t *rxframe) {
   switch (updstate) {
     case SEND_MAGIC:
       if (rxframe->data[0] == 0x33) {
-        tx_frame.identifier = 0x7dd;
+        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
         tx_frame.data_length_code = 4;
 
         //For now just reflect ID
@@ -368,7 +369,7 @@ static void handleUpdate(twai_message_t *rxframe) {
       break;
     case SEND_SIZE:
       if (rxframe->data[0] == 'S') {
-        tx_frame.identifier = 0x7dd;
+        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
         tx_frame.data_length_code = 1;
 
         tx_frame.data[0] = (updateFile.size() + PAGE_SIZE_BYTES - 1) / PAGE_SIZE_BYTES;
@@ -398,7 +399,7 @@ static void handleUpdate(twai_message_t *rxframe) {
         crc = crc32_word(crc, *(uint32_t*)&buffer[0]);
         crc = crc32_word(crc, *(uint32_t*)&buffer[4]);
 
-        tx_frame.identifier = 0x7dd;
+        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
         tx_frame.data_length_code = 8;
         tx_frame.data[0] = buffer[0];
         tx_frame.data[1] = buffer[1];
@@ -414,7 +415,7 @@ static void handleUpdate(twai_message_t *rxframe) {
         printCanTx(&tx_frame);
       }
       else if (rxframe->data[0] == 'C') {
-        tx_frame.identifier = 0x7dd;
+        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
         tx_frame.data_length_code = 4;
         tx_frame.data[0] = crc & 0xFF;
         tx_frame.data[1] = (crc >> 8) & 0xFF;
@@ -1617,7 +1618,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
         .intr_flags = 0
   };
 
-  uint16_t id = 0x580 + nodeId;
+  uint16_t id = SDO_RESPONSE_BASE_ID + nodeId;
 
   twai_stop();
   twai_driver_uninstall();
@@ -1639,7 +1640,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   }
 
   // Filter for SDO responses and bootloader messages only
-  twai_filter_config_t f_config = {.acceptance_code = (uint32_t)(id << 5) | (uint32_t)(0x7de << 21),
+  twai_filter_config_t f_config = {.acceptance_code = (uint32_t)(id << 5) | (uint32_t)(BOOTLOADER_RESPONSE_ID << 21),
                                    .acceptance_mask = 0x001F001F,
                                    .single_filter = false};
 
@@ -1687,18 +1688,18 @@ void Loop() {
     printCanRx(&rxframe);
 
     // Check bootloader messages first (before SDO responses)
-    if (rxframe.identifier == 0x7de) {
+    if (rxframe.identifier == BOOTLOADER_RESPONSE_ID) {
       handleUpdate(&rxframe);
     }
-    // Check if this is an SDO response (0x580 to 0x5FF range only)
-    else if (rxframe.identifier >= 0x580 && rxframe.identifier <= 0x5FF) {
+    // Check if this is an SDO response (SDO_RESPONSE_BASE_ID to SDO_RESPONSE_MAX_ID range only)
+    else if (rxframe.identifier >= SDO_RESPONSE_BASE_ID && rxframe.identifier <= SDO_RESPONSE_MAX_ID) {
       uint8_t nodeId = rxframe.identifier & 0x7F;
 
       // Update lastSeen for any device we receive a message from
       // This acts as a passive heartbeat mechanism
       UpdateDeviceLastSeenByNodeId(nodeId, millis());
 
-      if (rxframe.identifier == (0x580 | _nodeId)) {
+      if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | _nodeId)) {
         handleSdoResponse(&rxframe);
         recvdResponse = true;
       }
@@ -1833,7 +1834,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
       if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.identifier == (0x580 | nodeId) &&
+        if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
             rxframe.data[0] != SDO_ABORT &&
             (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
             rxframe.data[3] == part) {
@@ -2098,7 +2099,7 @@ void ProcessContinuousScan() {
   if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
     printCanRx(&rxframe);
 
-    if (rxframe.identifier == (0x580 | currentScanNode) &&
+    if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | currentScanNode) &&
         rxframe.data[0] != SDO_ABORT &&
         (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_SERIAL &&
         rxframe.data[3] == scanSerialPart) {
@@ -2292,7 +2293,7 @@ void ProcessHeartbeat() {
   bool deviceResponded = false;
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
-    if (rxframe.identifier == (0x580 | nodeId) &&
+    if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
         rxframe.data[0] != SDO_ABORT) {
       deviceResponded = true;
 

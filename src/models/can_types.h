@@ -13,6 +13,13 @@
 #define CAN_IO_INTERVAL_MAX_MS 500
 #define QUEUE_SEND_TIMEOUT_MS 100
 
+// SDO (Service Data Object) CAN IDs
+#define SDO_REQUEST_BASE_ID 0x600
+#define SDO_RESPONSE_BASE_ID 0x580
+#define SDO_RESPONSE_MAX_ID 0x5FF
+#define BOOTLOADER_COMMAND_ID 0x7DD
+#define BOOTLOADER_RESPONSE_ID 0x7DE
+
 // CAN IO message bit masks
 #define CAN_IO_POT_MASK 0x0FFF       // 12 bits for throttle values
 #define CAN_IO_CANIO_MASK 0x3F       // 6 bits for digital I/O
