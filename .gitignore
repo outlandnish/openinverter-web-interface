@@ -30,3 +30,6 @@ data/*.json
 dist/
 
 compile_commands.json
+
+# Backup files
+*.bak*

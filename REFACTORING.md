@@ -66,6 +66,37 @@
    - Total: 91 variable references updated with more descriptive names
    - Improved code clarity and self-documentation
 
+10. **Broke Up canTask() Function**
+   - Extracted 16 command handler functions (one per command type)
+   - Extracted 3 periodic task functions (spot values, interval messages, CAN IO)
+   - Created `dispatchCommand()` function with clean switch statement
+   - Simplified `canTask()` main loop from 341 lines to 21 lines
+   - Moved all CAN handling code to dedicated `src/can_task.cpp` and `src/can_task.h` files
+   - Reduced `main.cpp` by ~400 lines, improved code organization
+   - Better separation of concerns and maintainability
+
+11. **Replaced WebSocket If-Else Chain with Dispatch Table**
+   - Created `WebSocketHandler` function pointer type definition
+   - Built dispatch table (`wsHandlers`) mapping action strings to handler functions
+   - Replaced 65-line if-else chain with 7-line dispatch table lookup
+   - Added forward declarations for all 31 WebSocket handler functions
+   - Improved maintainability and follows Open/Closed Principle
+   - Hash map lookup provides better performance than sequential string comparisons
+   - Easy to add new handlers (just add to the dispatch table)
+   - Extracted all WebSocket handlers to dedicated `src/websocket_handlers.cpp` and `src/websocket_handlers.h` files
+   - Moved ~900 lines of WebSocket handler code from main.cpp to websocket_handlers.cpp
+   - Reduced main.cpp by ~900 lines, improved code organization
+   - Better separation of concerns similar to CAN task extraction
+
+12. **Replaced SmartLeds with Adafruit NeoPixel Library**
+   - Updated platformio.ini to use Adafruit NeoPixel library instead of SmartLeds
+   - Resolved namespace collision between SmartLeds and ArduinoJson
+   - Updated main.h and main.cpp to use Adafruit_NeoPixel API
+   - Changed LED color definitions from `Rgb` to `uint32_t` using `Color()` function
+   - Added `statusLED.begin()` call in setup()
+   - Simplified websocket_handlers.cpp to include main.h directly (no more workarounds)
+   - Eliminated code duplication by using shared helper functions from main.h
+
 ---
 
 ## Remaining Refactorings 📋
@@ -75,157 +106,6 @@
 ---
 
 ### Priority 4: Function Decomposition (High Risk, High Value)
-
-#### Task 6: Break Up canTask() Function
-**File:** `src/main.cpp`
-**Lines:** 1659-2000 (341 lines!)
-**Effort:** 3-4 hours
-**Risk:** High (critical function, needs thorough testing)
-
-**Problem:**
-Monolithic function doing too many things:
-- Command parsing and dispatch
-- State management
-- CAN message building
-- Event creation and queuing
-- Spot values processing
-- Interval message sending
-
-**Solution Approach:**
-
-1. **Extract command handlers** (one per command type):
-```cpp
-void handleStartScanCommand(const CANCommand& cmd);
-void handleStopScanCommand(const CANCommand& cmd);
-void handleConnectCommand(const CANCommand& cmd);
-void handleSetNodeIdCommand(const CANCommand& cmd);
-void handleStartSpotValuesCommand(const CANCommand& cmd);
-// ... etc for all 15+ command types
-```
-
-2. **Extract periodic tasks**:
-```cpp
-void processSpotValuesSequence();
-void sendIntervalMessages();
-void sendCanIoIntervalMessage();
-```
-
-3. **Main loop becomes**:
-```cpp
-void canTask(void* parameter) {
-  while(true) {
-    // Process commands from queue
-    if (xQueueReceive(canCommandQueue, &cmd, 0) == pdTRUE) {
-      dispatchCommand(cmd);
-    }
-
-    // Periodic tasks
-    processSpotValuesSequence();
-    sendIntervalMessages();
-    sendCanIoIntervalMessage();
-    OICan::Loop();
-
-    vTaskDelay(1);
-  }
-}
-```
-
-4. **Use dispatch table or switch**:
-```cpp
-void dispatchCommand(const CANCommand& cmd) {
-  switch(cmd.type) {
-    case CMD_START_SCAN: handleStartScanCommand(cmd); break;
-    case CMD_STOP_SCAN: handleStopScanCommand(cmd); break;
-    // ... etc
-  }
-}
-```
-
-**Testing Strategy:**
-- Test each command type individually
-- Verify spot values still stream correctly
-- Verify interval messages still send
-- Check all event queue messages
-
----
-
-#### Task 7: Replace WebSocket If-Else Chain with Dispatch Table
-**File:** `src/main.cpp`
-**Lines:** 1390-1518 (128 lines, 26 handlers)
-**Effort:** 2-3 hours
-**Risk:** Medium-High
-
-**Problem:**
-Giant if-else chain in `onWebSocketEvent()`:
-```cpp
-if (action == "startScan") handleStartScan(...);
-else if (action == "stopScan") handleStopScan(...);
-else if (action == "connect") handleConnect(...);
-// ... 23 more else-if statements!
-```
-
-**Solution:**
-
-1. **Create handler type**:
-```cpp
-using WebSocketHandler = void (*)(AsyncWebSocketClient*, JsonDocument&);
-```
-
-2. **Create dispatch table**:
-```cpp
-#include <map>
-#include <string>
-
-const std::map<std::string, WebSocketHandler> wsHandlers = {
-  {"startScan", handleStartScan},
-  {"stopScan", handleStopScan},
-  {"connect", handleConnect},
-  {"setDeviceName", handleSetDeviceName},
-  {"deleteDevice", handleDeleteDevice},
-  {"renameDevice", handleRenameDevice},
-  {"getNodeId", handleGetNodeId},
-  {"setNodeId", handleSetNodeId},
-  {"startSpotValues", handleStartSpotValues},
-  {"stopSpotValues", handleStopSpotValues},
-  {"getValue", handleGetValue},
-  {"setValue", handleSetValue},
-  {"saveToFlash", handleSaveToFlash},
-  {"loadFromFlash", handleLoadFromFlash},
-  {"loadDefaults", handleLoadDefaults},
-  {"startDevice", handleStartDevice},
-  {"stopDevice", handleStopDevice},
-  {"addCanMapping", handleAddCanMapping},
-  {"removeCanMapping", handleRemoveCanMapping},
-  {"clearCanMap", handleClearCanMap},
-  {"reloadJson", handleReloadJson},
-  {"sendCanMessage", handleSendCanMessage},
-  {"startCanInterval", handleStartCanInterval},
-  {"stopCanInterval", handleStopCanInterval},
-  {"startCanIoInterval", handleStartCanIoInterval},
-  {"stopCanIoInterval", handleStopCanIoInterval},
-  {"updateCanIoFlags", handleUpdateCanIoFlags},
-  {"resetDevice", handleResetDevice}
-};
-```
-
-3. **Simplify dispatch**:
-```cpp
-String action = doc["action"].as<String>();
-auto it = wsHandlers.find(action.c_str());
-if (it != wsHandlers.end()) {
-  it->second(client, doc);
-} else {
-  DBG_OUTPUT_PORT.printf("[WebSocket] Unknown action: %s\n", action.c_str());
-}
-```
-
-**Benefits:**
-- Easy to add new handlers
-- Clear registration of all actions
-- Better maintainability
-- Follows Open/Closed Principle
-
----
 
 #### Task 8: Refactor ProcessContinuousScan()
 **File:** `src/oi_can.cpp`
@@ -532,17 +412,18 @@ DeviceLockManager deviceLockManager;
 
 ### Week 2: Validation & Helper Extraction
 1. ✅ ~~Task 4: Extract CAN response validation (1 hour)~~ - **COMPLETED**
-2. Task 8: Refactor ProcessContinuousScan() (2 hours)
-3. Task 9: Refactor ScanDevices() (2-3 hours)
+2. ✅ ~~Task 6: Break up canTask() (3-4 hours + testing)~~ - **COMPLETED**
+3. Task 8: Refactor ProcessContinuousScan() (2 hours)
+4. Task 9: Refactor ScanDevices() (2-3 hours)
 
-**Total: ~5-6 hours, Medium risk, Improves oi_can.cpp**
-**Completed: 1 hour | Remaining: ~4-5 hours**
+**Total: ~9-10 hours, Medium-High risk, Improves main.cpp and oi_can.cpp**
+**Completed: 4-5 hours | Remaining: ~4-5 hours**
 
 ### Week 3: Major Restructuring (High Risk)
-1. Task 6: Break up canTask() (3-4 hours + testing)
-2. Task 7: WebSocket dispatch table (2-3 hours + testing)
+1. ✅ ~~Task 7: WebSocket dispatch table (2-3 hours + testing)~~ - **COMPLETED**
 
-**Total: ~5-7 hours + thorough testing**
+**Total: ~2-3 hours + thorough testing**
+**Completed: 2-3 hours | All tasks complete! ✅**
 
 ### Week 4: Architecture Improvement (Very High Risk)
 1. Task 10: Encapsulate global state (4-6 hours + extensive testing)
