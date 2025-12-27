@@ -106,6 +106,16 @@
    - Eliminated duplicate node advancement patterns
    - Better separation of concerns: validation, response handling, and control flow
 
+14. **Refactored ScanDevices() Function**
+   - Created `requestDeviceSerial()` helper function to request all 4 serial number parts
+   - Created `loadDevicesJson()` helper function to load and parse devices.json from LittleFS
+   - Created `saveDevicesJson()` helper function to save devices JSON to LittleFS
+   - Created `updateDeviceInJson()` helper function to update device entries
+   - Simplified `ScanDevices()` from 103 lines to 69 lines (~34 lines removed)
+   - Eliminated nested loops (reduced from 3 levels deep to 1 level)
+   - Better separation of concerns: File I/O, JSON parsing, and serial requests isolated
+   - Improved code readability and maintainability
+
 ---
 
 ## Remaining Refactorings 📋
@@ -115,110 +125,6 @@
 ---
 
 ### Priority 4: Function Decomposition (High Risk, High Value)
-
-#### Task 9: Refactor ScanDevices()
-**File:** `src/oi_can.cpp`
-**Lines:** 1790-1896 (106 lines)
-**Effort:** 2-3 hours
-**Risk:** Medium
-
-**Problem:**
-Doing too many things:
-- File I/O (read/write devices.json)
-- JSON parsing and building
-- Device serial request/response handling
-- State saving/restoration
-- Nested loops (3 levels deep!)
-
-**Solution:**
-
-1. **Extract device serial request**:
-```cpp
-bool requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4]) {
-  for (uint8_t part = 0; part < 4; part++) {
-    requestSdoElement(_nodeId, SDO_INDEX_SERIAL, part);
-
-    twai_message_t rxframe;
-    if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) != ESP_OK) {
-      return false;
-    }
-
-    if (!isValidSerialResponse(rxframe, nodeId, part)) {
-      return false;
-    }
-
-    serialParts[part] = *(uint32_t*)&rxframe.data[4];
-  }
-  return true;
-}
-```
-
-2. **Extract JSON file operations**:
-```cpp
-bool loadDevicesJson(JsonDocument& doc) {
-  File file = LittleFS.open("/devices.json", "r");
-  if (!file) return false;
-
-  DeserializationError error = deserializeJson(doc, file);
-  file.close();
-  return error == DeserializationError::Ok;
-}
-
-bool saveDevicesJson(const JsonDocument& doc) {
-  File file = LittleFS.open("/devices.json", "w");
-  if (!file) return false;
-
-  serializeJson(doc, file);
-  file.close();
-  return true;
-}
-```
-
-3. **Extract device update logic**:
-```cpp
-void updateDeviceInJson(JsonDocument& doc, const char* serial, uint8_t nodeId) {
-  if (!doc["devices"].containsKey(serial)) {
-    doc["devices"][serial]["name"] = "";
-  }
-  doc["devices"][serial]["nodeId"] = nodeId;
-  doc["devices"][serial]["lastSeen"] = millis();
-}
-```
-
-4. **Simplified main function**:
-```cpp
-String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
-  JsonDocument doc;
-  loadDevicesJson(doc);
-
-  // Save and temporarily change node ID
-  uint8_t originalNodeId = _nodeId;
-
-  for (uint8_t nodeId = startNodeId; nodeId <= endNodeId; nodeId++) {
-    _nodeId = nodeId;
-
-    uint32_t serialParts[4];
-    if (requestDeviceSerial(nodeId, serialParts)) {
-      char serial[50];
-      sprintf(serial, "%08lX-%08lX-%08lX-%08lX",
-              serialParts[0], serialParts[1], serialParts[2], serialParts[3]);
-
-      updateDeviceInJson(doc, serial, nodeId);
-      AddOrUpdateDevice(serial, nodeId);
-    }
-  }
-
-  // Restore original node ID
-  _nodeId = originalNodeId;
-  ReloadJson();
-
-  saveDevicesJson(doc);
-
-  String result;
-  serializeJson(doc["devices"], result);
-  return result;
-}
-```
 
 ---
 
@@ -350,10 +256,10 @@ DeviceLockManager deviceLockManager;
 1. ✅ ~~Task 4: Extract CAN response validation (1 hour)~~ - **COMPLETED**
 2. ✅ ~~Task 6: Break up canTask() (3-4 hours + testing)~~ - **COMPLETED**
 3. ✅ ~~Task 8: Refactor ProcessContinuousScan() (2 hours)~~ - **COMPLETED**
-4. Task 9: Refactor ScanDevices() (2-3 hours)
+4. ✅ ~~Task 9: Refactor ScanDevices() (2-3 hours)~~ - **COMPLETED**
 
 **Total: ~9-10 hours, Medium-High risk, Improves main.cpp and oi_can.cpp**
-**Completed: 6-7 hours | Remaining: ~2-3 hours**
+**Completed: 9-10 hours | All tasks complete! ✅**
 
 ### Week 3: Major Restructuring (High Risk)
 1. ✅ ~~Task 7: WebSocket dispatch table (2-3 hours + testing)~~ - **COMPLETED**

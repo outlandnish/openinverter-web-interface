@@ -1843,6 +1843,68 @@ bool ResetDevice() {
 
 // Device management functions
 
+// Helper function: Request device serial number from a node
+// Returns true if all 4 serial parts were successfully received
+static bool requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4]) {
+  for (uint8_t part = 0; part < 4; part++) {
+    requestSdoElement(nodeId, SDO_INDEX_SERIAL, part);
+
+    twai_message_t rxframe;
+    if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) != ESP_OK) {
+      return false;
+    }
+
+    printCanRx(&rxframe);
+
+    if (!isValidSerialResponse(rxframe, nodeId, part)) {
+      return false;
+    }
+
+    serialParts[part] = *(uint32_t*)&rxframe.data[4];
+  }
+  return true;
+}
+
+// Helper function: Load devices.json from LittleFS
+// Returns true if file was successfully loaded and parsed
+static bool loadDevicesJson(JsonDocument& doc) {
+  if (!LittleFS.exists("/devices.json")) {
+    return false;
+  }
+
+  File file = LittleFS.open("/devices.json", "r");
+  if (!file) {
+    return false;
+  }
+
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+  return error == DeserializationError::Ok;
+}
+
+// Helper function: Save devices.json to LittleFS
+// Returns true if file was successfully saved
+static bool saveDevicesJson(const JsonDocument& doc) {
+  File file = LittleFS.open("/devices.json", "w");
+  if (!file) {
+    return false;
+  }
+
+  serializeJson(doc, file);
+  file.close();
+  return true;
+}
+
+// Helper function: Update or add a device in the devices JSON object
+static void updateDeviceInJson(JsonObject& savedDevices, const char* serial, uint8_t nodeId) {
+  if (!savedDevices.containsKey(serial)) {
+    savedDevices.createNestedObject(serial);
+  }
+  JsonObject savedDevice = savedDevices[serial].as<JsonObject>();
+  savedDevice["nodeId"] = nodeId;
+  savedDevice["lastSeen"] = millis();
+}
+
 String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
   if (state != IDLE) return "[]";
 
@@ -1851,13 +1913,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
   // Load saved devices to update them
   JsonDocument savedDoc;
-  if (LittleFS.exists("/devices.json")) {
-    File file = LittleFS.open("/devices.json", "r");
-    if (file) {
-      deserializeJson(savedDoc, file);
-      file.close();
-    }
-  }
+  loadDevicesJson(savedDoc);
 
   // Ensure devices object exists in saved doc
   if (!savedDoc.containsKey("devices")) {
@@ -1874,34 +1930,15 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
   uint8_t prevNodeId = _nodeId;
 
   for (uint8_t nodeId = startNodeId; nodeId <= endNodeId; nodeId++) {
-    twai_message_t rxframe;
     uint32_t deviceSerial[4];
-    bool deviceFound = true;
 
     DBG_OUTPUT_PORT.printf("Probing node %d...\n", nodeId);
 
     // Temporarily set the node ID for scanning
     _nodeId = nodeId;
 
-    // Request serial number parts
-    for (uint8_t part = 0; part < 4; part++) {
-      requestSdoElement(_nodeId, SDO_INDEX_SERIAL, part);
-
-      if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
-        printCanRx(&rxframe);
-        if (isValidSerialResponse(rxframe, nodeId, part)) {
-          deviceSerial[part] = *(uint32_t*)&rxframe.data[4];
-        } else {
-          deviceFound = false;
-          break;
-        }
-      } else {
-        deviceFound = false;
-        break;
-      }
-    }
-
-    if (deviceFound) {
+    // Request serial number from device
+    if (requestDeviceSerial(nodeId, deviceSerial)) {
       char serialStr[40];
       sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
               deviceSerial[0], deviceSerial[1], deviceSerial[2], deviceSerial[3]);
@@ -1915,12 +1952,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
       device["lastSeen"] = millis();
 
       // Update saved devices with new nodeId and lastSeen
-      if (!savedDevices.containsKey(serialStr)) {
-        savedDevices.createNestedObject(serialStr);
-      }
-      JsonObject savedDevice = savedDevices[serialStr].as<JsonObject>();
-      savedDevice["nodeId"] = nodeId;
-      savedDevice["lastSeen"] = millis();
+      updateDeviceInJson(savedDevices, serialStr, nodeId);
       devicesUpdated = true;
 
       DBG_OUTPUT_PORT.printf("Updated stored nodeId for %s to %d\n", serialStr, nodeId);
@@ -1933,10 +1965,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
   // Save updated devices back to LittleFS
   if (devicesUpdated) {
-    File file = LittleFS.open("/devices.json", "w");
-    if (file) {
-      serializeJson(savedDoc, file);
-      file.close();
+    if (saveDevicesJson(savedDoc)) {
       DBG_OUTPUT_PORT.println("Updated devices.json with new nodeIds");
     }
   }
