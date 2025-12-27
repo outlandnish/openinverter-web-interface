@@ -99,6 +99,7 @@ static unsigned long lastScanTime = 0;
 static unsigned long stateStartTime = 0;
 static const unsigned long OBTAINSERIAL_TIMEOUT_MS = 5000; // 5 second timeout
 static const unsigned long SCAN_DELAY_MS = 50; // Delay between node probes
+static const unsigned long SCAN_TIMEOUT_MS = 100; // Timeout for scan response
 static DeviceDiscoveryCallback discoveryCallback = nullptr;
 static ScanProgressCallback scanProgressCallback = nullptr;
 static ConnectionReadyCallback connectionReadyCallback = nullptr;
@@ -129,6 +130,43 @@ static void advanceScanNode() {
   if (currentScanNode > scanEndNode) {
     currentScanNode = scanStartNode; // Wrap around to start
   }
+}
+
+static bool shouldProcessScan(unsigned long currentTime) {
+  return continuousScanActive &&
+         state == IDLE &&
+         (currentTime - lastScanTime >= SCAN_DELAY_MS);
+}
+
+static bool handleScanResponse(const twai_message_t& frame, unsigned long currentTime) {
+  if (!isValidSerialResponse(frame, currentScanNode, currentSerialPartIndex)) {
+    return false;
+  }
+
+  scanDeviceSerial[currentSerialPartIndex] = *(uint32_t*)&frame.data[4];
+  currentSerialPartIndex++;
+
+  // If we've read all 4 parts, we found a device
+  if (currentSerialPartIndex >= 4) {
+    char serialStr[40];
+    sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
+            scanDeviceSerial[0], scanDeviceSerial[1], scanDeviceSerial[2], scanDeviceSerial[3]);
+
+    DBG_OUTPUT_PORT.printf("Continuous scan found device at node %d: %s\n", currentScanNode, serialStr);
+
+    // Update in-memory device list (not saved to file until user names it)
+    AddOrUpdateDevice(serialStr, currentScanNode, nullptr, currentTime);
+
+    // Notify via callback (will broadcast to WebSocket clients)
+    if (discoveryCallback) {
+      discoveryCallback(currentScanNode, serialStr, currentTime);
+    }
+
+    // Move to next node
+    advanceScanNode();
+  }
+
+  return true;
 }
 
 // CAN debug helpers
@@ -2081,22 +2119,10 @@ void SetJsonStreamCallback(JsonStreamCallback callback) {
 }
 
 void ProcessContinuousScan() {
-  if (!continuousScanActive) {
-    return;
-  }
-
-  if (state != IDLE) {
-    static unsigned long lastDebug = 0;
-    if (millis() - lastDebug > 5000) { // Only log every 5 seconds
-      DBG_OUTPUT_PORT.printf("Scan paused: state=%d (not IDLE)\n", state);
-      lastDebug = millis();
-    }
-    return;
-  }
-
   unsigned long currentTime = millis();
-  if (currentTime - lastScanTime < SCAN_DELAY_MS) {
-    return; // Not time to probe yet
+
+  if (!shouldProcessScan(currentTime)) {
+    return;
   }
 
   lastScanTime = currentTime;
@@ -2110,34 +2136,10 @@ void ProcessContinuousScan() {
   }
 
   twai_message_t rxframe;
-  if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS)) == ESP_OK) {
     printCanRx(&rxframe);
 
-    if (isValidSerialResponse(rxframe, currentScanNode, currentSerialPartIndex)) {
-
-      scanDeviceSerial[currentSerialPartIndex] = *(uint32_t*)&rxframe.data[4];
-      currentSerialPartIndex++;
-
-      // If we've read all 4 parts, we found a device
-      if (currentSerialPartIndex >= 4) {
-        char serialStr[40];
-        sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
-                scanDeviceSerial[0], scanDeviceSerial[1], scanDeviceSerial[2], scanDeviceSerial[3]);
-
-        DBG_OUTPUT_PORT.printf("Continuous scan found device at node %d: %s\n", currentScanNode, serialStr);
-
-        // Update in-memory device list (not saved to file until user names it)
-        AddOrUpdateDevice(serialStr, currentScanNode, nullptr, currentTime);
-
-        // Notify via callback (will broadcast to WebSocket clients)
-        if (discoveryCallback) {
-          discoveryCallback(currentScanNode, serialStr, currentTime);
-        }
-
-        // Move to next node
-        advanceScanNode();
-      }
-    } else {
+    if (!handleScanResponse(rxframe, currentTime)) {
       // No response or error - move to next node
       advanceScanNode();
     }

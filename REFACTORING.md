@@ -97,6 +97,15 @@
    - Simplified websocket_handlers.cpp to include main.h directly (no more workarounds)
    - Eliminated code duplication by using shared helper functions from main.h
 
+13. **Refactored ProcessContinuousScan() Function**
+   - Added `SCAN_TIMEOUT_MS` constant (100ms) for scan response timeout
+   - Created `shouldProcessScan()` helper function to validate scan conditions
+   - Created `handleScanResponse()` helper function to process CAN responses
+   - Simplified `ProcessContinuousScan()` from 65 lines to 29 lines
+   - Improved code readability by extracting complex validation and response handling logic
+   - Eliminated duplicate node advancement patterns
+   - Better separation of concerns: validation, response handling, and control flow
+
 ---
 
 ## Remaining Refactorings 📋
@@ -106,79 +115,6 @@
 ---
 
 ### Priority 4: Function Decomposition (High Risk, High Value)
-
-#### Task 8: Refactor ProcessContinuousScan()
-**File:** `src/oi_can.cpp`
-**Lines:** 2068-2148 (81 lines)
-**Effort:** 2 hours
-**Risk:** Medium
-
-**Problem:**
-Complex state machine with:
-- Multiple exit conditions
-- Timing logic
-- Request/response handling
-- 3 identical node advancement blocks (code duplication)
-
-**Solution:**
-
-1. **Extract helpers** (see Task 4 - already defined `advanceScanNode()`)
-
-2. **Extract validation**:
-```cpp
-bool shouldProcessScan(unsigned long currentTime) {
-  return continuousScanActive &&
-         state == IDLE &&
-         (currentTime - lastScanTime >= SCAN_DELAY_MS);
-}
-```
-
-3. **Extract response handling**:
-```cpp
-bool handleScanResponse(const twai_message_t& frame) {
-  if (!isValidSerialResponse(frame, currentScanNode, scanSerialPart)) {
-    return false;
-  }
-
-  scanDeviceSerial[scanSerialPart] = *(uint32_t*)&frame.data[4];
-  scanSerialPart++;
-
-  if (scanSerialPart == 4) {
-    // Serial complete
-    char serial[50];
-    sprintf(serial, "%08lX-%08lX-%08lX-%08lX", ...);
-    AddOrUpdateDevice(serial, currentScanNode, nullptr, millis());
-    advanceScanNode();
-  }
-
-  return true;
-}
-```
-
-4. **Simplified main function**:
-```cpp
-void ProcessContinuousScan() {
-  unsigned long currentTime = millis();
-
-  if (!shouldProcessScan(currentTime)) {
-    return;
-  }
-
-  lastScanTime = currentTime;
-  requestSdoElement(_nodeId, SDO_INDEX_SERIAL, scanSerialPart);
-
-  twai_message_t rxframe;
-  if (twai_receive(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS)) == ESP_OK) {
-    if (!handleScanResponse(rxframe)) {
-      advanceScanNode();
-    }
-  } else {
-    advanceScanNode();
-  }
-}
-```
-
----
 
 #### Task 9: Refactor ScanDevices()
 **File:** `src/oi_can.cpp`
@@ -413,11 +349,11 @@ DeviceLockManager deviceLockManager;
 ### Week 2: Validation & Helper Extraction
 1. ✅ ~~Task 4: Extract CAN response validation (1 hour)~~ - **COMPLETED**
 2. ✅ ~~Task 6: Break up canTask() (3-4 hours + testing)~~ - **COMPLETED**
-3. Task 8: Refactor ProcessContinuousScan() (2 hours)
+3. ✅ ~~Task 8: Refactor ProcessContinuousScan() (2 hours)~~ - **COMPLETED**
 4. Task 9: Refactor ScanDevices() (2-3 hours)
 
 **Total: ~9-10 hours, Medium-High risk, Improves main.cpp and oi_can.cpp**
-**Completed: 4-5 hours | Remaining: ~4-5 hours**
+**Completed: 6-7 hours | Remaining: ~2-3 hours**
 
 ### Week 3: Major Restructuring (High Risk)
 1. ✅ ~~Task 7: WebSocket dispatch table (2-3 hours + testing)~~ - **COMPLETED**
