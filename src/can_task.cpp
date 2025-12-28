@@ -429,6 +429,85 @@ void dispatchCommand(const CANCommand& cmd) {
 }
 
 // ============================================================================
+// TWAI Driver Initialization
+// ============================================================================
+
+// Helper function to configure and start TWAI driver
+// Returns true on success, false on failure
+static bool configureTwaiDriver(BaudRate baud, int txPin, int rxPin, const twai_filter_config_t& filter) {
+  twai_general_config_t g_config = {
+        .mode = TWAI_MODE_NORMAL,
+        .tx_io = static_cast<gpio_num_t>(txPin),
+        .rx_io = static_cast<gpio_num_t>(rxPin),
+        .clkout_io = TWAI_IO_UNUSED,
+        .bus_off_io = TWAI_IO_UNUSED,
+        .tx_queue_len = 30,
+        .rx_queue_len = 30,
+        .alerts_enabled = TWAI_ALERT_NONE,
+        .clkout_divider = 0,
+        .intr_flags = 0
+  };
+
+  twai_stop();
+  twai_driver_uninstall();
+
+  twai_timing_config_t t_config;
+
+  switch (baud)
+  {
+  case Baud125k:
+    t_config = TWAI_TIMING_CONFIG_125KBITS();
+    break;
+  case Baud250k:
+    t_config = TWAI_TIMING_CONFIG_250KBITS();
+    break;
+  case Baud500k:
+    t_config = TWAI_TIMING_CONFIG_500KBITS();
+    break;
+  }
+
+  if (twai_driver_install(&g_config, &t_config, &filter) == ESP_OK) {
+     DBG_OUTPUT_PORT.println("[CAN Driver] TWAI driver installed");
+  } else {
+     DBG_OUTPUT_PORT.println("[CAN Driver] Failed to install TWAI driver");
+     return false;
+  }
+
+  // Start TWAI driver
+  if (twai_start() == ESP_OK) {
+    DBG_OUTPUT_PORT.println("[CAN Driver] TWAI driver started");
+    return true;
+  } else {
+    DBG_OUTPUT_PORT.println("[CAN Driver] Failed to start TWAI driver");
+    return false;
+  }
+}
+
+bool initCanBusScanning(BaudRate baud, int txPin, int rxPin) {
+  DBG_OUTPUT_PORT.println("[CAN Driver] Initializing CAN bus for scanning (accept all messages)");
+
+  // Accept all messages for scanning (no filtering)
+  twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+  return configureTwaiDriver(baud, txPin, rxPin, filter);
+}
+
+bool initCanBusForDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
+  DBG_OUTPUT_PORT.printf("[CAN Driver] Initializing CAN bus for device (nodeId=%d)\n", nodeId);
+
+  uint16_t id = SDO_RESPONSE_BASE_ID + nodeId;
+
+  // Filter for SDO responses and bootloader messages only
+  twai_filter_config_t filter = {
+    .acceptance_code = (uint32_t)(id << 5) | (uint32_t)(BOOTLOADER_RESPONSE_ID << 21),
+    .acceptance_mask = 0x001F001F,
+    .single_filter = false
+  };
+
+  return configureTwaiDriver(baud, txPin, rxPin, filter);
+}
+
+// ============================================================================
 // CAN Message Reception and Processing
 // ============================================================================
 
