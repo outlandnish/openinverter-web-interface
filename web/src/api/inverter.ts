@@ -170,14 +170,6 @@ class InverterAPI {
   }
 
   /**
-   * Reload parameter JSON from device
-   */
-  async reloadJson(): Promise<string> {
-    const response = await fetch('/reloadjson')
-    return response.text()
-  }
-
-  /**
    * Reset the remote device
    */
   async resetDevice(): Promise<string> {

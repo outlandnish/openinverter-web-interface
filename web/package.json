@@ -4,8 +4,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "simulator": "tsx simulator/index.ts",
-    "dev:sim": "npm run simulator & VITE_USE_SIMULATOR=true npm run dev",
     "build": "vite build",
     "preview": "vite preview",
     "build:spiffs": "vite build && npm run compress",

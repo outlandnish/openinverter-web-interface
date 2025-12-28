@@ -4,12 +4,9 @@ import { intlayerPlugin } from 'vite-intlayer'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
-// Use simulator when VITE_USE_SIMULATOR=true or when running dev:sim
-const useSimulator = process.env.VITE_USE_SIMULATOR === 'true'
-
-// Target for API proxy - simulator or real hardware
-const apiTarget = useSimulator ? 'http://localhost:4000' : 'http://inverter.local'
-const wsTarget = useSimulator ? 'ws://localhost:4000' : 'ws://inverter.local'
+// Target for API proxy - real hardware
+const apiTarget = 'http://inverter.local'
+const wsTarget = 'ws://inverter.local'
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -111,7 +108,7 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      // Proxy all API endpoints to the ESP32 or simulator
+      // Proxy all API endpoints to the ESP32
       '/cmd': {
         target: apiTarget,
         changeOrigin: true,
@@ -145,10 +142,6 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/ota/upload': {
-        target: apiTarget,
-        changeOrigin: true,
-      },
-      '/reloadjson': {
         target: apiTarget,
         changeOrigin: true,
       },
