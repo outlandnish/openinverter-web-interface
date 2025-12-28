@@ -30,218 +30,33 @@
 #include "models/can_types.h"
 #include "utils/can_utils.h"
 #include "managers/device_storage.h"
+#include "managers/device_discovery.h"
+#include "managers/device_connection.h"
+#include "firmware/update_handler.h"
+#include "protocols/sdo_protocol.h"
 
 #define DBG_OUTPUT_PORT Serial
-#define SDO_REQUEST_DOWNLOAD  (1 << 5)
-#define SDO_REQUEST_UPLOAD    (2 << 5)
-#define SDO_REQUEST_SEGMENT   (3 << 5)
-#define SDO_TOGGLE_BIT        (1 << 4)
-#define SDO_RESPONSE_UPLOAD   (2 << 5)
-#define SDO_RESPONSE_DOWNLOAD (3 << 5)
-#define SDO_EXPEDITED         (1 << 1)
-#define SDO_SIZE_SPECIFIED    (1)
-#define SDO_WRITE             (SDO_REQUEST_DOWNLOAD | SDO_EXPEDITED | SDO_SIZE_SPECIFIED)
-#define SDO_READ              SDO_REQUEST_UPLOAD
-#define SDO_ABORT             0x80
-#define SDO_WRITE_REPLY       SDO_RESPONSE_DOWNLOAD
-#define SDO_READ_REPLY        (SDO_RESPONSE_UPLOAD | SDO_EXPEDITED | SDO_SIZE_SPECIFIED)
-#define SDO_ERR_INVIDX        0x06020000
-#define SDO_ERR_RANGE         0x06090030
-#define SDO_ERR_GENERAL       0x08000000
-
-#define SDO_INDEX_PARAMS      0x2000
-#define SDO_INDEX_PARAM_UID   0x2100
-#define SDO_INDEX_MAP_TX      0x3000
-#define SDO_INDEX_MAP_RX      0x3001
-#define SDO_INDEX_MAP_RD      0x3100
-#define SDO_INDEX_SERIAL      0x5000
-#define SDO_INDEX_STRINGS     0x5001
-#define SDO_INDEX_COMMANDS    0x5002
-#define SDO_INDEX_ERROR_NUM   0x5003
-#define SDO_INDEX_ERROR_TIME  0x5004
-#define SDO_CMD_SAVE          0
-#define SDO_CMD_LOAD          1
-#define SDO_CMD_RESET         2
-#define SDO_CMD_DEFAULTS      3
-#define SDO_CMD_START         4
-#define SDO_CMD_STOP          5
 
 namespace OICan {
 
-enum State { IDLE, ERROR, OBTAINSERIAL, OBTAIN_JSON };
-enum UpdState { UPD_IDLE, SEND_MAGIC, SEND_SIZE, SEND_PAGE, CHECK_CRC, REQUEST_JSON };
-
-static uint8_t _nodeId;
-static BaudRate baudRate;
-static State state;
-static UpdState updstate;
-static int canTxPin = -1;
-static int canRxPin = -1;
-static uint32_t serial[4]; //contains id sum as well
-static char jsonFileName[20];
-static twai_message_t tx_frame;
-static File updateFile;
-static int currentFlashPage = 0;
-static const size_t PAGE_SIZE_BYTES = 1024;
-static int retries = 0;
-static JsonDocument cachedParamJson; // In-memory parameter JSON storage
-static String jsonReceiveBuffer;      // Buffer for receiving JSON segments
-static int jsonTotalSize = 0;  // Total size of JSON being downloaded (from SDO response)
-
-// Continuous scanning state
-static bool continuousScanActive = false;
-static uint8_t scanStartNode = 1;
-static uint8_t scanEndNode = 32;
-static uint8_t currentScanNode = 1;
-static uint8_t currentSerialPartIndex = 0; // Which part of serial we're reading (0-3)
-static uint32_t scanDeviceSerial[4];
-static unsigned long lastScanTime = 0;
-
-// State timeout tracking
-static unsigned long stateStartTime = 0;
-static const unsigned long OBTAINSERIAL_TIMEOUT_MS = 5000; // 5 second timeout
-static const unsigned long SCAN_DELAY_MS = 50; // Delay between node probes
-static const unsigned long SCAN_TIMEOUT_MS = 100; // Timeout for scan response
-static DeviceDiscoveryCallback discoveryCallback = nullptr;
-static ScanProgressCallback scanProgressCallback = nullptr;
-static ConnectionReadyCallback connectionReadyCallback = nullptr;
-static JsonDownloadProgressCallback jsonProgressCallback = nullptr;
-static JsonStreamCallback jsonStreamCallback = nullptr;
-
-// In-memory device list
-struct Device {
-  String serial;
-  uint8_t nodeId;
-  String name;
-  uint32_t lastSeen;
-};
-static std::map<String, Device> deviceList; // Key: serial number
-
-// Helper functions for CAN response validation
-static bool isValidSerialResponse(const twai_message_t& frame, uint8_t nodeId, uint8_t partIndex) {
-  uint16_t rxIndex = (frame.data[1] | (frame.data[2] << 8));
-  return frame.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
-         frame.data[0] != SDO_ABORT &&
-         rxIndex == SDO_INDEX_SERIAL &&
-         frame.data[3] == partIndex;
-}
-
-static void advanceScanNode() {
-  currentSerialPartIndex = 0;
-  currentScanNode++;
-  if (currentScanNode > scanEndNode) {
-    currentScanNode = scanStartNode; // Wrap around to start
-  }
-}
-
-static bool shouldProcessScan(unsigned long currentTime) {
-  return continuousScanActive &&
-         state == IDLE &&
-         (currentTime - lastScanTime >= SCAN_DELAY_MS);
-}
-
-static bool handleScanResponse(const twai_message_t& frame, unsigned long currentTime) {
-  if (!isValidSerialResponse(frame, currentScanNode, currentSerialPartIndex)) {
-    return false;
-  }
-
-  scanDeviceSerial[currentSerialPartIndex] = *(uint32_t*)&frame.data[4];
-  currentSerialPartIndex++;
-
-  // If we've read all 4 parts, we found a device
-  if (currentSerialPartIndex >= 4) {
-    char serialStr[40];
-    sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
-            scanDeviceSerial[0], scanDeviceSerial[1], scanDeviceSerial[2], scanDeviceSerial[3]);
-
-    DBG_OUTPUT_PORT.printf("Continuous scan found device at node %d: %s\n", currentScanNode, serialStr);
-
-    // Update in-memory device list (not saved to file until user names it)
-    AddOrUpdateDevice(serialStr, currentScanNode, nullptr, currentTime);
-
-    // Notify via callback (will broadcast to WebSocket clients)
-    if (discoveryCallback) {
-      discoveryCallback(currentScanNode, serialStr, currentTime);
-    }
-
-    // Move to next node
-    advanceScanNode();
-  }
-
-  return true;
-}
-
-// CAN debug helpers
-static void printCanTx(const twai_message_t* frame) {
-  // Debug output disabled
-}
-
-static void printCanRx(const twai_message_t* frame) {
-  // Debug output disabled
-}
-
-static void requestSdoElement(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
-  tx_frame.extd = false;
-  tx_frame.identifier = SDO_REQUEST_BASE_ID | nodeId;
-  tx_frame.data_length_code = 8;
-  tx_frame.data[0] = SDO_READ;
-  tx_frame.data[1] = index & 0xFF;
-  tx_frame.data[2] = index >> 8;
-  tx_frame.data[3] = subIndex;
-  tx_frame.data[4] = 0;
-  tx_frame.data[5] = 0;
-  tx_frame.data[6] = 0;
-  tx_frame.data[7] = 0;
-
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-  printCanTx(&tx_frame);
-}
-
-// Non-blocking version for parameter requests (doesn't block if TX queue is full)
-static bool requestSdoElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
-  tx_frame.extd = false;
-  tx_frame.identifier = SDO_REQUEST_BASE_ID | nodeId;
-  tx_frame.data_length_code = 8;
-  tx_frame.data[0] = SDO_READ;
-  tx_frame.data[1] = index & 0xFF;
-  tx_frame.data[2] = index >> 8;
-  tx_frame.data[3] = subIndex;
-  tx_frame.data[4] = 0;
-  tx_frame.data[5] = 0;
-  tx_frame.data[6] = 0;
-  tx_frame.data[7] = 0;
-
-  // Non-blocking transmit (timeout = 0)
-  esp_err_t result = twai_transmit(&tx_frame, 0);
-  if (result == ESP_OK) {
-    printCanTx(&tx_frame);
-    return true;
-  }
-  return false; // TX queue full, message not sent
-}
-
-// Rate limiting for parameter requests
-static unsigned long lastParamRequestTime = 0;
-static unsigned long minParamRequestIntervalUs = 500; // Default: 500 microseconds between requests
+// Use DeviceConnection singleton for all connection and JSON cache state
+static DeviceConnection& conn = DeviceConnection::instance();
 
 // Send SDO request for a parameter value (truly non-blocking with rate limiting)
 bool RequestValue(int paramId) {
   // Rate limiting: check if enough time has passed since last request
-  unsigned long currentTime = micros();
-  unsigned long timeSinceLastRequest = currentTime - lastParamRequestTime;
-
-  if (timeSinceLastRequest < minParamRequestIntervalUs) {
+  if (!conn.canSendParameterRequest()) {
     // Too soon - return false without blocking
     return false;
   }
 
-  uint16_t index = SDO_INDEX_PARAM_UID | (paramId >> 8);
+  uint16_t index = SDOProtocol::INDEX_PARAM_UID | (paramId >> 8);
   uint8_t subIndex = paramId & 0xFF;
 
-  bool success = requestSdoElementNonBlocking(_nodeId, index, subIndex);
+  bool success = SDOProtocol::requestElementNonBlocking(conn.getNodeId(), index, subIndex);
 
   if (success) {
-    lastParamRequestTime = micros();
+    conn.markParameterRequestSent();
   }
 
   return success;
@@ -249,304 +64,144 @@ bool RequestValue(int paramId) {
 
 // Configure rate limiting for parameter requests
 void SetParameterRequestRateLimit(unsigned long intervalUs) {
-  minParamRequestIntervalUs = intervalUs;
+  conn.setParameterRequestRateLimit(intervalUs);
   DBG_OUTPUT_PORT.printf("Parameter request rate limit set to %lu microseconds\n", intervalUs);
-}
-
-static void setValueSdo(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value) {
-  tx_frame.extd = false;
-  tx_frame.identifier = SDO_REQUEST_BASE_ID | nodeId;
-  tx_frame.data_length_code = 8;
-  tx_frame.data[0] = SDO_WRITE;
-  tx_frame.data[1] = index & 0xFF;
-  tx_frame.data[2] = index >> 8;
-  tx_frame.data[3] = subIndex;
-  *(uint32_t*)&tx_frame.data[4] = value;
-
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-  printCanTx(&tx_frame);
-}
-
-// getId() removed - web client now sends parameter IDs directly instead of names
-
-static void requestNextSegment(bool toggleBit) {
-  tx_frame.extd = false;
-  tx_frame.identifier = SDO_REQUEST_BASE_ID | _nodeId;
-  tx_frame.data_length_code = 8;
-  tx_frame.data[0] = SDO_REQUEST_SEGMENT | toggleBit << 4;
-  tx_frame.data[1] = 0;
-  tx_frame.data[2] = 0;
-  tx_frame.data[3] = 0;
-  tx_frame.data[4] = 0;
-  tx_frame.data[5] = 0;
-  tx_frame.data[6] = 0;
-  tx_frame.data[7] = 0;
-
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-  printCanTx(&tx_frame);
 }
 
 static void handleSdoResponse(twai_message_t *rxframe) {
   static bool toggleBit = false;
   static File file;
 
-  if (rxframe->data[0] == SDO_ABORT) { //SDO abort
-    state = ERROR;
+  if (rxframe->data[0] == SDOProtocol::ABORT) { //SDO abort
+    conn.setState(DeviceConnection::ERROR);
     DBG_OUTPUT_PORT.println("Error obtaining serial number, try restarting");
     return;
   }
 
-  switch (state) {
-    case OBTAINSERIAL:
-      if ((rxframe->data[1] | rxframe->data[2] << 8) == SDO_INDEX_SERIAL && rxframe->data[3] < 4) {
-        serial[rxframe->data[3]] = *(uint32_t*)&rxframe->data[4];
+  switch (conn.getState()) {
+    case DeviceConnection::OBTAINSERIAL:
+      if ((rxframe->data[1] | rxframe->data[2] << 8) == SDOProtocol::INDEX_SERIAL && rxframe->data[3] < 4) {
+        conn.setSerialPart(rxframe->data[3], *(uint32_t*)&rxframe->data[4]);
 
         if (rxframe->data[3] < 3) {
-          requestSdoElement(_nodeId, SDO_INDEX_SERIAL, rxframe->data[3] + 1);
+          SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, rxframe->data[3] + 1);
         }
         else {
-          sprintf(jsonFileName, "/%" PRIx32 ".json", serial[3]);
-          DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n", serial[0], serial[1], serial[2], serial[3]);
+          conn.generateJsonFileName();
+          DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n",
+            conn.getSerialPart(0), conn.getSerialPart(1), conn.getSerialPart(2), conn.getSerialPart(3));
 
           // Go to IDLE - JSON will be downloaded on-demand when browser requests it
-          state = IDLE;
+          conn.setState(DeviceConnection::IDLE);
           DBG_OUTPUT_PORT.println("Connection established. Parameter JSON available on request.");
 
           // Notify that connection is ready (device is in IDLE state)
-          if (connectionReadyCallback) {
+          ConnectionReadyCallback callback = conn.getConnectionReadyCallback();
+          if (callback) {
             char serialStr[64];
-            sprintf(serialStr, "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32, serial[0], serial[1], serial[2], serial[3]);
-            connectionReadyCallback(_nodeId, serialStr);
+            sprintf(serialStr, "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32,
+              conn.getSerialPart(0), conn.getSerialPart(1), conn.getSerialPart(2), conn.getSerialPart(3));
+            callback(conn.getNodeId(), serialStr);
           }
         }
       }
       break;
-    case OBTAIN_JSON:
+    case DeviceConnection::OBTAIN_JSON:
       //Receiving last segment
-      if ((rxframe->data[0] & SDO_SIZE_SPECIFIED) && (rxframe->data[0] & SDO_READ) == 0) {
+      if ((rxframe->data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe->data[0] & SDOProtocol::READ) == 0) {
         DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Receiving last segment");
         int size = 7 - ((rxframe->data[0] >> 1) & 0x7);
         for (int i = 0; i < size; i++) {
-          jsonReceiveBuffer += (char)rxframe->data[1 + i];
+          conn.getJsonReceiveBuffer() += (char)rxframe->data[1 + i];
         }
 
         DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
-        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer.length());
+        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", conn.getJsonReceiveBuffer().length());
 
         // Parse JSON into cachedParamJson for future use
-        DeserializationError error = deserializeJson(cachedParamJson, jsonReceiveBuffer);
+        DeserializationError error = deserializeJson(conn.getCachedJson(), conn.getJsonReceiveBuffer());
         if (error) {
           DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
         } else {
           DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
         }
 
-        state = IDLE;
+        conn.setState(DeviceConnection::IDLE);
       }
       //Receiving a segment
-      else if (rxframe->data[0] == (toggleBit << 4) && (rxframe->data[0] & SDO_READ) == 0) {
-        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Segment received (buffer: %d bytes)\n", jsonReceiveBuffer.length());
+      else if (rxframe->data[0] == (toggleBit << 4) && (rxframe->data[0] & SDOProtocol::READ) == 0) {
+        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Segment received (buffer: %d bytes)\n", conn.getJsonReceiveBuffer().length());
         for (int i = 0; i < 7; i++) {
-          jsonReceiveBuffer += (char)rxframe->data[1 + i];
+          conn.getJsonReceiveBuffer() += (char)rxframe->data[1 + i];
         }
         toggleBit = !toggleBit;
-        requestNextSegment(toggleBit);
+        SDOProtocol::requestNextSegment(conn.getNodeId(), toggleBit);
       }
       //Request first segment (initiate upload response)
-      else if ((rxframe->data[0] & SDO_READ) == SDO_READ) {
+      else if ((rxframe->data[0] & SDOProtocol::READ) == SDOProtocol::READ) {
         DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Initiate upload response received");
 
         // Check if size is specified in the response (CANopen SDO protocol)
-        if (rxframe->data[0] & SDO_SIZE_SPECIFIED) {
+        if (rxframe->data[0] & SDOProtocol::SIZE_SPECIFIED) {
           // Extract total size from bytes 4-7 (little-endian)
-          jsonTotalSize = *(uint32_t*)&rxframe->data[4];
-          DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Total size indicated: %d bytes\r\n", jsonTotalSize);
+          conn.setJsonTotalSize(*(uint32_t*)&rxframe->data[4]);
+          DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Total size indicated: %d bytes\r\n", conn.getJsonTotalSize());
 
           // Send initial progress update (0 bytes received, but total is known)
-          if (jsonProgressCallback) {
-            jsonProgressCallback(0); // Will include totalBytes in the message via GetJsonTotalSize()
+          JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
+          if (progressCallback) {
+            progressCallback(0); // Will include totalBytes in the message via GetJsonTotalSize()
           }
         } else {
-          jsonTotalSize = 0; // Unknown size
+          conn.setJsonTotalSize(0); // Unknown size
           DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Total size not specified by device");
         }
 
         DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Requesting first segment");
-        requestNextSegment(toggleBit);
+        SDOProtocol::requestNextSegment(conn.getNodeId(), toggleBit);
       }
 
       break;
-    case ERROR:
+    case DeviceConnection::ERROR:
       // Do not exit this state
       break;
-    case IDLE:
-      // Do not exit this state
-      break;
-  }
-}
-
-static void handleUpdate(twai_message_t *rxframe) {
-  static int currentByte = 0;
-  static uint32_t crc;
-
-  switch (updstate) {
-    case SEND_MAGIC:
-      if (rxframe->data[0] == 0x33) {
-        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
-        tx_frame.data_length_code = 4;
-
-        //For now just reflect ID
-        tx_frame.data[0] = rxframe->data[4];
-        tx_frame.data[1] = rxframe->data[5];
-        tx_frame.data[2] = rxframe->data[6];
-        tx_frame.data[3] = rxframe->data[7];
-        updstate = SEND_SIZE;
-        DBG_OUTPUT_PORT.printf("Sending ID %" PRIu32 "\r\n", *(uint32_t*)tx_frame.data);
-        twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-        printCanTx(&tx_frame);
-
-        if (rxframe->data[1] < 1) //boot loader with timing quirk, wait 100 ms
-          delay(100);
-      }
-      break;
-    case SEND_SIZE:
-      if (rxframe->data[0] == 'S') {
-        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
-        tx_frame.data_length_code = 1;
-
-        tx_frame.data[0] = (updateFile.size() + PAGE_SIZE_BYTES - 1) / PAGE_SIZE_BYTES;
-        updstate = SEND_PAGE;
-        crc = 0xFFFFFFFF;
-        currentByte = 0;
-        currentFlashPage = 0;
-        DBG_OUTPUT_PORT.printf("Sending size %u\r\n", tx_frame.data[0]);
-        twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-        printCanTx(&tx_frame);
-      }
-      break;
-    case SEND_PAGE:
-      if (rxframe->data[0] == 'P') {
-        char buffer[8];
-        size_t bytesRead = 0;
-
-        if (currentByte < updateFile.size()) {
-          updateFile.seek(currentByte);
-          bytesRead = updateFile.readBytes(buffer, sizeof(buffer));
-        }
-
-        while (bytesRead < 8)
-          buffer[bytesRead++] = 0xff;
-
-        currentByte += bytesRead;
-        crc = crc32_word(crc, *(uint32_t*)&buffer[0]);
-        crc = crc32_word(crc, *(uint32_t*)&buffer[4]);
-
-        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
-        tx_frame.data_length_code = 8;
-        tx_frame.data[0] = buffer[0];
-        tx_frame.data[1] = buffer[1];
-        tx_frame.data[2] = buffer[2];
-        tx_frame.data[3] = buffer[3];
-        tx_frame.data[4] = buffer[4];
-        tx_frame.data[5] = buffer[5];
-        tx_frame.data[6] = buffer[6];
-        tx_frame.data[7] = buffer[7];
-
-        updstate = SEND_PAGE;
-        twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-        printCanTx(&tx_frame);
-      }
-      else if (rxframe->data[0] == 'C') {
-        tx_frame.identifier = BOOTLOADER_COMMAND_ID;
-        tx_frame.data_length_code = 4;
-        tx_frame.data[0] = crc & 0xFF;
-        tx_frame.data[1] = (crc >> 8) & 0xFF;
-        tx_frame.data[2] = (crc >> 16) & 0xFF;
-        tx_frame.data[3] = (crc >> 24) & 0xFF;
-
-        updstate = CHECK_CRC;
-        twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
-        printCanTx(&tx_frame);
-      }
-      break;
-    case CHECK_CRC:
-      crc = 0xFFFFFFFF;
-      DBG_OUTPUT_PORT.printf("Sent bytes %u-%u... ", currentFlashPage * PAGE_SIZE_BYTES, currentByte);
-      if (rxframe->data[0] == 'P') {
-        updstate = SEND_PAGE;
-        currentFlashPage++;
-        DBG_OUTPUT_PORT.printf("CRC Good\r\n");
-        handleUpdate(rxframe);
-      }
-      else if (rxframe->data[0] == 'E') {
-        updstate = SEND_PAGE;
-        currentByte = currentFlashPage * PAGE_SIZE_BYTES;
-        DBG_OUTPUT_PORT.printf("CRC Error\r\n");
-        handleUpdate(rxframe);
-      }
-      else if (rxframe->data[0] == 'D') {
-        updstate = REQUEST_JSON;
-        state = OBTAINSERIAL;
-        retries = 50;
-        updateFile.close();
-        DBG_OUTPUT_PORT.printf("Done!\r\n");
-      }
-      break;
-    case REQUEST_JSON:
-      // Do not exit this state
-      break;
-    case UPD_IDLE:
+    case DeviceConnection::IDLE:
       // Do not exit this state
       break;
   }
 }
 
 int StartUpdate(String fileName) {
-  updateFile = LittleFS.open(fileName, "r");
-  currentFlashPage = 0;
+  // Start the firmware update handler
+  int totalPages = FirmwareUpdateHandler::instance().startUpdate(fileName, conn.getNodeId());
 
-  // Set state BEFORE reset so we catch the bootloader's magic response
-  updstate = SEND_MAGIC;
-
-  //Reset host processor
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
+  // Reset host processor to enter bootloader mode
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_RESET, 1U);
 
   // Give device time to reset and enter bootloader mode
   // The bootloader needs time to boot and start sending magic
-  DBG_OUTPUT_PORT.println("Waiting for device to enter bootloader mode...");
-  DBG_OUTPUT_PORT.println("Starting Update");
   delay(500);
 
-  return (updateFile.size() + PAGE_SIZE_BYTES - 1) / PAGE_SIZE_BYTES;
-}
-
-int GetCurrentUpdatePage() {
-  return currentFlashPage;
-}
-
-bool IsUpdateInProgress() {
-  return updstate != UPD_IDLE;
+  return totalPages;
 }
 
 String GetRawJson() {
   // Return cached JSON if available (avoid blocking download)
-  if (!jsonReceiveBuffer.isEmpty()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", jsonReceiveBuffer.length());
-    return jsonReceiveBuffer;
+  if (!conn.getJsonReceiveBuffer().isEmpty()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", conn.getJsonReceiveBuffer().length());
+    return conn.getJsonReceiveBuffer();
   }
 
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Cannot get JSON - device busy (state=%d)\n", state);
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Cannot get JSON - device busy (conn.getState()=%d)\n", conn.getState());
     return "{}";
   }
 
   // Trigger JSON download from device
-  DBG_OUTPUT_PORT.printf("[GetRawJson] Starting JSON download from node %d\n", _nodeId);
-  state = OBTAIN_JSON;
-  jsonReceiveBuffer = ""; // Clear buffer
-  cachedParamJson.clear(); // Clear parsed JSON
-  jsonTotalSize = 0; // Reset total size (will be updated from SDO response if available)
-  requestSdoElement(_nodeId, SDO_INDEX_STRINGS, 0);
+  DBG_OUTPUT_PORT.printf("[GetRawJson] Starting JSON download from node %d\n", conn.getNodeId());
+  conn.setState(DeviceConnection::OBTAIN_JSON);
+  conn.clearJsonCache();
+  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_STRINGS, 0);
   DBG_OUTPUT_PORT.println("[GetRawJson] Sent SDO request, waiting for response...");
 
   // Wait for download to complete (with per-segment timeout)
@@ -559,39 +214,40 @@ String GetRawJson() {
   const unsigned long SEGMENT_TIMEOUT_MS = 5000; // 5 second timeout per segment
   const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200; // Throttle progress updates to 200ms
 
-  while (state == OBTAIN_JSON) {
+  while (conn.getState() == DeviceConnection::OBTAIN_JSON) {
     Loop(); // Process CAN messages
 
     // Check if we received a new segment (buffer grew)
-    if (jsonReceiveBuffer.length() > lastBufferSize) {
-      int newDataSize = jsonReceiveBuffer.length() - lastBufferSize;
-      lastBufferSize = jsonReceiveBuffer.length();
+    if (conn.getJsonReceiveBuffer().length() > lastBufferSize) {
+      lastBufferSize = conn.getJsonReceiveBuffer().length();
       lastSegmentTime = millis(); // Reset timeout on new data
 
       // Stream new data chunk to callback if registered
-      if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
-        int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
-        const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
-        jsonStreamCallback(chunkStart, chunkSize, false); // isComplete = false
-        lastStreamedSize = jsonReceiveBuffer.length();
+      JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
+      if (streamCallback && conn.getJsonReceiveBuffer().length() > lastStreamedSize) {
+        int chunkSize = conn.getJsonReceiveBuffer().length() - lastStreamedSize;
+        const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
+        streamCallback(chunkStart, chunkSize, false); // isComplete = false
+        lastStreamedSize = conn.getJsonReceiveBuffer().length();
       }
 
       // Send progress update via callback (throttled)
-      if (jsonProgressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-        jsonProgressCallback(jsonReceiveBuffer.length());
+      JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
+      if (progressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
+        progressCallback(conn.getJsonReceiveBuffer().length());
         lastProgressUpdate = millis();
       }
 
       if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", jsonReceiveBuffer.length());
+        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
       }
     }
 
     // Check for segment timeout (no data received for too long)
     if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
       DBG_OUTPUT_PORT.printf("[GetRawJson] Segment timeout! No data for %lu ms, buffer size=%d\n",
-        millis() - lastSegmentTime, jsonReceiveBuffer.length());
-      state = IDLE;
+        millis() - lastSegmentTime, conn.getJsonReceiveBuffer().length());
+      conn.setState(DeviceConnection::IDLE);
       return "{}";
     }
 
@@ -604,245 +260,73 @@ String GetRawJson() {
     loopCount++;
   }
 
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", state, jsonReceiveBuffer.length());
-    state = IDLE;
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", conn.getState(), conn.getJsonReceiveBuffer().length());
+    conn.setState(DeviceConnection::IDLE);
     return "{}";
   }
 
-  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", jsonReceiveBuffer.length());
+  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
 
   // Send final chunk with completion flag if streaming
-  if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
-    int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
-    const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
-    jsonStreamCallback(chunkStart, chunkSize, true); // isComplete = true
-  } else if (jsonStreamCallback) {
+  JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
+  if (streamCallback && conn.getJsonReceiveBuffer().length() > lastStreamedSize) {
+    int chunkSize = conn.getJsonReceiveBuffer().length() - lastStreamedSize;
+    const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
+    streamCallback(chunkStart, chunkSize, true); // isComplete = true
+  } else if (streamCallback) {
     // No remaining data, but signal completion
-    jsonStreamCallback("", 0, true);
+    streamCallback("", 0, true);
   }
 
   // Send completion notification (0 = done)
-  if (jsonProgressCallback) {
-    jsonProgressCallback(0);
+  JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
+  if (progressCallback) {
+    progressCallback(0);
   }
 
-  return jsonReceiveBuffer;
+  return conn.getJsonReceiveBuffer();
 }
 
 // Overloaded version that fetches JSON from a specific device by nodeId
+// Simplified: only works if already connected to the requested node
 String GetRawJson(uint8_t nodeId) {
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Cannot get JSON - device busy (state=%d)\n", state);
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Cannot get JSON - device busy (conn.getState()=%d)\n", conn.getState());
     return "{}";
   }
 
-  // If we're already connected to the requested node, just use the regular GetRawJson
-  if (_nodeId == nodeId && !jsonReceiveBuffer.isEmpty()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Already connected to node %d, using cached JSON\n", nodeId);
-    return GetRawJson();
-  }
-
-  // If we're connected to the requested node but cache is empty, fetch without switching
-  if (_nodeId == nodeId) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Already connected to node %d, fetching fresh JSON\n", nodeId);
-    jsonReceiveBuffer = "";
-    cachedParamJson.clear();
-    
-    // Trigger JSON download
-    state = OBTAIN_JSON;
-    requestSdoElement(_nodeId, SDO_INDEX_STRINGS, 0);
-    DBG_OUTPUT_PORT.println("[GetRawJson(nodeId)] Sent SDO request, waiting for response...");
-
-    unsigned long lastSegmentTime = millis();
-    unsigned long lastProgressUpdate = 0;
-    int lastBufferSize = 0;
-    int lastStreamedSize = 0;
-    int loopCount = 0;
-    const unsigned long SEGMENT_TIMEOUT_MS = 5000;
-    const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200;
-
-    while (state == OBTAIN_JSON) {
-      Loop();
-
-      if (jsonReceiveBuffer.length() > lastBufferSize) {
-        lastBufferSize = jsonReceiveBuffer.length();
-        lastSegmentTime = millis();
-
-        // Stream new data chunk to callback if registered
-        if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
-          int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
-          const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
-          jsonStreamCallback(chunkStart, chunkSize, false);
-          lastStreamedSize = jsonReceiveBuffer.length();
-        }
-
-        // Send progress update via callback (throttled)
-        if (jsonProgressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-          jsonProgressCallback(jsonReceiveBuffer.length());
-          lastProgressUpdate = millis();
-        }
-
-        if (loopCount % 100 == 0) {
-          DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Progress: buffer size: %d bytes\n", jsonReceiveBuffer.length());
-        }
-      }
-
-      if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Segment timeout! No data for %lu ms\n", millis() - lastSegmentTime);
-        state = IDLE;
-        return "{}";
-      }
-
-      delay(10);
-      esp_task_wdt_reset();
-      loopCount++;
-    }
-
-    if (state != IDLE) {
-      DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Failed! State=%d\n", state);
-      state = IDLE;
-      return "{}";
-    }
-
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Download complete! Buffer size: %d bytes\n", jsonReceiveBuffer.length());
-
-    // Send final chunk with completion flag if streaming
-    if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
-      int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
-      const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
-      jsonStreamCallback(chunkStart, chunkSize, true);
-    } else if (jsonStreamCallback) {
-      jsonStreamCallback("", 0, true);
-    }
-
-    // Send completion notification (0 = done)
-    if (jsonProgressCallback) {
-      jsonProgressCallback(0);
-    }
-
-    return jsonReceiveBuffer;
-  }
-
-  // Save current state for switching to different node
-  uint8_t savedNodeId = _nodeId;
-  String savedJsonBuffer = jsonReceiveBuffer;
-
-  // Switch to target device and clear cache
-  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Switching from node %d to node %d\n", _nodeId, nodeId);
-  _nodeId = nodeId;
-  jsonReceiveBuffer = "";
-  cachedParamJson.clear();
-
-  // Trigger JSON download from target device
-  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Starting JSON download from node %d\n", _nodeId);
-  state = OBTAIN_JSON;
-  requestSdoElement(_nodeId, SDO_INDEX_STRINGS, 0);
-  DBG_OUTPUT_PORT.println("[GetRawJson(nodeId)] Sent SDO request, waiting for response...");
-
-  // Wait for download to complete (with per-segment timeout)
-  unsigned long lastSegmentTime = millis();
-  unsigned long lastProgressUpdate = 0;
-  int lastBufferSize = 0;
-  int lastStreamedSize = 0;
-  int loopCount = 0;
-  const unsigned long SEGMENT_TIMEOUT_MS = 5000;
-  const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200;
-
-  while (state == OBTAIN_JSON) {
-    Loop();
-
-    if (jsonReceiveBuffer.length() > lastBufferSize) {
-      lastBufferSize = jsonReceiveBuffer.length();
-      lastSegmentTime = millis();
-
-      // Stream new data chunk to callback if registered
-      if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
-        int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
-        const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
-        jsonStreamCallback(chunkStart, chunkSize, false);
-        lastStreamedSize = jsonReceiveBuffer.length();
-      }
-
-      // Send progress update via callback (throttled)
-      if (jsonProgressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-        jsonProgressCallback(jsonReceiveBuffer.length());
-        lastProgressUpdate = millis();
-      }
-
-      if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Progress: buffer size: %d bytes\n", jsonReceiveBuffer.length());
-      }
-    }
-
-    if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
-      DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Segment timeout! No data for %lu ms\n", millis() - lastSegmentTime);
-      state = IDLE;
-      // Restore previous state
-      _nodeId = savedNodeId;
-      jsonReceiveBuffer = savedJsonBuffer;
-      return "{}";
-    }
-
-    delay(10);
-    esp_task_wdt_reset();
-    loopCount++;
-  }
-
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Failed! State=%d\n", state);
-    state = IDLE;
-    // Restore previous state
-    _nodeId = savedNodeId;
-    jsonReceiveBuffer = savedJsonBuffer;
+  // Only fetch JSON if we're connected to the requested node
+  if (conn.getNodeId() != nodeId) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Not connected to node %d (currently connected to %d). Use Init() to connect first.\n", nodeId, conn.getNodeId());
     return "{}";
   }
 
-  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Download complete! Buffer size: %d bytes\n", jsonReceiveBuffer.length());
-  String result = jsonReceiveBuffer;
-
-  // Send final chunk with completion flag if streaming
-  if (jsonStreamCallback && jsonReceiveBuffer.length() > lastStreamedSize) {
-    int chunkSize = jsonReceiveBuffer.length() - lastStreamedSize;
-    const char* chunkStart = jsonReceiveBuffer.c_str() + lastStreamedSize;
-    jsonStreamCallback(chunkStart, chunkSize, true);
-  } else if (jsonStreamCallback) {
-    jsonStreamCallback("", 0, true);
-  }
-
-  // Send completion notification (0 = done)
-  if (jsonProgressCallback) {
-    jsonProgressCallback(0);
-  }
-
-  // Restore previous state
-  _nodeId = savedNodeId;
-  jsonReceiveBuffer = savedJsonBuffer;
-  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Restored to node %d\n", _nodeId);
-
-  return result;
+  // We're connected to the right node - just delegate to the regular GetRawJson()
+  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Connected to node %d, fetching JSON\n", nodeId);
+  return GetRawJson();
 }
 
 bool SendJson(WiFiClient client) {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   JsonDocument doc;
   twai_message_t rxframe;
 
   // Use in-memory JSON if available
-  if (cachedParamJson.isNull() || cachedParamJson.size() == 0) {
+  if (conn.getCachedJson().isNull() || conn.getCachedJson().size() == 0) {
     DBG_OUTPUT_PORT.println("No parameter JSON in memory");
     return false;
   }
 
-  JsonObject root = cachedParamJson.as<JsonObject>();
+  JsonObject root = conn.getCachedJson().as<JsonObject>();
   int failed = 0;
 
   for (JsonPair kv : root) {
     int id = kv.value()["id"].as<int>();
 
     if (id > 0) {
-      requestSdoElement(_nodeId, SDO_INDEX_PARAM_UID | (id >> 8), id & 0xff);
+      SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_PARAM_UID | (id >> 8), id & 0xff);
 
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK && rxframe.data[3] == (id & 0xFF)) {
         printCanRx(&rxframe);
@@ -860,15 +344,15 @@ bool SendJson(WiFiClient client) {
 }
 
 String GetCanMapping() {
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.println("GetCanMapping called while not IDLE, ignoring");
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.println("GetCanMapping called while not DeviceConnection::IDLE, ignoring");
     return "[]";
   }
 
   enum ReqMapStt { START, COBID, DATAPOSLEN, GAINOFS, DONE };
 
   twai_message_t rxframe;
-  int index = SDO_INDEX_MAP_RD, subIndex = 0;
+  int index = SDOProtocol::INDEX_MAP_RD, subIndex = 0;
   int cobid = 0, pos = 0, len = 0, paramid = 0;
   bool rx = false;
   ReqMapStt reqMapStt = START;
@@ -878,7 +362,7 @@ String GetCanMapping() {
   while (DONE != reqMapStt) {
     switch (reqMapStt) {
     case START:
-      requestSdoElement(_nodeId, index, 0); //request COB ID
+      SDOProtocol::requestElement(conn.getNodeId(), index, 0); //request COB ID
       reqMapStt = COBID;
       cobid = 0;
       pos = 0;
@@ -888,15 +372,15 @@ String GetCanMapping() {
     case COBID:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT) {
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           cobid = *(int32_t*)&rxframe.data[4]; //convert bytes to word
           subIndex++;
-          requestSdoElement(_nodeId, index, subIndex); //request parameter id, position and length
+          SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //request parameter id, position and length
           reqMapStt = DATAPOSLEN;
         }
         else if (!rx) { //after receiving tx item collect rx items
           rx = true;
-          index = SDO_INDEX_MAP_RD + 0x80;
+          index = SDOProtocol::INDEX_MAP_RD + 0x80;
           reqMapStt = START;
           DBG_OUTPUT_PORT.println("Getting RX items");
         }
@@ -909,12 +393,12 @@ String GetCanMapping() {
     case DATAPOSLEN:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT) {
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           paramid = *(uint16_t*)&rxframe.data[4];
           pos = rxframe.data[6];
           len = (int8_t)rxframe.data[7];
           subIndex++;
-          requestSdoElement(_nodeId, index, subIndex); //gain and offset
+          SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //gain and offset
           reqMapStt = GAINOFS;
         }
         else { //all items of this message collected, move to next message
@@ -930,7 +414,7 @@ String GetCanMapping() {
     case GAINOFS:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT) {
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           int32_t gainFixedPoint = ((*(uint32_t*)&rxframe.data[4]) & 0xFFFFFF) << (32-24);
           gainFixedPoint >>= (32-24);
           float gain = gainFixedPoint / 1000.0f;
@@ -951,7 +435,7 @@ String GetCanMapping() {
           subIndex++;
 
           if (subIndex < 100) { //limit maximum items in case there is a bug ;)
-            requestSdoElement(_nodeId, index, subIndex); //request next item
+            SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //request next item
             reqMapStt = DATAPOSLEN;
           }
           else {
@@ -975,15 +459,15 @@ String GetCanMapping() {
 }
 
 void SendCanMapping(WiFiClient client) {
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.println("SendCanMapping called while not IDLE, ignoring");
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.println("SendCanMapping called while not DeviceConnection::IDLE, ignoring");
     return;
   }
 
   enum ReqMapStt { START, COBID, DATAPOSLEN, GAINOFS, DONE };
 
   twai_message_t rxframe;
-  int index = SDO_INDEX_MAP_RD, subIndex = 0;
+  int index = SDOProtocol::INDEX_MAP_RD, subIndex = 0;
   int cobid = 0, pos = 0, len = 0, paramid = 0;
   bool rx = false;
   String result;
@@ -994,7 +478,7 @@ void SendCanMapping(WiFiClient client) {
   while (DONE != reqMapStt) {
     switch (reqMapStt) {
     case START:
-      requestSdoElement(_nodeId, index, 0); //request COB ID
+      SDOProtocol::requestElement(conn.getNodeId(), index, 0); //request COB ID
       reqMapStt = COBID;
       cobid = 0;
       pos = 0;
@@ -1004,15 +488,15 @@ void SendCanMapping(WiFiClient client) {
     case COBID:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT) {
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           cobid = *(int32_t*)&rxframe.data[4]; //convert bytes to word
           subIndex++;
-          requestSdoElement(_nodeId, index, subIndex); //request parameter id, position and length
+          SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //request parameter id, position and length
           reqMapStt = DATAPOSLEN;
         }
         else if (!rx) { //after receiving tx item collect rx items
           rx = true;
-          index = SDO_INDEX_MAP_RD + 0x80;
+          index = SDOProtocol::INDEX_MAP_RD + 0x80;
           reqMapStt = START;
           DBG_OUTPUT_PORT.println("Getting RX items");
         }
@@ -1025,12 +509,12 @@ void SendCanMapping(WiFiClient client) {
     case DATAPOSLEN:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT) {
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           paramid = *(uint16_t*)&rxframe.data[4];
           pos = rxframe.data[6];
           len = (int8_t)rxframe.data[7];
           subIndex++;
-          requestSdoElement(_nodeId, index, subIndex); //gain and offset
+          SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //gain and offset
           reqMapStt = GAINOFS;
         }
         else { //all items of this message collected, move to next message
@@ -1046,7 +530,7 @@ void SendCanMapping(WiFiClient client) {
     case GAINOFS:
       if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT) {
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           int32_t gainFixedPoint = ((*(uint32_t*)&rxframe.data[4]) & 0xFFFFFF) << (32-24);
           gainFixedPoint >>= (32-24);
           float gain = gainFixedPoint / 1000.0f;
@@ -1067,7 +551,7 @@ void SendCanMapping(WiFiClient client) {
           subIndex++;
 
           if (subIndex < 100) { //limit maximum items in case there is a bug ;)
-            requestSdoElement(_nodeId, index, subIndex); //request next item
+            SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //request next item
             reqMapStt = DATAPOSLEN;
           }
           else {
@@ -1090,7 +574,7 @@ void SendCanMapping(WiFiClient client) {
 }
 
 SetResult AddCanMapping(String json) {
-  if (state != IDLE) return CommError;
+  if (!conn.isIdle()) return CommError;
 
   JsonDocument doc;
   twai_message_t rxframe;
@@ -1103,22 +587,22 @@ SetResult AddCanMapping(String json) {
     return UnknownIndex;
   }
 
-  int index = doc["isrx"] ? SDO_INDEX_MAP_RX : SDO_INDEX_MAP_TX;
+  int index = doc["isrx"] ? SDOProtocol::INDEX_MAP_RX : SDOProtocol::INDEX_MAP_TX;
 
-  setValueSdo(_nodeId, index, 0, (uint32_t)doc["id"]); //Send CAN Id
+  SDOProtocol::setValue(conn.getNodeId(), index, 0, (uint32_t)doc["id"]); //Send CAN Id
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
     DBG_OUTPUT_PORT.println("Sent COB Id");
-    setValueSdo(_nodeId, index, 1, doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) | (doc["length"].as<int32_t>() << 24)); //data item, position and length
-    if (rxframe.data[0] != SDO_ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    SDOProtocol::setValue(conn.getNodeId(), index, 1, doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) | (doc["length"].as<int32_t>() << 24)); //data item, position and length
+    if (rxframe.data[0] != SDOProtocol::ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
       printCanRx(&rxframe);
       DBG_OUTPUT_PORT.println("Sent position and length");
-      setValueSdo(_nodeId, index, 2, (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) | doc["offset"].as<int32_t>() << 24); //gain and offset
+      SDOProtocol::setValue(conn.getNodeId(), index, 2, (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) | doc["offset"].as<int32_t>() << 24); //gain and offset
 
-      if (rxframe.data[0] != SDO_ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+      if (rxframe.data[0] != SDOProtocol::ABORT && twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
         printCanRx(&rxframe);
-        if (rxframe.data[0] != SDO_ABORT){
+        if (rxframe.data[0] != SDOProtocol::ABORT){
           DBG_OUTPUT_PORT.println("Sent gain and offset -> map successful");
           return Ok;
         }
@@ -1132,7 +616,7 @@ SetResult AddCanMapping(String json) {
 }
 
 SetResult RemoveCanMapping(String json){
-  if (state != IDLE) return CommError;
+  if (!conn.isIdle()) return CommError;
 
   JsonDocument doc;
   twai_message_t rxframe;
@@ -1151,11 +635,11 @@ SetResult RemoveCanMapping(String json){
   uint32_t writeIndex;
   bool isRx;
 
-  if (readIndex >= SDO_INDEX_MAP_RD + 0x80) {
+  if (readIndex >= SDOProtocol::INDEX_MAP_RD + 0x80) {
     // RX mapping (read index 0x3180+)
     writeIndex = readIndex;  // Use the read index directly for removal
     isRx = true;
-  } else if (readIndex >= SDO_INDEX_MAP_RD) {
+  } else if (readIndex >= SDOProtocol::INDEX_MAP_RD) {
     // TX mapping (read index 0x3100+)
     writeIndex = readIndex;  // Use the read index directly for removal
     isRx = false;
@@ -1168,11 +652,11 @@ SetResult RemoveCanMapping(String json){
                          isRx ? "RX" : "TX", (unsigned long)writeIndex);
 
   // Write 0 to subindex 0 (COB ID) to remove the entire mapping
-  setValueSdo(_nodeId, writeIndex, 0, 0U);
+  SDOProtocol::setValue(conn.getNodeId(), writeIndex, 0, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
-    if (rxframe.data[0] != SDO_ABORT){
+    if (rxframe.data[0] != SDOProtocol::ABORT){
       DBG_OUTPUT_PORT.println("Item removed");
       return Ok;
     }
@@ -1186,10 +670,10 @@ SetResult RemoveCanMapping(String json){
 }
 
 bool ClearCanMap(bool isRx) {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   twai_message_t rxframe;
-  int baseIndex = isRx ? (SDO_INDEX_MAP_RD + 0x80) : SDO_INDEX_MAP_RD;
+  int baseIndex = isRx ? (SDOProtocol::INDEX_MAP_RD + 0x80) : SDOProtocol::INDEX_MAP_RD;
   int removedCount = 0;
   const int MAX_ITERATIONS = 100; // Safety limit to prevent infinite loops
 
@@ -1198,12 +682,12 @@ bool ClearCanMap(bool isRx) {
   // Repeatedly delete the first entry (index + 0, subindex 0) until we get an abort
   for (int i = 0; i < MAX_ITERATIONS; i++) {
     // Write 0 to the first mapping slot (index 0x3100 or 0x3180, subindex 0)
-    setValueSdo(_nodeId, baseIndex, 0, 0U);
+    SDOProtocol::setValue(conn.getNodeId(), baseIndex, 0, 0U);
 
     if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
       printCanRx(&rxframe);
 
-      if (rxframe.data[0] == SDO_ABORT) {
+      if (rxframe.data[0] == SDOProtocol::ABORT) {
         // Abort means no more entries to delete
         DBG_OUTPUT_PORT.printf("All %s mappings cleared (%d removed)\n", isRx ? "RX" : "TX", removedCount);
         return true;
@@ -1226,17 +710,17 @@ bool ClearCanMap(bool isRx) {
 }
 
 SetResult SetValue(int paramId, double value) {
-  if (state != IDLE) return CommError;
+  if (!conn.isIdle()) return CommError;
 
   twai_message_t rxframe;
 
-  setValueSdo(_nodeId, SDO_INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF, (uint32_t)(value * 32));
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF, (uint32_t)(value * 32));
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
     printCanRx(&rxframe);
-    if (rxframe.data[0] == SDO_RESPONSE_DOWNLOAD)
+    if (rxframe.data[0] == SDOProtocol::RESPONSE_DOWNLOAD)
       return Ok;
-    else if (*(uint32_t*)&rxframe.data[4] == SDO_ERR_RANGE)
+    else if (*(uint32_t*)&rxframe.data[4] == SDOProtocol::ERR_RANGE)
       return ValueOutOfRange;
     else
       return UnknownIndex;
@@ -1247,11 +731,11 @@ SetResult SetValue(int paramId, double value) {
 }
 
 bool SaveToFlash() {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   twai_message_t rxframe;
 
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_SAVE, 0U);
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_SAVE, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -1263,11 +747,11 @@ bool SaveToFlash() {
 }
 
 bool LoadFromFlash() {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   twai_message_t rxframe;
 
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_LOAD, 0U);
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_LOAD, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -1279,11 +763,11 @@ bool LoadFromFlash() {
 }
 
 bool LoadDefaults() {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   twai_message_t rxframe;
 
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_DEFAULTS, 0U);
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_DEFAULTS, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -1295,11 +779,11 @@ bool LoadDefaults() {
 }
 
 bool StartDevice(uint32_t mode) {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   twai_message_t rxframe;
 
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_START, mode);
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_START, mode);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -1311,11 +795,11 @@ bool StartDevice(uint32_t mode) {
 }
 
 bool StopDevice() {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   twai_message_t rxframe;
 
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_STOP, 0U);
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_STOP, 0U);
 
   if (twai_receive(&rxframe, pdMS_TO_TICKS(200)) == ESP_OK) {
     printCanRx(&rxframe);
@@ -1327,8 +811,8 @@ bool StopDevice() {
 }
 
 String ListErrors() {
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.println("ListErrors called while not IDLE, ignoring");
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.println("ListErrors called while not DeviceConnection::IDLE, ignoring");
     return "[]";
   }
 
@@ -1338,8 +822,8 @@ String ListErrors() {
 
   // Build error description map from parameter JSON (lasterr field)
   std::map<int, String> errorDescriptions;
-  if (!cachedParamJson.isNull() && cachedParamJson.containsKey("lasterr")) {
-    JsonObject lasterr = cachedParamJson["lasterr"].as<JsonObject>();
+  if (!conn.getCachedJson().isNull() && conn.getCachedJson().containsKey("lasterr")) {
+    JsonObject lasterr = conn.getCachedJson()["lasterr"].as<JsonObject>();
     for (JsonPair kv : lasterr) {
       int errorNum = atoi(kv.key().c_str());
       errorDescriptions[errorNum] = kv.value().as<String>();
@@ -1349,8 +833,8 @@ String ListErrors() {
 
   // Determine tick duration from uptime parameter's unit (default: 10ms)
   int tickDurationMs = 10; // Default to 10ms
-  if (!cachedParamJson.isNull() && cachedParamJson.containsKey("uptime")) {
-    JsonObject uptime = cachedParamJson["uptime"].as<JsonObject>();
+  if (!conn.getCachedJson().isNull() && conn.getCachedJson().containsKey("uptime")) {
+    JsonObject uptime = conn.getCachedJson()["uptime"].as<JsonObject>();
     if (uptime.containsKey("unit")) {
       String unit = uptime["unit"].as<String>();
       if (unit == "sec" || unit == "s") {
@@ -1370,11 +854,11 @@ String ListErrors() {
     bool hasErrorNum = false;
 
     // Request error timestamp
-    requestSdoElement(_nodeId, SDO_INDEX_ERROR_TIME, i);
+    SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_TIME, i);
     if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
       printCanRx(&rxframe);
-      if (rxframe.data[0] != SDO_ABORT &&
-          (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_ERROR_TIME &&
+      if (rxframe.data[0] != SDOProtocol::ABORT &&
+          (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_TIME &&
           rxframe.data[3] == i) {
         errorTime = *(uint32_t*)&rxframe.data[4];
         hasErrorTime = true;
@@ -1382,11 +866,11 @@ String ListErrors() {
     }
 
     // Request error number
-    requestSdoElement(_nodeId, SDO_INDEX_ERROR_NUM, i);
+    SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_NUM, i);
     if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
       printCanRx(&rxframe);
-      if (rxframe.data[0] != SDO_ABORT &&
-          (rxframe.data[1] | rxframe.data[2] << 8) == SDO_INDEX_ERROR_NUM &&
+      if (rxframe.data[0] != SDOProtocol::ABORT &&
+          (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_NUM &&
           rxframe.data[3] == i) {
         errorNum = *(uint32_t*)&rxframe.data[4];
         hasErrorNum = true;
@@ -1458,7 +942,7 @@ bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength) {
 }
 
 String StreamValues(String paramIds, int samples) {
-  if (state != IDLE) return "";
+  if (!conn.isIdle()) return "";
 
   twai_message_t rxframe;
 
@@ -1474,7 +958,7 @@ String StreamValues(String paramIds, int samples) {
   for (int i = 0; i < samples; i++) {
     for (int item = 0; item < numItems; item++) {
       int id = ids[item];
-      requestSdoElement(_nodeId, SDO_INDEX_PARAM_UID | (id >> 8), id & 0xFF);
+      SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_PARAM_UID | (id >> 8), id & 0xFF);
     }
 
     int item = 0;
@@ -1514,9 +998,9 @@ bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs) {
   // Parse the response to extract paramId
   uint16_t responseIndex = rxframe.data[1] | (rxframe.data[2] << 8);
   uint8_t responseSubIndex = rxframe.data[3];
-  
+
   // Check if this is a parameter value response (SDO_INDEX_PARAM_UID range)
-  if ((responseIndex & 0xFF00) != (SDO_INDEX_PARAM_UID & 0xFF00)) {
+  if ((responseIndex & 0xFF00) != (SDOProtocol::INDEX_PARAM_UID & 0xFF00)) {
     // Not a parameter response, skip
     return false;
   }
@@ -1540,7 +1024,7 @@ bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs) {
 
 // Legacy blocking version (kept for compatibility with other code)
 double GetValue(int paramId) {
-  if (state != IDLE) {
+  if (!conn.isIdle()) {
     return 0;
   }
 
@@ -1566,22 +1050,21 @@ double GetValue(int paramId) {
 }
 
 bool IsIdle() {
-  return state == IDLE;
+  return conn.isIdle();
 }
 
 int GetNodeId() {
-  return _nodeId;
+  return conn.getNodeId();
 }
 
 BaudRate GetBaudRate() {
-  return baudRate;
+  return conn.getBaudRate();
 }
 
 // Initialize CAN bus without connecting to a specific device
 void InitCAN(BaudRate baud, int txPin, int rxPin) {
   // Store pin configuration for later use
-  canTxPin = txPin;
-  canRxPin = rxPin;
+  conn.setCanPins(txPin, rxPin);
 
   twai_general_config_t g_config = {
         .mode = TWAI_MODE_NORMAL,
@@ -1600,7 +1083,7 @@ void InitCAN(BaudRate baud, int txPin, int rxPin) {
   twai_driver_uninstall();
 
   twai_timing_config_t t_config;
-  baudRate = baud;
+  conn.setBaudRate(baud);
 
   switch (baud)
   {
@@ -1633,19 +1116,18 @@ void InitCAN(BaudRate baud, int txPin, int rxPin) {
     return;
   }
 
-  _nodeId = 0; // No specific device connected yet
-  state = IDLE;
+  conn.setNodeId(0); // No specific device connected yet
+  conn.setState(DeviceConnection::IDLE);
   DBG_OUTPUT_PORT.println("CAN bus initialized (no device connected)");
 
   // Load saved devices into memory
-  LoadDevices();
+  DeviceDiscovery::instance().loadDevices();
 }
 
 // Initialize CAN and connect to a specific device
 void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   // Store pin configuration for later use
-  canTxPin = txPin;
-  canRxPin = rxPin;
+  conn.setCanPins(txPin, rxPin);
 
   twai_general_config_t g_config = {
         .mode = TWAI_MODE_NORMAL,
@@ -1666,7 +1148,7 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   twai_driver_uninstall();
 
   twai_timing_config_t t_config;
-  baudRate = baud;
+  conn.setBaudRate(baud);
 
   switch (baud)
   {
@@ -1702,17 +1184,16 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   }
 
   // Clear cached JSON when switching to a different device
-  if (_nodeId != nodeId) {
-    jsonReceiveBuffer = "";
-    cachedParamJson.clear();
+  if (conn.getNodeId() != nodeId) {
+    conn.clearJsonCache();
     DBG_OUTPUT_PORT.println("Cleared cached JSON (switching devices)");
   }
 
-  _nodeId = nodeId;
-  state = OBTAINSERIAL;
-  stateStartTime = millis(); // Track when we entered OBTAINSERIAL state
+  conn.setNodeId(nodeId);
+  conn.setState(DeviceConnection::OBTAINSERIAL);
+  conn.resetStateStartTime();
   DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
-  requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
+  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
   DBG_OUTPUT_PORT.println("Connected to device");
 }
 
@@ -1720,10 +1201,10 @@ void Loop() {
   bool recvdResponse = false;
   twai_message_t rxframe;
 
-  // Check for OBTAINSERIAL timeout
-  if (state == OBTAINSERIAL && (millis() - stateStartTime > OBTAINSERIAL_TIMEOUT_MS)) {
-    DBG_OUTPUT_PORT.println("OBTAINSERIAL timeout - resetting to IDLE");
-    state = IDLE;
+  // Check for DeviceConnection::OBTAINSERIAL timeout
+  if (conn.getState() == DeviceConnection::OBTAINSERIAL && (conn.getStateElapsedTime() > 5000)) {
+    DBG_OUTPUT_PORT.println("DeviceConnection::OBTAINSERIAL timeout - resetting to DeviceConnection::IDLE");
+    conn.setState(DeviceConnection::IDLE);
   }
 
   if (twai_receive(&rxframe, 0) == ESP_OK) {
@@ -1731,7 +1212,7 @@ void Loop() {
 
     // Check bootloader messages first (before SDO responses)
     if (rxframe.identifier == BOOTLOADER_RESPONSE_ID) {
-      handleUpdate(&rxframe);
+      FirmwareUpdateHandler::instance().processResponse(&rxframe);
     }
     // Check if this is an SDO response (SDO_RESPONSE_BASE_ID to SDO_RESPONSE_MAX_ID range only)
     else if (rxframe.identifier >= SDO_RESPONSE_BASE_ID && rxframe.identifier <= SDO_RESPONSE_MAX_ID) {
@@ -1739,9 +1220,9 @@ void Loop() {
 
       // Update lastSeen for any device we receive a message from
       // This acts as a passive heartbeat mechanism
-      UpdateDeviceLastSeenByNodeId(nodeId, millis());
+      DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
 
-      if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | _nodeId)) {
+      if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | conn.getNodeId())) {
         handleSdoResponse(&rxframe);
         recvdResponse = true;
       }
@@ -1751,21 +1232,27 @@ void Loop() {
     }
   }
 
-  if (updstate == REQUEST_JSON) {
-    //Re-download JSON if necessary
+  if (FirmwareUpdateHandler::instance().getState() == FirmwareUpdateHandler::REQUEST_JSON) {
+    // Re-download JSON after firmware update completes
+    // Transition to OBTAINSERIAL state to get new device info
+    if (conn.getState() != DeviceConnection::OBTAINSERIAL) {
+      conn.setState(DeviceConnection::OBTAINSERIAL);
+      conn.setRetries(50);
+    }
 
-    retries--;
+    conn.decrementRetries();
 
-    if (recvdResponse || retries < 0)
-      updstate = UPD_IDLE; //if request was successful
-    else
-      requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
+    if (recvdResponse || conn.getRetries() < 0) {
+      FirmwareUpdateHandler::instance().reset(); // Reset to UPD_IDLE
+    } else {
+      SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
+    }
 
-     delay(100);
+    delay(100);
   }
 
   // Process continuous scanning
-  ProcessContinuousScan();
+  DeviceDiscovery::instance().processScan();
 
   // Note: Removed ProcessHeartbeat() - we now passively update lastSeen
   // whenever we receive messages from devices
@@ -1773,17 +1260,17 @@ void Loop() {
 }
 
 bool ReloadJson() {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   // Remove the cached JSON file to force re-download
-  if (LittleFS.exists(jsonFileName)) {
-    LittleFS.remove(jsonFileName);
-    DBG_OUTPUT_PORT.printf("Removed cached JSON file: %s\r\n", jsonFileName);
+  if (LittleFS.exists(conn.getJsonFileName())) {
+    LittleFS.remove(conn.getJsonFileName());
+    DBG_OUTPUT_PORT.printf("Removed cached JSON file: %s\r\n", conn.getJsonFileName());
   }
 
   // Trigger JSON download
-  state = OBTAINSERIAL;
-  requestSdoElement(_nodeId, SDO_INDEX_SERIAL, 0);
+  conn.setState(DeviceConnection::OBTAINSERIAL);
+  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
 
   DBG_OUTPUT_PORT.println("Reloading JSON from device");
   return true;
@@ -1791,16 +1278,16 @@ bool ReloadJson() {
 
 // Overloaded version that reloads JSON for a specific device by nodeId
 bool ReloadJson(uint8_t nodeId) {
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("[ReloadJson(nodeId)] Cannot reload - device busy (state=%d)\n", state);
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("[ReloadJson(nodeId)] Cannot reload - device busy (conn.getState()=%d)\n", conn.getState());
     return false;
   }
 
   // Clear the cached JSON buffer for the requested node
-  if (_nodeId == nodeId) {
+  if (conn.getNodeId() == nodeId) {
     // If it's the currently connected node, clear the cache
-    jsonReceiveBuffer = "";
-    cachedParamJson.clear();
+    conn.getJsonReceiveBuffer() = "";
+    conn.getCachedJson().clear();
     DBG_OUTPUT_PORT.printf("[ReloadJson(nodeId)] Cleared cache for node %d\n", nodeId);
     return true;
   } else {
@@ -1812,505 +1299,59 @@ bool ReloadJson(uint8_t nodeId) {
 }
 
 bool ResetDevice() {
-  if (state != IDLE) return false;
+  if (!conn.isIdle()) return false;
 
   // Send reset command to the device
-  setValueSdo(_nodeId, SDO_INDEX_COMMANDS, SDO_CMD_RESET, 1U);
+  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_RESET, 1U);
 
   DBG_OUTPUT_PORT.println("Device reset command sent");
 
   // The device will reset immediately and won't send an acknowledgment
   // After a short delay, trigger JSON reload
   delay(500); // Give device time to start resetting
-  state = OBTAINSERIAL;
-  retries = 50;
+  conn.setState(DeviceConnection::OBTAINSERIAL);
+  conn.setRetries(50);
 
   return true;
 }
 
 // Device management functions
 
-// Helper function: Request device serial number from a node
-// Returns true if all 4 serial parts were successfully received
-static bool requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4]) {
-  for (uint8_t part = 0; part < 4; part++) {
-    requestSdoElement(nodeId, SDO_INDEX_SERIAL, part);
-
-    twai_message_t rxframe;
-    if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) != ESP_OK) {
-      return false;
-    }
-
-    printCanRx(&rxframe);
-
-    if (!isValidSerialResponse(rxframe, nodeId, part)) {
-      return false;
-    }
-
-    serialParts[part] = *(uint32_t*)&rxframe.data[4];
-  }
-  return true;
-}
-
-// Helper function: Load devices.json from LittleFS
-// Returns true if file was successfully loaded and parsed
 String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
-  if (state != IDLE) return "[]";
-
-  JsonDocument doc;
-  JsonArray devices = doc.to<JsonArray>();
-
-  // Load saved devices to update them
-  JsonDocument savedDoc;
-  DeviceStorage::loadDevices(savedDoc);
-
-  // Ensure devices object exists in saved doc
-  if (!savedDoc.containsKey("devices")) {
-    savedDoc.createNestedObject("devices");
-  }
-
-  JsonObject savedDevices = savedDoc["devices"].as<JsonObject>();
-  bool devicesUpdated = false;
-
-  DBG_OUTPUT_PORT.printf("Scanning CAN bus for devices (nodes %d-%d)...\n", startNodeId, endNodeId);
-
-  // Save current state
-  State prevState = state;
-  uint8_t prevNodeId = _nodeId;
-
-  for (uint8_t nodeId = startNodeId; nodeId <= endNodeId; nodeId++) {
-    uint32_t deviceSerial[4];
-
-    DBG_OUTPUT_PORT.printf("Probing node %d...\n", nodeId);
-
-    // Temporarily set the node ID for scanning
-    _nodeId = nodeId;
-
-    // Request serial number from device
-    if (requestDeviceSerial(nodeId, deviceSerial)) {
-      char serialStr[40];
-      sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
-              deviceSerial[0], deviceSerial[1], deviceSerial[2], deviceSerial[3]);
-
-      DBG_OUTPUT_PORT.printf("Found device at node %d: %s\n", nodeId, serialStr);
-
-      // Add to scan results
-      JsonObject device = devices.add<JsonObject>();
-      device["nodeId"] = nodeId;
-      device["serial"] = serialStr;
-      device["lastSeen"] = millis();
-
-      // Update saved devices with new nodeId and lastSeen
-      DeviceStorage::updateDeviceInJson(savedDevices, serialStr, nodeId);
-      devicesUpdated = true;
-
-      DBG_OUTPUT_PORT.printf("Updated stored nodeId for %s to %d\n", serialStr, nodeId);
-    }
-  }
-
-  // Restore previous state
-  _nodeId = prevNodeId;
-  state = prevState;
-
-  // Save updated devices back to LittleFS
-  if (devicesUpdated) {
-    if (DeviceStorage::saveDevices(savedDoc)) {
-      DBG_OUTPUT_PORT.println("Updated devices.json with new nodeIds");
-    }
-  }
-
-  String result;
-  serializeJson(doc, result);
-  DBG_OUTPUT_PORT.printf("Scan complete. Found %d devices\n", devices.size());
-
-  return result;
+  uint8_t nodeId = conn.getNodeId();
+  return DeviceDiscovery::instance().scanDevices(startNodeId, endNodeId, nodeId, conn.getBaudRate(), conn.getCanTxPin(), conn.getCanRxPin());
 }
-
-String GetSavedDevices() {
-  JsonDocument doc;
-  JsonObject devices = doc["devices"].to<JsonObject>();
-
-  // Build JSON from in-memory device list
-  for (auto& kv : deviceList) {
-    const Device& dev = kv.second;
-    JsonObject deviceObj = devices[dev.serial].to<JsonObject>();
-    deviceObj["nodeId"] = dev.nodeId;
-    deviceObj["name"] = dev.name;
-    deviceObj["lastSeen"] = dev.lastSeen;
-  }
-
-  String result;
-  serializeJson(doc, result);
-  return result;
-}
-
-bool SaveDeviceName(String serial, String name, int nodeId) {
-  JsonDocument doc;
-
-  // Load existing devices
-  DeviceStorage::loadDevices(doc);
-
-  // Ensure devices object exists
-  if (!doc.containsKey("devices")) {
-    doc.createNestedObject("devices");
-  }
-
-  JsonObject devices = doc["devices"].as<JsonObject>();
-
-  // Get or create device object (serial is the key)
-  if (!devices.containsKey(serial)) {
-    devices.createNestedObject(serial);
-  }
-
-  JsonObject device = devices[serial].as<JsonObject>();
-  device["name"] = name;
-
-  if (nodeId >= 0) {
-    device["nodeId"] = nodeId;
-  }
-
-  DBG_OUTPUT_PORT.printf("Saved device: %s -> %s (nodeId: %d)\n", serial.c_str(), name.c_str(), nodeId);
-
-  // Save back to file
-  if (!DeviceStorage::saveDevices(doc)) {
-    DBG_OUTPUT_PORT.println("Failed to save devices file");
-    return false;
-  }
-
-  // Also update in-memory list
-  AddOrUpdateDevice(serial.c_str(), nodeId >= 0 ? nodeId : 0, name.c_str(), 0);
-
-  DBG_OUTPUT_PORT.println("Saved devices file and updated in-memory list");
-  return true;
-}
-
-bool DeleteDevice(String serial) {
-  JsonDocument doc;
-
-  // Load existing devices
-  DeviceStorage::loadDevices(doc);
-
-  // Check if devices object exists
-  if (!doc.containsKey("devices")) {
-    DBG_OUTPUT_PORT.println("No devices to delete");
-    return false;
-  }
-
-  JsonObject devices = doc["devices"].as<JsonObject>();
-
-  // Check if device exists
-  if (!devices.containsKey(serial)) {
-    DBG_OUTPUT_PORT.printf("Device %s not found\n", serial.c_str());
-    return false;
-  }
-
-  // Remove device
-  devices.remove(serial);
-
-  DBG_OUTPUT_PORT.printf("Deleted device: %s\n", serial.c_str());
-
-  // Save back to file
-  if (!DeviceStorage::saveDevices(doc)) {
-    DBG_OUTPUT_PORT.println("Failed to save devices file");
-    return false;
-  }
-
-  // Also remove from in-memory list
-  deviceList.erase(serial.c_str());
-
-  DBG_OUTPUT_PORT.println("Deleted device from file and in-memory list");
-  return true;
-}
-
 
 // Continuous scanning implementation
 
 bool StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
-  if (state != IDLE) {
-    DBG_OUTPUT_PORT.printf("Cannot start continuous scan - device busy: %d\n", state);
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("Cannot start continuous scan - device busy: %d\n", conn.getState());
     return false;
   }
 
   // Reinitialize CAN bus with accept-all filter for scanning
   // This ensures we can see all nodes, not just the previously connected one
   DBG_OUTPUT_PORT.println("Reinitializing CAN bus for scanning (accept all messages)");
-  InitCAN(baudRate, canTxPin, canRxPin); // Use current baud rate and stored pins
+  InitCAN(conn.getBaudRate(), conn.getCanTxPin(), conn.getCanRxPin()); // Use current baud rate and stored pins
 
-  continuousScanActive = true;
-  scanStartNode = startNodeId;
-  scanEndNode = endNodeId;
-  currentScanNode = startNodeId;
-  currentSerialPartIndex = 0;
-  lastScanTime = 0;
-
-  DBG_OUTPUT_PORT.printf("Started continuous CAN scan (nodes %d-%d)\n", startNodeId, endNodeId);
-  return true;
-}
-
-void StopContinuousScan() {
-  continuousScanActive = false;
-  DBG_OUTPUT_PORT.println("Stopped continuous CAN scan");
-}
-
-bool IsContinuousScanActive() {
-  return continuousScanActive;
-}
-
-void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback) {
-  discoveryCallback = callback;
-}
-
-void SetScanProgressCallback(ScanProgressCallback callback) {
-  scanProgressCallback = callback;
+  return DeviceDiscovery::instance().startContinuousScan(startNodeId, endNodeId);
 }
 
 void SetConnectionReadyCallback(ConnectionReadyCallback callback) {
-  connectionReadyCallback = callback;
+  conn.setConnectionReadyCallback(callback);
 }
 
 void SetJsonDownloadProgressCallback(JsonDownloadProgressCallback callback) {
-  jsonProgressCallback = callback;
+  conn.setJsonProgressCallback(callback);
 }
 
 void SetJsonStreamCallback(JsonStreamCallback callback) {
-  jsonStreamCallback = callback;
-}
-
-void ProcessContinuousScan() {
-  unsigned long currentTime = millis();
-
-  if (!shouldProcessScan(currentTime)) {
-    return;
-  }
-
-  lastScanTime = currentTime;
-
-  // Request serial number part from current scan node
-  requestSdoElement(currentScanNode, SDO_INDEX_SERIAL, currentSerialPartIndex);
-
-  // Notify scan progress when starting a new node (first serial part)
-  if (currentSerialPartIndex == 0 && scanProgressCallback) {
-    scanProgressCallback(currentScanNode, scanStartNode, scanEndNode);
-  }
-
-  twai_message_t rxframe;
-  if (twai_receive(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS)) == ESP_OK) {
-    printCanRx(&rxframe);
-
-    if (!handleScanResponse(rxframe, currentTime)) {
-      // No response or error - move to next node
-      advanceScanNode();
-    }
-  } else {
-    // Timeout - move to next node
-    advanceScanNode();
-  }
-}
-
-// Device list management functions
-void LoadDevices() {
-  deviceList.clear();
-
-  JsonDocument doc;
-  if (!DeviceStorage::loadDevices(doc)) {
-    DBG_OUTPUT_PORT.println("No devices.json file, starting with empty device list");
-    return;
-  }
-
-  if (!doc.containsKey("devices")) {
-    DBG_OUTPUT_PORT.println("No 'devices' key in devices.json");
-    return;
-  }
-
-  JsonObject devices = doc["devices"].as<JsonObject>();
-  int count = 0;
-
-  for (JsonPair kv : devices) {
-    Device dev;
-    dev.serial = kv.key().c_str();
-
-    JsonObject deviceObj = kv.value().as<JsonObject>();
-    dev.nodeId = deviceObj["nodeId"] | 0;
-    dev.name = deviceObj["name"] | "";
-    dev.lastSeen = deviceObj["lastSeen"] | 0;
-
-    deviceList[dev.serial] = dev;
-    count++;
-  }
-
-  DBG_OUTPUT_PORT.printf("Loaded %d devices from file\n", count);
-}
-
-void AddOrUpdateDevice(const char* serial, uint8_t nodeId, const char* name, uint32_t lastSeen) {
-  Device dev;
-
-  // Check if device already exists
-  if (deviceList.count(serial) > 0) {
-    dev = deviceList[serial];
-  } else {
-    dev.serial = serial;
-  }
-
-  // Update fields
-  if (nodeId > 0) {
-    dev.nodeId = nodeId;
-  }
-  if (name != nullptr && strlen(name) > 0) {
-    dev.name = name;
-  }
-  if (lastSeen > 0) {
-    dev.lastSeen = lastSeen;
-  }
-
-  deviceList[serial] = dev;
-}
-
-// Heartbeat implementation
-static unsigned long lastHeartbeatTime = 0;
-static const unsigned long HEARTBEAT_INTERVAL_MS = 5000; // Base interval: 5 seconds
-static const unsigned long MAX_HEARTBEAT_INTERVAL_MS = 60000; // Max backoff: 60 seconds
-static int heartbeatDeviceIndex = 0;
-
-// Per-device heartbeat backoff state (serial -> next heartbeat time)
-static std::map<String, unsigned long> deviceNextHeartbeat;
-static std::map<String, int> deviceFailureCount;
-
-// Throttle passive heartbeat updates to prevent flooding WebSocket
-static const unsigned long PASSIVE_HEARTBEAT_THROTTLE_MS = 1000; // Update at most once per second
-static std::map<uint8_t, unsigned long> lastPassiveHeartbeatByNode; // nodeId -> last update time
-
-void ProcessHeartbeat() {
-  // Don't send heartbeats if we're scanning or not in IDLE state
-  if (continuousScanActive || state != IDLE) {
-    return;
-  }
-
-  unsigned long currentTime = millis();
-  if (currentTime - lastHeartbeatTime < HEARTBEAT_INTERVAL_MS) {
-    return; // Not time for heartbeat yet
-  }
-
-  lastHeartbeatTime = currentTime;
-
-  // Use in-memory device list
-  if (deviceList.empty()) {
-    return; // No devices to heartbeat
-  }
-
-  // Build vector of device serials from in-memory list
-  std::vector<String> deviceSerials;
-  for (auto& kv : deviceList) {
-    deviceSerials.push_back(kv.first);
-  }
-
-  // Cycle through devices, one per heartbeat interval
-  if (heartbeatDeviceIndex >= deviceSerials.size()) {
-    heartbeatDeviceIndex = 0;
-  }
-
-  String serial = deviceSerials[heartbeatDeviceIndex];
-  Device& device = deviceList[serial];
-
-  if (device.nodeId == 0) {
-    heartbeatDeviceIndex++;
-    return;
-  }
-
-  uint8_t nodeId = device.nodeId;
-
-  // Don't send heartbeat to the currently active device
-  if (nodeId == _nodeId) {
-    heartbeatDeviceIndex++;
-    return;
-  }
-
-  // Check if it's time to heartbeat this device (exponential backoff)
-  if (deviceNextHeartbeat.count(serial) > 0 && currentTime < deviceNextHeartbeat[serial]) {
-    heartbeatDeviceIndex++;
-    return; // Not time yet for this device
-  }
-
-  // Send a simple request to check if device is alive
-  // Request first part of serial number as a lightweight ping
-  requestSdoElement(nodeId, SDO_INDEX_SERIAL, 0);
-
-  twai_message_t rxframe;
-  bool deviceResponded = false;
-
-  if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) == ESP_OK) {
-    if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
-        rxframe.data[0] != SDO_ABORT) {
-      deviceResponded = true;
-
-      // Device responded! Update lastSeen
-      UpdateDeviceLastSeen(serial.c_str(), currentTime);
-
-      DBG_OUTPUT_PORT.printf("Heartbeat: Device %s (node %d) is alive\n", serial.c_str(), nodeId);
-
-      // Reset failure count and backoff
-      deviceFailureCount[serial] = 0;
-      deviceNextHeartbeat[serial] = currentTime + HEARTBEAT_INTERVAL_MS;
-    }
-  }
-
-  if (!deviceResponded) {
-    // Device didn't respond - apply exponential backoff
-    int failures = deviceFailureCount[serial];
-    deviceFailureCount[serial] = failures + 1;
-
-    // Calculate backoff: base_interval * 2^failures, capped at max
-    unsigned long backoffInterval = HEARTBEAT_INTERVAL_MS * (1 << failures);
-    if (backoffInterval > MAX_HEARTBEAT_INTERVAL_MS) {
-      backoffInterval = MAX_HEARTBEAT_INTERVAL_MS;
-    }
-
-    deviceNextHeartbeat[serial] = currentTime + backoffInterval;
-
-    DBG_OUTPUT_PORT.printf("Heartbeat: Device %s (node %d) not responding (failures: %d, next try in %lums)\n",
-                           serial.c_str(), nodeId, failures + 1, (unsigned long)backoffInterval);
-  }
-
-  // Move to next device
-  heartbeatDeviceIndex++;
-}
-
-void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen) {
-  // Update in-memory device list only (not saved to file)
-  if (deviceList.count(serial) > 0) {
-    deviceList[serial].lastSeen = lastSeen;
-
-    // Notify via callback (will broadcast to WebSocket clients)
-    if (discoveryCallback) {
-      uint8_t nodeId = deviceList[serial].nodeId;
-      discoveryCallback(nodeId, serial, lastSeen);
-    }
-  }
-}
-
-void UpdateDeviceLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen) {
-  // Throttle updates to prevent flooding WebSocket with too many messages
-  // Only update if enough time has passed since last update for this node
-  if (lastPassiveHeartbeatByNode.count(nodeId) > 0) {
-    unsigned long timeSinceLastUpdate = lastSeen - lastPassiveHeartbeatByNode[nodeId];
-    if (timeSinceLastUpdate < PASSIVE_HEARTBEAT_THROTTLE_MS) {
-      return; // Too soon, skip this update
-    }
-  }
-
-  // Record this update time
-  lastPassiveHeartbeatByNode[nodeId] = lastSeen;
-
-  // Find device by nodeId and update its lastSeen
-  for (auto& kv : deviceList) {
-    if (kv.second.nodeId == nodeId) {
-      UpdateDeviceLastSeen(kv.first.c_str(), lastSeen);
-      return;
-    }
-  }
+  conn.setJsonStreamCallback(callback);
 }
 
 int GetJsonTotalSize() {
-  return jsonTotalSize;
+  return conn.getJsonTotalSize();
 }
 
 }

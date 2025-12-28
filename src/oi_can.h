@@ -20,10 +20,15 @@
 #ifndef OI_CAN_H
 #define OI_CAN_H
 #include <WiFiClient.h>
+#include "models/can_types.h"
 
 namespace OICan {
 enum SetResult { Ok, UnknownIndex, ValueOutOfRange, CommError };
-enum BaudRate { Baud125k, Baud250k, Baud500k };
+// BaudRate is defined in models/can_types.h
+using ::BaudRate;
+using ::Baud125k;
+using ::Baud250k;
+using ::Baud500k;
 
 void InitCAN(BaudRate baud, int txPin, int rxPin); // Initialize CAN bus only
 void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin); // Initialize and connect to device
@@ -51,8 +56,6 @@ String ListErrors();
 bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength); // Send arbitrary CAN message
 String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
-int GetCurrentUpdatePage();
-bool IsUpdateInProgress();
 int GetNodeId();
 BaudRate GetBaudRate();
 bool ReloadJson(); // Reload JSON for currently connected device
@@ -61,23 +64,9 @@ bool ResetDevice();
 
 // Device management functions
 String ScanDevices(uint8_t startNodeId, uint8_t endNodeId);
-String GetSavedDevices();
-bool SaveDeviceName(String serial, String name, int nodeId = -1);
-bool DeleteDevice(String serial);
 
 // Continuous scanning functions
 bool StartContinuousScan(uint8_t startNodeId = 1, uint8_t endNodeId = 32); // Returns true if scan started successfully
-void StopContinuousScan();
-bool IsContinuousScanActive();
-void ProcessContinuousScan(); // Call this in Loop() to process scanning
-
-// Callback type for device discoveries
-typedef void (*DeviceDiscoveryCallback)(uint8_t nodeId, const char* serial, uint32_t lastSeen);
-void SetDeviceDiscoveryCallback(DeviceDiscoveryCallback callback);
-
-// Callback type for scan progress
-typedef void (*ScanProgressCallback)(uint8_t currentNode, uint8_t startNode, uint8_t endNode);
-void SetScanProgressCallback(ScanProgressCallback callback);
 
 // Callback type for when connection is fully established (state = IDLE)
 typedef void (*ConnectionReadyCallback)(uint8_t nodeId, const char* serial);
@@ -90,15 +79,6 @@ void SetJsonDownloadProgressCallback(JsonDownloadProgressCallback callback);
 // Callback type for streaming JSON data chunks as they arrive from CAN
 typedef void (*JsonStreamCallback)(const char* chunk, int chunkSize, bool isComplete);
 void SetJsonStreamCallback(JsonStreamCallback callback);
-
-// Heartbeat functions to check device status
-void ProcessHeartbeat(); // Legacy - may be removed in future (now using passive heartbeats)
-void UpdateDeviceLastSeen(const char* serial, uint32_t lastSeen); // Update lastSeen and notify clients
-void UpdateDeviceLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen); // Update lastSeen by nodeId (passive heartbeat)
-
-// Device list management
-void LoadDevices(); // Load devices from file into memory at startup
-void AddOrUpdateDevice(const char* serial, uint8_t nodeId, const char* name = nullptr, uint32_t lastSeen = 0); // Add/update device in memory
 
 // JSON download info
 int GetJsonTotalSize(); // Get total size of JSON being downloaded (0 if unknown)
