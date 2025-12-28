@@ -18,7 +18,10 @@
  *
  */
 #include "device_connection.h"
+#include "protocols/sdo_protocol.h"
 #include <Arduino.h>
+
+#define DBG_OUTPUT_PORT Serial
 
 DeviceConnection::DeviceConnection() {
     // Initialize arrays
@@ -78,4 +81,111 @@ bool DeviceConnection::canSendParameterRequest() {
 
 void DeviceConnection::markParameterRequestSent() {
     lastParamRequestTime_ = micros();
+}
+
+void DeviceConnection::checkSerialTimeout() {
+    if (state_ == OBTAINSERIAL && hasStateTimedOut(OBTAINSERIAL_TIMEOUT_MS)) {
+        DBG_OUTPUT_PORT.println("[DeviceConnection] OBTAINSERIAL timeout - resetting to IDLE");
+        setState(IDLE);
+    }
+}
+
+void DeviceConnection::processSdoResponse(twai_message_t* rxframe) {
+    if (rxframe->data[0] == SDOProtocol::ABORT) { // SDO abort
+        setState(ERROR);
+        DBG_OUTPUT_PORT.println("Error obtaining serial number, try restarting");
+        return;
+    }
+
+    switch (state_) {
+        case OBTAINSERIAL:
+            if ((rxframe->data[1] | rxframe->data[2] << 8) == SDOProtocol::INDEX_SERIAL && rxframe->data[3] < 4) {
+                setSerialPart(rxframe->data[3], *(uint32_t*)&rxframe->data[4]);
+
+                if (rxframe->data[3] < 3) {
+                    SDOProtocol::requestElement(nodeId_, SDOProtocol::INDEX_SERIAL, rxframe->data[3] + 1);
+                }
+                else {
+                    generateJsonFileName();
+                    DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n",
+                        serial_[0], serial_[1], serial_[2], serial_[3]);
+
+                    // Go to IDLE - JSON will be downloaded on-demand when browser requests it
+                    setState(IDLE);
+                    DBG_OUTPUT_PORT.println("Connection established. Parameter JSON available on request.");
+
+                    // Notify that connection is ready (device is in IDLE state)
+                    if (connectionReadyCallback_) {
+                        char serialStr[64];
+                        sprintf(serialStr, "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32,
+                            serial_[0], serial_[1], serial_[2], serial_[3]);
+                        connectionReadyCallback_(nodeId_, serialStr);
+                    }
+                }
+            }
+            break;
+
+        case OBTAIN_JSON:
+            // Receiving last segment
+            if ((rxframe->data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe->data[0] & SDOProtocol::READ) == 0) {
+                DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Receiving last segment");
+                int size = 7 - ((rxframe->data[0] >> 1) & 0x7);
+                for (int i = 0; i < size; i++) {
+                    jsonReceiveBuffer_ += (char)rxframe->data[1 + i];
+                }
+
+                DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
+                DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer_.length());
+
+                // Parse JSON into cachedParamJson for future use
+                DeserializationError error = deserializeJson(cachedParamJson_, jsonReceiveBuffer_);
+                if (error) {
+                    DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
+                } else {
+                    DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
+                }
+
+                setState(IDLE);
+            }
+            // Receiving a segment
+            else if (rxframe->data[0] == (toggleBit_ << 4) && (rxframe->data[0] & SDOProtocol::READ) == 0) {
+                DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Segment received (buffer: %d bytes)\n", jsonReceiveBuffer_.length());
+                for (int i = 0; i < 7; i++) {
+                    jsonReceiveBuffer_ += (char)rxframe->data[1 + i];
+                }
+                toggleBit_ = !toggleBit_;
+                SDOProtocol::requestNextSegment(nodeId_, toggleBit_);
+            }
+            // Request first segment (initiate upload response)
+            else if ((rxframe->data[0] & SDOProtocol::READ) == SDOProtocol::READ) {
+                DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Initiate upload response received");
+
+                // Check if size is specified in the response (CANopen SDO protocol)
+                if (rxframe->data[0] & SDOProtocol::SIZE_SPECIFIED) {
+                    // Extract total size from bytes 4-7 (little-endian)
+                    jsonTotalSize_ = *(uint32_t*)&rxframe->data[4];
+                    DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Total size indicated: %d bytes\r\n", jsonTotalSize_);
+
+                    // Send initial progress update (0 bytes received, but total is known)
+                    if (jsonProgressCallback_) {
+                        jsonProgressCallback_(0); // Will include totalBytes in the message via GetJsonTotalSize()
+                    }
+                } else {
+                    jsonTotalSize_ = 0; // Unknown size
+                    DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Total size not specified by device");
+                }
+
+                DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Requesting first segment");
+                SDOProtocol::requestNextSegment(nodeId_, toggleBit_);
+            }
+            break;
+
+        case ERROR:
+            // Do not exit this state
+            break;
+
+        case IDLE:
+            // Do not exit this state
+            break;
+    }
 }

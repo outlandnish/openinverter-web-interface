@@ -1,11 +1,17 @@
 #include "can_task.h"
 #include "freertos/queue.h"
+#include "driver/twai.h"
 #include "models/can_command.h"
 #include "models/can_event.h"
 #include "models/interval_messages.h"
+#include "models/can_types.h"
 #include "utils/string_utils.h"
 #include "utils/can_io_utils.h"
+#include "utils/can_utils.h"
 #include "managers/device_discovery.h"
+#include "managers/device_connection.h"
+#include "firmware/update_handler.h"
+#include "protocols/sdo_protocol.h"
 #include "oi_can.h"
 #include "config.h"
 #include <vector>
@@ -422,6 +428,75 @@ void dispatchCommand(const CANCommand& cmd) {
   }
 }
 
+// ============================================================================
+// CAN Message Reception and Processing
+// ============================================================================
+
+void receiveAndProcessCanMessages() {
+  twai_message_t rxframe;
+
+  if (twai_receive(&rxframe, 0) == ESP_OK) {
+    printCanRx(&rxframe);
+
+    // Check bootloader messages first (before SDO responses)
+    if (rxframe.identifier == BOOTLOADER_RESPONSE_ID) {
+      FirmwareUpdateHandler::instance().processResponse(&rxframe);
+    }
+    // Check if this is an SDO response (SDO_RESPONSE_BASE_ID to SDO_RESPONSE_MAX_ID range only)
+    else if (rxframe.identifier >= SDO_RESPONSE_BASE_ID && rxframe.identifier <= SDO_RESPONSE_MAX_ID) {
+      uint8_t nodeId = rxframe.identifier & 0x7F;
+
+      // Update lastSeen for any device we receive a message from
+      // This acts as a passive heartbeat mechanism
+      DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
+
+      // Route to connection state machine if it's our device
+      if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | OICan::GetNodeId())) {
+        DeviceConnection::instance().processSdoResponse(&rxframe);
+      }
+    }
+    else {
+      DBG_OUTPUT_PORT.printf("Received unwanted frame %" PRIu32 "\r\n", rxframe.identifier);
+    }
+  }
+}
+
+void processStateTimeouts() {
+  // Check for connection timeout
+  DeviceConnection::instance().checkSerialTimeout();
+
+  // Process firmware update state machine
+  if (FirmwareUpdateHandler::instance().getState() == FirmwareUpdateHandler::REQUEST_JSON) {
+    DeviceConnection& conn = DeviceConnection::instance();
+
+    // Re-download JSON after firmware update completes
+    // Transition to OBTAINSERIAL state to get new device info
+    if (conn.getState() != DeviceConnection::OBTAINSERIAL) {
+      // If we're in IDLE, it means we successfully got the serial number
+      if (conn.getState() == DeviceConnection::IDLE) {
+        FirmwareUpdateHandler::instance().reset(); // Reset to UPD_IDLE
+        return;
+      }
+
+      // Start the serial number request process
+      conn.setState(DeviceConnection::OBTAINSERIAL);
+      conn.setRetries(50);
+    }
+
+    conn.decrementRetries();
+
+    if (conn.getRetries() < 0) {
+      // Timeout - give up and reset
+      FirmwareUpdateHandler::instance().reset(); // Reset to UPD_IDLE
+    } else {
+      // Keep requesting serial number
+      SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
+    }
+
+    delay(100);
+  }
+}
+
 void canTask(void* parameter) {
   DBG_OUTPUT_PORT.println("[CAN Task] Started");
 
@@ -438,8 +513,14 @@ void canTask(void* parameter) {
     sendIntervalMessages();
     sendCanIoIntervalMessage();
 
-    // Run CAN processing loop
-    OICan::Loop();
+    // CAN message reception and routing
+    receiveAndProcessCanMessages();
+
+    // State machine timeouts
+    processStateTimeouts();
+
+    // Device scanning
+    DeviceDiscovery::instance().processScan();
 
     // Small delay to prevent task starvation
     vTaskDelay(pdMS_TO_TICKS(1));

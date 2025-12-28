@@ -32,7 +32,6 @@ using ::Baud500k;
 
 void InitCAN(BaudRate baud, int txPin, int rxPin); // Initialize CAN bus only
 void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin); // Initialize and connect to device
-void Loop();
 bool SendJson(WiFiClient c);
 String GetRawJson(); // Get parameter JSON from currently connected device
 String GetRawJson(uint8_t nodeId); // Get parameter JSON from specific device by nodeId

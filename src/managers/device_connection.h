@@ -21,6 +21,8 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <FS.h>
+#include "driver/twai.h"
 #include "models/can_types.h"
 
 // Forward declarations for callback types
@@ -116,6 +118,12 @@ public:
     bool canSendParameterRequest();
     void markParameterRequestSent();
 
+    // State timeout checking
+    void checkSerialTimeout(); // Check if OBTAINSERIAL has timed out
+
+    // SDO response processing
+    void processSdoResponse(twai_message_t* rxframe); // Process SDO response based on state
+
 private:
     DeviceConnection(); // Private constructor for singleton
     DeviceConnection(const DeviceConnection&) = delete;
@@ -145,6 +153,10 @@ private:
     // Rate limiting
     unsigned long lastParamRequestTime_ = 0;
     unsigned long minParamRequestIntervalUs_ = 500; // Default: 500 microseconds
+
+    // SDO response state (used by processSdoResponse)
+    bool toggleBit_ = false;
+    File file_; // Used during firmware update
 
     // Constants
     static const unsigned long OBTAINSERIAL_TIMEOUT_MS = 5000;

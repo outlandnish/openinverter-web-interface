@@ -68,109 +68,6 @@ void SetParameterRequestRateLimit(unsigned long intervalUs) {
   DBG_OUTPUT_PORT.printf("Parameter request rate limit set to %lu microseconds\n", intervalUs);
 }
 
-static void handleSdoResponse(twai_message_t *rxframe) {
-  static bool toggleBit = false;
-  static File file;
-
-  if (rxframe->data[0] == SDOProtocol::ABORT) { //SDO abort
-    conn.setState(DeviceConnection::ERROR);
-    DBG_OUTPUT_PORT.println("Error obtaining serial number, try restarting");
-    return;
-  }
-
-  switch (conn.getState()) {
-    case DeviceConnection::OBTAINSERIAL:
-      if ((rxframe->data[1] | rxframe->data[2] << 8) == SDOProtocol::INDEX_SERIAL && rxframe->data[3] < 4) {
-        conn.setSerialPart(rxframe->data[3], *(uint32_t*)&rxframe->data[4]);
-
-        if (rxframe->data[3] < 3) {
-          SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, rxframe->data[3] + 1);
-        }
-        else {
-          conn.generateJsonFileName();
-          DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n",
-            conn.getSerialPart(0), conn.getSerialPart(1), conn.getSerialPart(2), conn.getSerialPart(3));
-
-          // Go to IDLE - JSON will be downloaded on-demand when browser requests it
-          conn.setState(DeviceConnection::IDLE);
-          DBG_OUTPUT_PORT.println("Connection established. Parameter JSON available on request.");
-
-          // Notify that connection is ready (device is in IDLE state)
-          ConnectionReadyCallback callback = conn.getConnectionReadyCallback();
-          if (callback) {
-            char serialStr[64];
-            sprintf(serialStr, "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32,
-              conn.getSerialPart(0), conn.getSerialPart(1), conn.getSerialPart(2), conn.getSerialPart(3));
-            callback(conn.getNodeId(), serialStr);
-          }
-        }
-      }
-      break;
-    case DeviceConnection::OBTAIN_JSON:
-      //Receiving last segment
-      if ((rxframe->data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe->data[0] & SDOProtocol::READ) == 0) {
-        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Receiving last segment");
-        int size = 7 - ((rxframe->data[0] >> 1) & 0x7);
-        for (int i = 0; i < size; i++) {
-          conn.getJsonReceiveBuffer() += (char)rxframe->data[1 + i];
-        }
-
-        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
-        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", conn.getJsonReceiveBuffer().length());
-
-        // Parse JSON into cachedParamJson for future use
-        DeserializationError error = deserializeJson(conn.getCachedJson(), conn.getJsonReceiveBuffer());
-        if (error) {
-          DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
-        } else {
-          DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
-        }
-
-        conn.setState(DeviceConnection::IDLE);
-      }
-      //Receiving a segment
-      else if (rxframe->data[0] == (toggleBit << 4) && (rxframe->data[0] & SDOProtocol::READ) == 0) {
-        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Segment received (buffer: %d bytes)\n", conn.getJsonReceiveBuffer().length());
-        for (int i = 0; i < 7; i++) {
-          conn.getJsonReceiveBuffer() += (char)rxframe->data[1 + i];
-        }
-        toggleBit = !toggleBit;
-        SDOProtocol::requestNextSegment(conn.getNodeId(), toggleBit);
-      }
-      //Request first segment (initiate upload response)
-      else if ((rxframe->data[0] & SDOProtocol::READ) == SDOProtocol::READ) {
-        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Initiate upload response received");
-
-        // Check if size is specified in the response (CANopen SDO protocol)
-        if (rxframe->data[0] & SDOProtocol::SIZE_SPECIFIED) {
-          // Extract total size from bytes 4-7 (little-endian)
-          conn.setJsonTotalSize(*(uint32_t*)&rxframe->data[4]);
-          DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Total size indicated: %d bytes\r\n", conn.getJsonTotalSize());
-
-          // Send initial progress update (0 bytes received, but total is known)
-          JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
-          if (progressCallback) {
-            progressCallback(0); // Will include totalBytes in the message via GetJsonTotalSize()
-          }
-        } else {
-          conn.setJsonTotalSize(0); // Unknown size
-          DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Total size not specified by device");
-        }
-
-        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Requesting first segment");
-        SDOProtocol::requestNextSegment(conn.getNodeId(), toggleBit);
-      }
-
-      break;
-    case DeviceConnection::ERROR:
-      // Do not exit this state
-      break;
-    case DeviceConnection::IDLE:
-      // Do not exit this state
-      break;
-  }
-}
-
 int StartUpdate(String fileName) {
   // Start the firmware update handler
   int totalPages = FirmwareUpdateHandler::instance().startUpdate(fileName, conn.getNodeId());
@@ -215,7 +112,8 @@ String GetRawJson() {
   const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200; // Throttle progress updates to 200ms
 
   while (conn.getState() == DeviceConnection::OBTAIN_JSON) {
-    Loop(); // Process CAN messages
+    // CAN messages are now processed by canTask in background
+    // Just wait and check the state
 
     // Check if we received a new segment (buffer grew)
     if (conn.getJsonReceiveBuffer().length() > lastBufferSize) {
@@ -1195,68 +1093,6 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
   DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
   SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
   DBG_OUTPUT_PORT.println("Connected to device");
-}
-
-void Loop() {
-  bool recvdResponse = false;
-  twai_message_t rxframe;
-
-  // Check for DeviceConnection::OBTAINSERIAL timeout
-  if (conn.getState() == DeviceConnection::OBTAINSERIAL && (conn.getStateElapsedTime() > 5000)) {
-    DBG_OUTPUT_PORT.println("DeviceConnection::OBTAINSERIAL timeout - resetting to DeviceConnection::IDLE");
-    conn.setState(DeviceConnection::IDLE);
-  }
-
-  if (twai_receive(&rxframe, 0) == ESP_OK) {
-    printCanRx(&rxframe);
-
-    // Check bootloader messages first (before SDO responses)
-    if (rxframe.identifier == BOOTLOADER_RESPONSE_ID) {
-      FirmwareUpdateHandler::instance().processResponse(&rxframe);
-    }
-    // Check if this is an SDO response (SDO_RESPONSE_BASE_ID to SDO_RESPONSE_MAX_ID range only)
-    else if (rxframe.identifier >= SDO_RESPONSE_BASE_ID && rxframe.identifier <= SDO_RESPONSE_MAX_ID) {
-      uint8_t nodeId = rxframe.identifier & 0x7F;
-
-      // Update lastSeen for any device we receive a message from
-      // This acts as a passive heartbeat mechanism
-      DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
-
-      if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | conn.getNodeId())) {
-        handleSdoResponse(&rxframe);
-        recvdResponse = true;
-      }
-    }
-    else {
-      DBG_OUTPUT_PORT.printf("Received unwanted frame %" PRIu32 "\r\n", rxframe.identifier);
-    }
-  }
-
-  if (FirmwareUpdateHandler::instance().getState() == FirmwareUpdateHandler::REQUEST_JSON) {
-    // Re-download JSON after firmware update completes
-    // Transition to OBTAINSERIAL state to get new device info
-    if (conn.getState() != DeviceConnection::OBTAINSERIAL) {
-      conn.setState(DeviceConnection::OBTAINSERIAL);
-      conn.setRetries(50);
-    }
-
-    conn.decrementRetries();
-
-    if (recvdResponse || conn.getRetries() < 0) {
-      FirmwareUpdateHandler::instance().reset(); // Reset to UPD_IDLE
-    } else {
-      SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
-    }
-
-    delay(100);
-  }
-
-  // Process continuous scanning
-  DeviceDiscovery::instance().processScan();
-
-  // Note: Removed ProcessHeartbeat() - we now passively update lastSeen
-  // whenever we receive messages from devices
-
 }
 
 bool ReloadJson() {
