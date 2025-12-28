@@ -5,6 +5,7 @@
 #include "models/interval_messages.h"
 #include "utils/string_utils.h"
 #include "utils/can_io_utils.h"
+#include "managers/device_discovery.h"
 #include "oi_can.h"
 #include "config.h"
 #include <vector>
@@ -65,7 +66,7 @@ void handleStartScanCommand(const CANCommand& cmd) {
 
 void handleStopScanCommand(const CANCommand& cmd) {
   DBG_OUTPUT_PORT.println("[CAN Task] Stopping scan");
-  OICan::StopContinuousScan();
+  DeviceDiscovery::instance().stopContinuousScan();
 
   // Send scan status event
   CANEvent evt;
@@ -117,7 +118,7 @@ void handleGetNodeIdCommand(const CANCommand& cmd) {
 }
 
 void handleSetDeviceNameCommand(const CANCommand& cmd) {
-  bool success = OICan::SaveDeviceName(cmd.data.setDeviceName.serial, cmd.data.setDeviceName.name, cmd.data.setDeviceName.nodeId);
+  bool success = DeviceDiscovery::instance().saveDeviceName(cmd.data.setDeviceName.serial, cmd.data.setDeviceName.name, cmd.data.setDeviceName.nodeId);
   CANEvent evt;
   evt.type = EVT_DEVICE_NAME_SET;
   evt.data.deviceNameSet.success = success;
@@ -161,7 +162,7 @@ void handleStopSpotValuesCommand(const CANCommand& cmd) {
 }
 
 void handleDeleteDeviceCommand(const CANCommand& cmd) {
-  bool success = OICan::DeleteDevice(cmd.data.deleteDevice.serial);
+  bool success = DeviceDiscovery::instance().deleteDevice(cmd.data.deleteDevice.serial);
   CANEvent evt;
   evt.type = EVT_DEVICE_DELETED;
   evt.data.deviceDeleted.success = success;
@@ -170,7 +171,7 @@ void handleDeleteDeviceCommand(const CANCommand& cmd) {
 }
 
 void handleRenameDeviceCommand(const CANCommand& cmd) {
-  bool success = OICan::SaveDeviceName(cmd.data.renameDevice.serial, cmd.data.renameDevice.name, -1);
+  bool success = DeviceDiscovery::instance().saveDeviceName(cmd.data.renameDevice.serial, cmd.data.renameDevice.name, -1);
   CANEvent evt;
   evt.type = EVT_DEVICE_RENAMED;
   evt.data.deviceRenamed.success = success;

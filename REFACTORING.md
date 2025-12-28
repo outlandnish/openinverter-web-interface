@@ -195,6 +195,88 @@
    - Eliminated 17+ duplicate LittleFS operations
    - Centralized file I/O in one place for easier testing and maintenance
 
+22. **Extracted Firmware Update Handler**
+   - Created `src/firmware/update_handler.h` with FirmwareUpdateHandler class
+   - Created `src/firmware/update_handler.cpp` with implementation
+   - Encapsulated firmware update state machine and logic
+   - Extracted `handleUpdate()` function (~115 lines) into class methods
+   - Removed static variables: `updstate`, `updateFile`, `currentFlashPage`
+   - Removed `UpdState` enum from oi_can.cpp
+   - Updated `StartUpdate()`, `GetCurrentUpdatePage()`, `IsUpdateInProgress()` to use handler
+   - Updated `Loop()` to call `FirmwareUpdateHandler::instance().processResponse()`
+   - Implemented singleton pattern for thread-safe access
+   - Better separation of concerns between CAN communication and firmware update logic
+   - Easier to test firmware update state machine independently
+
+23. **Extracted Device Discovery Manager**
+   - Created `src/managers/device_discovery.h` with DeviceDiscovery class
+   - Created `src/managers/device_discovery.cpp` with implementation
+   - Encapsulated device scanning state machine and in-memory device list
+   - Extracted scanning functions: `ScanDevices()`, `StartContinuousScan()`, `StopContinuousScan()`, `ProcessContinuousScan()`
+   - Extracted device management: `LoadDevices()`, `AddOrUpdateDevice()`, `GetSavedDevices()`, `SaveDeviceName()`, `DeleteDevice()`
+   - Extracted heartbeat functions: `UpdateDeviceLastSeen()`, `UpdateDeviceLastSeenByNodeId()`
+   - Removed helper functions: `isValidSerialResponse()`, `advanceScanNode()`, `shouldProcessScan()`, `handleScanResponse()`, `requestDeviceSerial()`
+   - Removed static variables: scanning state, device list, discovery/progress callbacks
+   - Removed legacy `ProcessHeartbeat()` function (now using passive heartbeat tracking)
+   - Moved `BaudRate` enum to `models/can_types.h` to avoid circular dependencies
+   - Updated `oi_can.h` to use `BaudRate` from `can_types.h` via using declarations
+   - Implemented singleton pattern for thread-safe access
+   - Better separation of concerns between CAN communication and device discovery
+   - Clean dependency structure: `can_types.h` → `oi_can.h` ← `device_discovery.h`
+
+24. **Extracted SDO Protocol Layer**
+   - Created `src/protocols/sdo_protocol.h` with SDOProtocol namespace
+   - Created `src/protocols/sdo_protocol.cpp` with implementation
+   - Defined all SDO constants in SDOProtocol namespace (32 constants total):
+     - Request/Response constants: `REQUEST_DOWNLOAD`, `REQUEST_UPLOAD`, `REQUEST_SEGMENT`, `TOGGLE_BIT`, etc.
+     - SDO Indexes: `INDEX_PARAMS`, `INDEX_PARAM_UID`, `INDEX_SERIAL`, `INDEX_STRINGS`, `INDEX_COMMANDS`, etc.
+     - SDO Commands: `CMD_SAVE`, `CMD_LOAD`, `CMD_RESET`, `CMD_DEFAULTS`, `CMD_START`, `CMD_STOP`
+     - Error codes: `ERR_INVIDX`, `ERR_RANGE`, `ERR_GENERAL`
+   - Extracted SDO request functions: `requestElement()`, `requestElementNonBlocking()`, `setValue()`, `requestNextSegment()`
+   - Updated all SDO function implementations to create their own `twai_message_t` frames (removed dependency on global `tx_frame`)
+   - Removed 32 SDO constant #defines from `src/oi_can.cpp`
+   - Removed 4 static SDO functions from `src/oi_can.cpp` (~70 lines)
+   - Updated all SDO constant references throughout `oi_can.cpp` to use `SDOProtocol::` namespace
+   - Updated all SDO function calls throughout `oi_can.cpp` to use `SDOProtocol::` namespace
+   - Encapsulated CANopen SDO protocol details in dedicated layer
+   - Better separation of concerns between protocol and business logic
+   - Reusable protocol layer for other CAN-based projects
+   - Easier to test protocol layer independently
+
+25. **Consolidated CAN State Variables**
+   - Created `src/managers/device_connection.h` with DeviceConnection class
+   - Created `src/managers/device_connection.cpp` with implementation
+   - Consolidated connection state variables into DeviceConnection singleton:
+     - Connection state: `nodeId_`, `baudRate_`, `state_`, `canTxPin_`, `canRxPin_`
+     - Serial number: `serial_[4]`, `jsonFileName_[20]`
+     - Retry management: `retries_`, state timeout tracking
+     - JSON cache: `cachedParamJson_`, `jsonReceiveBuffer_`, `jsonTotalSize_`
+     - Callbacks: `connectionReadyCallback_`, `jsonProgressCallback_`, `jsonStreamCallback_`
+     - Rate limiting: `lastParamRequestTime_`, `minParamRequestIntervalUs_`
+   - Removed 20+ static variables from `src/oi_can.cpp`
+   - Implemented singleton pattern with C++11 static local variables for thread-safe initialization
+   - Added state management methods: `setState()`, `getState()`, `isIdle()`, `resetStateStartTime()`, `hasStateTimedOut()`
+   - Added serial number management: `setSerialPart()`, `getSerialPart()`, `generateJsonFileName()`
+   - Added retry methods: `setRetries()`, `incrementRetries()`, `decrementRetries()`, `resetRetries()`
+   - Added rate limiting: `canSendParameterRequest()`, `markParameterRequestSent()`, `setParameterRequestRateLimit()`
+   - Updated all variable references throughout `oi_can.cpp` to use DeviceConnection methods
+   - Simplified `GetRawJson(nodeId)` to remove complex node-switching logic
+   - Better state encapsulation and clearer ownership of connection-related data
+   - Easier to reason about state changes and prevent state corruption
+   - Foundation for future multi-device support with better state isolation
+
+26. **Extracted CAN Debug and Validation Utilities**
+   - Moved debug helper functions to `src/utils/can_utils.h` and `src/utils/can_utils.cpp`
+   - Added `printCanTx()` function for transmitted CAN frame debugging (currently disabled)
+   - Added `printCanRx()` function for received CAN frame debugging (currently disabled)
+   - Added `isValidSdoResponse()` validation helper for SDO response checking
+   - Removed static `printCanRx()` function from `src/oi_can.cpp`
+   - Updated `src/firmware/update_handler.cpp` to use `printCanTx()` from can_utils
+   - All debug helpers can be easily enabled for debugging by uncommenting code
+   - Better organization of CAN-specific utilities alongside existing `crc32_word()` function
+   - Reusable validation utilities
+   - Easier to unit test debug and validation helpers
+
 ---
 
 ## Remaining Refactorings 📋
@@ -215,343 +297,7 @@
 
 ### Priority 5: OICan Module Refactoring (Medium-High Risk)
 
-#### Task 13: Extract SDO Protocol Layer
-**Files:** `src/oi_can.cpp` → `src/protocols/sdo_protocol.cpp`, `src/protocols/sdo_protocol.h`
-**Effort:** 2-3 hours
-**Risk:** Medium (core communication protocol)
-
-**Problem:**
-SDO (Service Data Object) protocol handling scattered throughout oi_can.cpp:
-- 32 SDO constant definitions (lines 33-66)
-- SDO communication functions: `requestSdoElement()`, `setValueSdo()`, `handleSdoResponse()`
-- Protocol-specific logic mixed with business logic
-
-**Solution:**
-
-1. **Create `src/protocols/sdo_protocol.h`**:
-```cpp
-#pragma once
-#include "driver/twai.h"
-#include <functional>
-
-namespace SDOProtocol {
-
-// SDO Constants
-extern const uint8_t REQUEST_DOWNLOAD;
-extern const uint8_t REQUEST_UPLOAD;
-extern const uint8_t REQUEST_SEGMENT;
-// ... all other SDO constants
-
-// SDO Indexes
-extern const uint16_t INDEX_PARAMS;
-extern const uint16_t INDEX_SERIAL;
-extern const uint16_t INDEX_COMMANDS;
-// ... all other indexes
-
-// SDO Commands
-extern const uint8_t CMD_SAVE;
-extern const uint8_t CMD_LOAD;
-extern const uint8_t CMD_RESET;
-// ... all other commands
-
-// SDO Request Functions
-void requestElement(uint8_t nodeId, uint16_t index, uint8_t subIndex);
-bool requestElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex);
-void setValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value);
-
-// Response Handler Type
-using ResponseHandler = std::function<void(const twai_message_t&)>;
-void handleResponse(const twai_message_t& frame, ResponseHandler handler);
-
-// Response Validation
-bool isValidResponse(const twai_message_t& frame, uint8_t nodeId, uint16_t expectedIndex);
-
-}
-```
-
-2. **Create `src/protocols/sdo_protocol.cpp`**:
-```cpp
-#include "sdo_protocol.h"
-// Move all SDO constants and functions here
-```
-
-3. **Update oi_can.cpp**:
-```cpp
-#include "protocols/sdo_protocol.h"
-// Replace direct SDO calls with SDOProtocol:: namespace calls
-```
-
-**Benefits:**
-- Encapsulates protocol details
-- Reusable for other CAN-based projects
-- Easier to test protocol layer independently
-- Clearer separation between protocol and business logic
-
-**Testing Strategy:**
-- Test parameter reads/writes still work
-- Verify device commands (save, load, reset)
-- Check firmware update protocol
-- Test error handling for invalid responses
-
----
-
-#### Task 15: Extract Firmware Update Handler
-**Files:** `src/oi_can.cpp` → `src/firmware/update_handler.cpp`, `src/firmware/update_handler.h`
-**Effort:** 2-3 hours
-**Risk:** Medium-High (critical functionality)
-
-**Problem:**
-Firmware update logic embedded in oi_can.cpp:
-- `handleUpdate()` state machine (114 lines, lines 401-515)
-- `StartUpdate()`, `GetCurrentUpdatePage()`, `IsUpdateInProgress()`
-- Update-specific static variables: `updateFile`, `currentFlashPage`, `updstate`
-- Mixed with other CAN handling logic
-
-**Solution:**
-
-1. **Create `src/firmware/update_handler.h`**:
-```cpp
-#pragma once
-#include "driver/twai.h"
-#include <FS.h>
-
-class FirmwareUpdateHandler {
-public:
-  enum State { IDLE, SEND_MAGIC, SEND_SIZE, SEND_PAGE, CHECK_CRC, REQUEST_JSON };
-
-  int startUpdate(const String& fileName, uint8_t nodeId);
-  void processResponse(const twai_message_t& frame);
-  bool isInProgress() const;
-  int getCurrentPage() const;
-  int getTotalPages() const;
-  State getState() const;
-  void reset();
-
-private:
-  State state = IDLE;
-  File updateFile;
-  int currentPage = 0;
-  int totalPages = 0;
-  uint32_t crc = 0xFFFFFFFF;
-  int currentByte = 0;
-
-  void handleMagicResponse(const twai_message_t& frame);
-  void handleSizeResponse(const twai_message_t& frame);
-  void handlePageResponse(const twai_message_t& frame);
-  void handleCrcResponse(const twai_message_t& frame);
-};
-```
-
-2. **Create `src/firmware/update_handler.cpp`**:
-```cpp
-#include "update_handler.h"
-// Move handleUpdate() state machine logic here
-// Split into smaller methods per state
-```
-
-3. **Update oi_can.cpp**:
-```cpp
-#include "firmware/update_handler.h"
-
-static FirmwareUpdateHandler firmwareUpdater;
-
-// Replace update-related code with firmwareUpdater calls
-```
-
-**Benefits:**
-- Encapsulates complex state machine
-- Easier to test firmware update logic
-- Could support multiple concurrent updates
-- Clearer separation of concerns
-
-**Testing Strategy:**
-- Test with real firmware files
-- Verify CRC checking works
-- Test error recovery (bad CRC, timeout)
-- Check progress reporting
-
----
-
-#### Task 16: Extract Device Discovery Manager
-**Files:** `src/oi_can.cpp` → `src/managers/device_discovery.cpp`, `src/managers/device_discovery.h`
-**Effort:** 2-3 hours
-**Risk:** Medium (affects device management)
-
-**Problem:**
-Device discovery and scanning logic mixed throughout oi_can.cpp:
-- `ScanDevices()`, `StartContinuousScan()`, `ProcessContinuousScan()`
-- Scanning state variables: `currentScanNode`, `scanStartNode`, `scanEndNode`
-- In-memory device list management
-- Callbacks for discovery events
-
-**Solution:**
-
-1. **Create `src/managers/device_discovery.h`**:
-```cpp
-#pragma once
-#include <map>
-#include <functional>
-
-class DeviceDiscovery {
-public:
-  using DiscoveryCallback = std::function<void(uint8_t nodeId, const char* serial, uint32_t lastSeen)>;
-  using ProgressCallback = std::function<void(uint8_t currentNode, uint8_t startNode, uint8_t endNode)>;
-
-  // Scanning operations
-  bool startContinuousScan(uint8_t startNode = 1, uint8_t endNode = 32);
-  void stopContinuousScan();
-  bool isScanActive() const;
-  void processScan(); // Called from main loop
-
-  // Callbacks
-  void setDiscoveryCallback(DiscoveryCallback cb);
-  void setProgressCallback(ProgressCallback cb);
-
-  // Device list
-  void addOrUpdateDevice(const char* serial, uint8_t nodeId, const char* name, uint32_t lastSeen);
-  void updateLastSeen(const char* serial, uint32_t lastSeen);
-  void updateLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen);
-  const std::map<String, DeviceInfo>& getDevices() const;
-
-private:
-  bool scanActive = false;
-  uint8_t scanStart = 1;
-  uint8_t scanEnd = 32;
-  uint8_t currentNode = 1;
-  uint8_t currentSerialPart = 0;
-  uint32_t currentSerial[4];
-  unsigned long lastScanTime = 0;
-
-  std::map<String, DeviceInfo> devices;
-
-  DiscoveryCallback discoveryCallback = nullptr;
-  ProgressCallback progressCallback = nullptr;
-
-  void advanceToNextNode();
-  bool handleScanResponse(const twai_message_t& frame);
-};
-```
-
-2. **Create `src/managers/device_discovery.cpp`**:
-```cpp
-#include "device_discovery.h"
-// Move scanning logic here
-```
-
-3. **Update oi_can.cpp**:
-```cpp
-#include "managers/device_discovery.h"
-
-static DeviceDiscovery deviceDiscovery;
-// Replace scanning code with deviceDiscovery calls
-```
-
-**Benefits:**
-- Encapsulates scanning state machine
-- Clear API for device discovery
-- Easier to add new discovery methods
-- Better testability
-
-**Testing Strategy:**
-- Test continuous scanning
-- Verify device discovery callbacks
-- Check scan progress reporting
-- Test concurrent scans (if supported)
-
----
-
-#### Task 17: Consolidate CAN State Variables
-**Files:** `src/oi_can.cpp`
-**Effort:** 2-3 hours
-**Risk:** Medium-High (affects all operations)
-
-**Problem:**
-20+ static variables managing different aspects of state:
-- Connection state: `_nodeId`, `state`, `serial[]`
-- Scanning state: `currentScanNode`, `scanStartNode`, `scanEndNode`, `currentSerialPartIndex`
-- JSON state: `cachedParamJson`, `jsonReceiveBuffer`, `jsonTotalSize`
-- Update state: `updstate`, `updateFile`, `currentFlashPage`
-- Timing: `stateStartTime`, `lastScanTime`
-
-**Solution:**
-
-Consider creating state classes:
-
-1. **`ConnectionState` class** - Manages current connection
-2. **`ScanState` class** - Manages scanning operations (or use DeviceDiscovery from Task 16)
-3. **`JsonCache` class** - Manages JSON caching
-4. **`UpdateState` class** - Manages firmware updates (or use FirmwareUpdateHandler from Task 15)
-
-**Note:** This task overlaps with Tasks 15 and 16. Consider doing those first, then evaluating what state still needs consolidation.
-
-**Benefits:**
-- Clearer state ownership
-- Easier to reason about state changes
-- Better testability
-- Prevents state corruption
-
-**Testing Strategy:**
-- Verify all operations still work
-- Check state transitions
-- Test concurrent operations
-- Monitor for state corruption
-
----
-
-#### Task 18: Extract Utility Functions
-**Files:** `src/oi_can.cpp` → `src/utils/can_utils.cpp`, `src/utils/can_utils.h`
-**Effort:** 30 minutes
-**Risk:** Very Low (pure functions)
-
-**Problem:**
-Utility functions mixed with business logic:
-- `crc32_word()` - CRC calculation (used by both firmware update and CAN IO)
-- `printCanTx()`, `printCanRx()` - Debug helpers
-- `isValidSerialResponse()` - Validation helper
-
-**Solution:**
-
-1. **Create `src/utils/can_utils.h`**:
-```cpp
-#pragma once
-#include "driver/twai.h"
-#include <stdint.h>
-
-// CRC utilities
-uint32_t crc32_word(uint32_t crc, uint32_t word);
-
-// Debug utilities
-void printCanTx(const twai_message_t* frame);
-void printCanRx(const twai_message_t* frame);
-
-// Response validation
-bool isValidSerialResponse(const twai_message_t& frame, uint8_t nodeId, uint8_t partIndex);
-bool isValidSdoResponse(const twai_message_t& frame, uint8_t nodeId, uint16_t index);
-```
-
-2. **Create `src/utils/can_utils.cpp`**:
-```cpp
-#include "can_utils.h"
-// Move utility functions here
-```
-
-3. **Update oi_can.cpp and can_io_utils.cpp**:
-```cpp
-#include "utils/can_utils.h"
-// Remove duplicate crc32_word() definitions
-// Use shared implementation
-```
-
-**Benefits:**
-- Reusable utilities
-- Eliminates code duplication (crc32_word exists in both main.cpp and oi_can.cpp)
-- Easier to unit test
-- Consistent debug output
-
-**Testing Strategy:**
-- Test CRC calculation correctness
-- Verify response validation
-- Check debug output formatting
+**All tasks in this section completed! ✅** (See Tasks 24, 25, and 26 in Completed Refactorings)
 
 ---
 
@@ -707,10 +453,13 @@ DeviceLockManager deviceLockManager;
 
 ### Week 5: File I/O & Architecture (Low-High Risk)
 1. ✅ ~~Task 14: Extract File I/O Manager (1.5-2 hours)~~ - **COMPLETED**
-2. Task 12: Encapsulate global state (4-6 hours + extensive testing)
+2. ✅ ~~Task 15: Extract Firmware Update Handler (2-3 hours)~~ - **COMPLETED**
+3. ✅ ~~Task 16: Extract Device Discovery Manager (2-3 hours)~~ - **COMPLETED**
+4. ✅ ~~Task 17: Consolidate CAN State Variables (2-3 hours)~~ - **COMPLETED**
+5. Task 12: Encapsulate global state (4-6 hours + extensive testing)
 
-**Total: ~5.5-8 hours + extensive testing**
-**Completed: 1.5-2 hours**
+**Total: ~12-17 hours + extensive testing**
+**Completed: 9.5-13 hours**
 
 ---
 
