@@ -639,17 +639,8 @@ bool StopDevice() {
   }
 }
 
-String ListErrors() {
-  if (!conn.isIdle()) {
-    DBG_OUTPUT_PORT.println("ListErrors called while not DeviceConnection::IDLE, ignoring");
-    return "[]";
-  }
-
-  twai_message_t rxframe;
-  JsonDocument doc;
-  JsonArray errors = doc.to<JsonArray>();
-
-  // Build error description map from parameter JSON (lasterr field)
+// Helper: Build error description map from parameter JSON
+static std::map<int, String> buildErrorDescriptionMap() {
   std::map<int, String> errorDescriptions;
   if (!conn.getCachedJson().isNull() && conn.getCachedJson().containsKey("lasterr")) {
     JsonObject lasterr = conn.getCachedJson()["lasterr"].as<JsonObject>();
@@ -659,8 +650,11 @@ String ListErrors() {
     }
     DBG_OUTPUT_PORT.printf("Loaded %d error descriptions from lasterr\n", errorDescriptions.size());
   }
+  return errorDescriptions;
+}
 
-  // Determine tick duration from uptime parameter's unit (default: 10ms)
+// Helper: Determine tick duration from uptime parameter's unit
+static int determineTickDuration() {
   int tickDurationMs = 10; // Default to 10ms
   if (!conn.getCachedJson().isNull() && conn.getCachedJson().containsKey("uptime")) {
     JsonObject uptime = conn.getCachedJson()["uptime"].as<JsonObject>();
@@ -672,65 +666,92 @@ String ListErrors() {
       }
     }
   }
+  return tickDurationMs;
+}
 
+// Helper: Request error data (timestamp and number) for a specific index
+static bool requestErrorAtIndex(uint8_t index, uint32_t& errorTime, uint32_t& errorNum) {
+  twai_message_t rxframe;
+  bool hasErrorTime = false;
+  bool hasErrorNum = false;
+
+  // Request error timestamp
+  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_TIME, index);
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    printCanRx(&rxframe);
+    if (rxframe.data[0] != SDOProtocol::ABORT &&
+        (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_TIME &&
+        rxframe.data[3] == index) {
+      errorTime = *(uint32_t*)&rxframe.data[4];
+      hasErrorTime = true;
+    }
+  }
+
+  // Request error number
+  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_NUM, index);
+  if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
+    printCanRx(&rxframe);
+    if (rxframe.data[0] != SDOProtocol::ABORT &&
+        (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_NUM &&
+        rxframe.data[3] == index) {
+      errorNum = *(uint32_t*)&rxframe.data[4];
+      hasErrorNum = true;
+    }
+  }
+
+  return hasErrorTime && hasErrorNum;
+}
+
+// Helper: Create JSON object for an error entry
+static void createErrorJsonObject(JsonArray& errors, uint8_t index, uint32_t errorNum, uint32_t errorTime,
+                                   int tickDurationMs, const std::map<int, String>& errorDescriptions) {
+  JsonObject errorObj = errors.add<JsonObject>();
+  errorObj["index"] = index;
+  errorObj["errorNum"] = errorNum;
+  errorObj["errorTime"] = errorTime;
+  errorObj["elapsedTimeMs"] = errorTime * tickDurationMs;
+
+  // Add description if available
+  if (errorDescriptions.count(errorNum) > 0) {
+    errorObj["description"] = errorDescriptions.at(errorNum);
+  } else {
+    errorObj["description"] = "Unknown error " + String(errorNum);
+  }
+
+  DBG_OUTPUT_PORT.printf("Error %lu at index %d: time=%lu ticks (%lu ms), desc=%s\n",
+                         (unsigned long)errorNum, index, (unsigned long)errorTime,
+                         (unsigned long)(errorTime * tickDurationMs),
+                         errorObj["description"].as<const char*>());
+}
+
+String ListErrors() {
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.println("ListErrors called while not DeviceConnection::IDLE, ignoring");
+    return "[]";
+  }
+
+  JsonDocument doc;
+  JsonArray errors = doc.to<JsonArray>();
+
+  // Build error description map and determine tick duration
+  std::map<int, String> errorDescriptions = buildErrorDescriptionMap();
+  int tickDurationMs = determineTickDuration();
   DBG_OUTPUT_PORT.printf("Retrieving error log (tick duration: %dms)\n", tickDurationMs);
 
   // Iterate through error indices (0-254)
   for (uint8_t i = 0; i < 255; i++) {
     uint32_t errorTime = 0;
     uint32_t errorNum = 0;
-    bool hasErrorTime = false;
-    bool hasErrorNum = false;
 
-    // Request error timestamp
-    SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_TIME, i);
-    if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
-      printCanRx(&rxframe);
-      if (rxframe.data[0] != SDOProtocol::ABORT &&
-          (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_TIME &&
-          rxframe.data[3] == i) {
-        errorTime = *(uint32_t*)&rxframe.data[4];
-        hasErrorTime = true;
-      }
-    }
-
-    // Request error number
-    SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_NUM, i);
-    if (twai_receive(&rxframe, pdMS_TO_TICKS(10)) == ESP_OK) {
-      printCanRx(&rxframe);
-      if (rxframe.data[0] != SDOProtocol::ABORT &&
-          (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_NUM &&
-          rxframe.data[3] == i) {
-        errorNum = *(uint32_t*)&rxframe.data[4];
-        hasErrorNum = true;
-      }
-    }
-
-    // If we got an abort for both or no data, we've reached the end
-    if (!hasErrorTime && !hasErrorNum) {
+    // Request error data for this index
+    if (!requestErrorAtIndex(i, errorTime, errorNum)) {
       DBG_OUTPUT_PORT.printf("Reached end of error log at index %d\n", i);
       break;
     }
 
-    // If we have error data, add it to the result
-    if (hasErrorTime && hasErrorNum && errorNum != 0) {
-      JsonObject errorObj = errors.add<JsonObject>();
-      errorObj["index"] = i;
-      errorObj["errorNum"] = errorNum;
-      errorObj["errorTime"] = errorTime;
-      errorObj["elapsedTimeMs"] = errorTime * tickDurationMs;
-
-      // Add description if available
-      if (errorDescriptions.count(errorNum) > 0) {
-        errorObj["description"] = errorDescriptions[errorNum];
-      } else {
-        errorObj["description"] = "Unknown error " + String(errorNum);
-      }
-
-      DBG_OUTPUT_PORT.printf("Error %lu at index %d: time=%lu ticks (%lu ms), desc=%s\n",
-                             (unsigned long)errorNum, i, (unsigned long)errorTime,
-                             (unsigned long)(errorTime * tickDurationMs),
-                             errorObj["description"].as<const char*>());
+    // If we have valid error data, add it to the result
+    if (errorNum != 0) {
+      createErrorJsonObject(errors, i, errorNum, errorTime, tickDurationMs, errorDescriptions);
     }
   }
 
