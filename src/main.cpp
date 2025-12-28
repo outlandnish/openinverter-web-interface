@@ -29,6 +29,8 @@
 #include "utils/websocket_helpers.h"
 #include "utils/can_io_utils.h"
 #include "managers/device_storage.h"
+#include "managers/device_discovery.h"
+#include "firmware/update_handler.h"
 #include "main.h"
 #include "can_task.h"
 #include "websocket_handlers.h"
@@ -195,13 +197,13 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
     // Send current scanning status
     JsonDocument doc;
     doc["event"] = "scanStatus";
-    doc["data"]["active"] = OICan::IsContinuousScanActive();
+    doc["data"]["active"] = DeviceDiscovery::instance().isScanActive();
     String output;
     serializeJson(doc, output);
     client->text(output);
 
     // Send saved devices
-    String devices = OICan::GetSavedDevices();
+    String devices = DeviceDiscovery::instance().getSavedDevices();
     JsonDocument devicesMsg;
     devicesMsg["event"] = "savedDevices";
     JsonDocument devicesData;
@@ -316,7 +318,7 @@ void setup(void){
   DBG_OUTPUT_PORT.println("Queues created successfully");
 
   // Update device discovery callback to post events
-  OICan::SetDeviceDiscoveryCallback([](uint8_t nodeId, const char* serial, uint32_t lastSeen) {
+  DeviceDiscovery::instance().setDiscoveryCallback([](uint8_t nodeId, const char* serial, uint32_t lastSeen) {
     CANEvent evt;
     evt.type = EVT_DEVICE_DISCOVERED;
     evt.data.deviceDiscovered.nodeId = nodeId;
@@ -339,7 +341,7 @@ void setup(void){
   });
 
   // Setup scan progress callback to post events
-  OICan::SetScanProgressCallback([](uint8_t currentNode, uint8_t startNode, uint8_t endNode) {
+  DeviceDiscovery::instance().setProgressCallback([](uint8_t currentNode, uint8_t startNode, uint8_t endNode) {
     CANEvent evt;
     evt.type = EVT_SCAN_PROGRESS;
     evt.data.scanProgress.currentNode = currentNode;
@@ -414,11 +416,11 @@ void setup(void){
 
 // Firmware update progress monitoring
 void processFirmwareUpdateProgress() {
-  bool updateInProgress = OICan::IsUpdateInProgress();
+  bool updateInProgress = FirmwareUpdateHandler::instance().isInProgress();
 
   if (updateInProgress) {
     updateWasInProgress = true;
-    int currentPage = OICan::GetCurrentUpdatePage();
+    int currentPage = FirmwareUpdateHandler::instance().getCurrentPage();
 
     // Only send progress updates when page changes
     if (currentPage != lastReportedPage && totalUpdatePages > 0) {

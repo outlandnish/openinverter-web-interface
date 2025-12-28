@@ -1,5 +1,6 @@
 #include "http_handlers.h"
 #include "oi_can.h"
+#include "managers/device_discovery.h"
 #include "main.h"
 #include "config.h"
 #include <LittleFS.h>
@@ -96,7 +97,7 @@ void handleVersion(AsyncWebServerRequest *request) {
 
 // Handle devices endpoint
 void handleDevices(AsyncWebServerRequest *request) {
-  String result = OICan::GetSavedDevices();
+  String result = DeviceDiscovery::instance().getSavedDevices();
   request->send(200, "application/json", result);
 }
 
