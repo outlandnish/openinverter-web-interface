@@ -27,9 +27,13 @@
 #include "models/interval_messages.h"
 #include "utils/string_utils.h"
 #include "utils/websocket_helpers.h"
+#include "utils/can_io_utils.h"
+#include "managers/device_storage.h"
 #include "main.h"
 #include "can_task.h"
 #include "websocket_handlers.h"
+#include "http_handlers.h"
+#include "wifi_setup.h"
 
 #define INVERTER_PORT UART_NUM_1
 #define INVERTER_RX 16
@@ -37,29 +41,12 @@
 #define UART_TIMEOUT (100 / portTICK_PERIOD_MS)
 #define UART_MESSBUF_SIZE 100
 
-// WS2812B_PIN and WS2812B_COUNT are defined in platformio.ini for each board
-#ifndef WS2812B_PIN
-#define WS2812B_PIN 8  // Fallback default
-#endif
-#ifndef WS2812B_COUNT
-#define WS2812B_COUNT 1  // Fallback default
-#endif
-#define STATUS_LED_PIN WS2812B_PIN
-#define STATUS_LED_COUNT WS2812B_COUNT
-#define STATUS_LED_CHANNEL 0
 
 // FreeRTOS Queue handles
 QueueHandle_t canCommandQueue = nullptr;
 QueueHandle_t canEventQueue = nullptr;
 
-//HardwareSerial Inverter(INVERTER_PORT);
-
 const char* host = "inverter";
-bool fastUart = false;
-bool fastUartAvailable = true;
-char uartMessBuff[UART_MESSBUF_SIZE];
-char jsonFileName[50];
-//DynamicJsonDocument jsonDoc(30000);
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -86,72 +73,8 @@ std::map<uint32_t, uint8_t> clientDevices; // WebSocket client ID -> nodeId
 
 // Firmware update progress tracking
 static int lastReportedPage = -1;
-static int totalUpdatePages = 0;
+int totalUpdatePages = 0;  // Non-static so http_handlers.cpp can access it
 static bool updateWasInProgress = false;
-
-// NeoPixel status LED (NEO_GRB + NEO_KHZ800 are typical for WS2812B)
-Adafruit_NeoPixel statusLED(STATUS_LED_COUNT, STATUS_LED_PIN, NEO_GRB + NEO_KHZ800);
-
-// Status LED color definitions (using Adafruit_NeoPixel::Color)
-const uint32_t LED_OFF = Adafruit_NeoPixel::Color(0, 0, 0);
-const uint32_t LED_COMMAND = Adafruit_NeoPixel::Color(0, 0, 255);        // Blue - command processing
-const uint32_t LED_CAN_MAP = Adafruit_NeoPixel::Color(0, 255, 255);       // Cyan - CAN mapping
-const uint32_t LED_UPDATE = Adafruit_NeoPixel::Color(128, 0, 255);        // Purple - firmware update
-const uint32_t LED_WIFI_CONNECTING = Adafruit_NeoPixel::Color(255, 128, 0); // Orange - WiFi connecting
-const uint32_t LED_WIFI_CONNECTED = Adafruit_NeoPixel::Color(0, 255, 0);    // Green - WiFi connected
-const uint32_t LED_SUCCESS = Adafruit_NeoPixel::Color(0, 255, 0);         // Green - success
-const uint32_t LED_ERROR = Adafruit_NeoPixel::Color(255, 0, 0);           // Red - error
-
-// CRC-32 calculation for CAN IO messages (STM32 polynomial 0x04C11DB7)
-// This matches the IEEE 802.3 / Ethernet CRC-32 polynomial
-uint32_t crc32_word(uint32_t crc, uint32_t word) {
-  const uint32_t polynomial = 0x04C11DB7;
-  crc ^= word;
-  for (int i = 0; i < 32; i++) {
-    if (crc & 0x80000000) {
-      crc = (crc << 1) ^ polynomial;
-    } else {
-      crc = crc << 1;
-    }
-  }
-  return crc;
-}
-
-// Build CAN IO message with bit packing
-// Set useCRC=true for controlcheck=1 (StmCrc8), false for controlcheck=0 (CounterOnly)
-void buildCanIoMessage(uint8_t* msg, uint16_t pot, uint16_t pot2, uint8_t canio,
-                       uint8_t ctr, uint16_t cruisespeed, uint8_t regenpreset, bool useCRC = false) {
-  // Mask inputs to their bit limits
-  pot &= CAN_IO_POT_MASK;          // 12 bits
-  pot2 &= CAN_IO_POT_MASK;         // 12 bits
-  canio &= CAN_IO_CANIO_MASK;      // 6 bits
-  ctr &= CAN_IO_COUNTER_MASK;      // 2 bits
-  cruisespeed &= CAN_IO_CRUISE_MASK;  // 14 bits
-  regenpreset &= CAN_IO_REGEN_MASK;   // 8 bits
-
-  // data[0] (32 bits): pot (0-11), pot2 (12-23), canio (24-29), ctr1 (30-31)
-  uint32_t data0 = pot | (pot2 << 12) | (canio << 24) | (ctr << 30);
-  msg[0] = data0 & 0xFF;
-  msg[1] = (data0 >> 8) & 0xFF;
-  msg[2] = (data0 >> 16) & 0xFF;
-  msg[3] = (data0 >> 24) & 0xFF;
-
-  // data[1] (32 bits): cruisespeed (0-13), ctr2 (14-15), regenpreset (16-23), crc (24-31)
-  uint32_t data1 = cruisespeed | (ctr << 14) | (regenpreset << 16);
-  msg[4] = data1 & 0xFF;
-  msg[5] = (data1 >> 8) & 0xFF;
-  msg[6] = (data1 >> 16) & 0xFF;
-
-  // Calculate CRC-32 if requested, otherwise set to 0
-  uint8_t crcByte = 0;
-  if (useCRC) {
-    uint32_t crc = 0xFFFFFFFF;
-    crc = crc32_word(crc, data0);
-    crc = crc32_word(crc, data1);
-    crcByte = crc & 0xFF;  // Lower 8 bits
-  }
-  msg[7] = crcByte;
-}
 
 // WebSocket broadcast helper
 void broadcastToWebSocket(const char* event, const char* data) {
@@ -176,20 +99,14 @@ void broadcastDeviceDiscovery(uint8_t nodeId, const char* serial, uint32_t lastS
   data["lastSeen"] = lastSeen;
 
   // Look up device name from devices.json
-  if (LittleFS.exists("/devices.json")) {
-    File file = LittleFS.open("/devices.json", "r");
-    if (file) {
-      JsonDocument savedDoc;
-      deserializeJson(savedDoc, file);
-      file.close();
-
-      if (savedDoc.containsKey("devices")) {
-        JsonObject devices = savedDoc["devices"].as<JsonObject>();
-        if (devices.containsKey(serial)) {
-          JsonObject device = devices[serial].as<JsonObject>();
-          if (device.containsKey("name")) {
-            data["name"] = device["name"].as<String>();
-          }
+  JsonDocument savedDoc;
+  if (DeviceStorage::loadDevices(savedDoc)) {
+    if (savedDoc.containsKey("devices")) {
+      JsonObject devices = savedDoc["devices"].as<JsonObject>();
+      if (devices.containsKey(serial)) {
+        JsonObject device = devices[serial].as<JsonObject>();
+        if (device.containsKey("name")) {
+          data["name"] = device["name"].as<String>();
         }
       }
     }
@@ -335,219 +252,18 @@ void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsE
   }
 }
 
-//format bytes
-String formatBytes(uint64_t bytes){
-  if (bytes < 1024){
-    return String(bytes)+"B";
-  } else if(bytes < (1024 * 1024)){
-    return String(bytes/1024.0)+"KB";
-  } else if(bytes < (1024 * 1024 * 1024)){
-    return String(bytes/1024.0/1024.0)+"MB";
-  } else {
-    return String(bytes/1024.0/1024.0/1024.0)+"GB";
-  }
-}
-
-String getContentType(String filename, AsyncWebServerRequest *request = nullptr){
-  if(request && request->hasArg("download")) return "application/octet-stream";
-  else if(filename.endsWith(".bin")) return "application/octet-stream";
-  else if(filename.endsWith(".htm")) return "text/html";
-  else if(filename.endsWith(".html")) return "text/html";
-  else if(filename.endsWith(".css")) return "text/css";
-  else if(filename.endsWith(".js")) return "application/javascript";
-  else if(filename.endsWith(".png")) return "image/png";
-  else if(filename.endsWith(".gif")) return "image/gif";
-  else if(filename.endsWith(".jpg")) return "image/jpeg";
-  else if(filename.endsWith(".ico")) return "image/x-icon";
-  else if(filename.endsWith(".xml")) return "text/xml";
-  else if(filename.endsWith(".pdf")) return "application/x-pdf";
-  else if(filename.endsWith(".zip")) return "application/x-zip";
-  else if(filename.endsWith(".gz")) return "application/x-gzip";
-  return "text/plain";
-}
-
-void handleFileRequest(AsyncWebServerRequest *request) {
-  String path = request->url();
-  if(path.endsWith("/")) path += "index.html";
-
-  String contentType = getContentType(path);
-  bool isGzipped = false;
-
-  // Serve web app files from /dist/ folder
-  String distPath = "/dist" + path;
-  String pathWithGz = distPath + ".gz";
-
-  if(LittleFS.exists(pathWithGz) || LittleFS.exists(distPath)){
-    if(LittleFS.exists(pathWithGz)) {
-      distPath += ".gz";
-      isGzipped = true;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(LittleFS, distPath, contentType);
-    response->addHeader("Cache-Control", "max-age=86400");
-    if(isGzipped) {
-      response->addHeader("Content-Encoding", "gzip");
-    }
-    request->send(response);
-    return;
-  }
-
-  // Fallback to root for other files (like wifi.txt, devices.json, etc.)
-  isGzipped = false;
-  pathWithGz = path + ".gz";
-  if(LittleFS.exists(pathWithGz) || LittleFS.exists(path)){
-    if(LittleFS.exists(pathWithGz)) {
-      path += ".gz";
-      isGzipped = true;
-    }
-    AsyncWebServerResponse *response = request->beginResponse(LittleFS, path, contentType);
-    response->addHeader("Cache-Control", "max-age=86400");
-    if(isGzipped) {
-      response->addHeader("Content-Encoding", "gzip");
-    }
-    request->send(response);
-    return;
-  }
-
-  request->send(404, "text/plain", "FileNotFound");
-}
-
-
-void uart_readUntill(char val)
-{
-  int retVal;
-  do
-  {
-    retVal = uart_read_bytes(INVERTER_PORT, uartMessBuff, 1, UART_TIMEOUT);
-  }
-  while((retVal>0) && (uartMessBuff[0] != val));
-}
-
-bool uart_readStartsWith(const char *val)
-{
-  bool retVal = false;
-  int rxBytes = uart_read_bytes(INVERTER_PORT, uartMessBuff, strnlen(val,UART_MESSBUF_SIZE), UART_TIMEOUT);
-  if(rxBytes >= strnlen(val,UART_MESSBUF_SIZE))
-  {
-    if(strncmp(val, uartMessBuff, strnlen(val,UART_MESSBUF_SIZE))==0)
-      retVal = true;
-    uartMessBuff[rxBytes] = 0;
-    DBG_OUTPUT_PORT.println(uartMessBuff);
-  }
-  return retVal;
-}
-
-
-
-
-bool loadWiFiCredentials(String &ssid, String &password) {
-  if (!LittleFS.exists("/wifi.txt")) {
-    DBG_OUTPUT_PORT.println("wifi.txt not found in LittleFS");
-    return false;
-  }
-
-  File file = LittleFS.open("/wifi.txt", "r");
-  if (!file) {
-    DBG_OUTPUT_PORT.println("Failed to open wifi.txt");
-    return false;
-  }
-
-  // Read SSID (first line)
-  ssid = file.readStringUntil('\n');
-  ssid.trim();
-
-  // Read Password (second line)
-  password = file.readStringUntil('\n');
-  password.trim();
-
-  file.close();
-
-  if (ssid.length() == 0) {
-    DBG_OUTPUT_PORT.println("SSID is empty in wifi.txt");
-    return false;
-  }
-
-  DBG_OUTPUT_PORT.println("WiFi credentials loaded from wifi.txt");
-  DBG_OUTPUT_PORT.print("SSID: ");
-  DBG_OUTPUT_PORT.println(ssid);
-
-  return true;
-}
-
 void setup(void){
   DBG_OUTPUT_PORT.begin(115200);
 
   // Initialize status LED (NeoPixel)
-  statusLED.begin();
+  StatusLED::instance().begin();
   statusLEDOff();
 
   //Start SPI Flash file system
   LittleFS.begin(false, "/littlefs", 10, "littlefs");
 
   //WIFI INIT
-  String wifiSSID, wifiPassword;
-  bool staConnected = false;
-
-  if (loadWiFiCredentials(wifiSSID, wifiPassword)) {
-    WiFi.mode(WIFI_STA);
-    //WiFi.setPhyMode(WIFI_PHY_MODE_11B);
-    WiFi.setSleep(false);
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);//25); //dbm
-    WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
-
-    DBG_OUTPUT_PORT.print("Connecting to WiFi");
-    setStatusLED(LED_WIFI_CONNECTING);
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-      delay(500);
-      DBG_OUTPUT_PORT.print(".");
-      attempts++;
-    }
-    DBG_OUTPUT_PORT.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-      DBG_OUTPUT_PORT.println("WiFi connected!");
-      DBG_OUTPUT_PORT.print("IP address: ");
-      DBG_OUTPUT_PORT.println(WiFi.localIP());
-      setStatusLED(LED_WIFI_CONNECTED);
-      delay(1000); // Show connected status for 1 second
-      statusLEDOff();
-      staConnected = true;
-    } else {
-      DBG_OUTPUT_PORT.println("WiFi connection failed!");
-      setStatusLED(LED_ERROR);
-      delay(1000); // Show error for 1 second
-      statusLEDOff();
-    }
-  }
-
-  // If STA mode failed or no credentials, start AP mode
-  if (!staConnected) {
-    DBG_OUTPUT_PORT.println("Starting in AP mode");
-
-    // Generate AP name using MAC address
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    String apSSID = "ESP-" + String(mac[4], HEX) + String(mac[5], HEX);
-    apSSID.toUpperCase();
-
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(apSSID.c_str());
-
-    // Set AP IP to 192.168.4.1
-    IPAddress apIP(192, 168, 4, 1);
-    IPAddress gateway(192, 168, 4, 1);
-    IPAddress subnet(255, 255, 255, 0);
-    WiFi.softAPConfig(apIP, gateway, subnet);
-
-    DBG_OUTPUT_PORT.print("AP Name: ");
-    DBG_OUTPUT_PORT.println(apSSID);
-    DBG_OUTPUT_PORT.print("AP IP address: ");
-    DBG_OUTPUT_PORT.println(WiFi.softAPIP());
-
-    setStatusLED(LED_WIFI_CONNECTED);
-    delay(1000);
-    statusLEDOff();
-  }
+  WiFiSetup::initialize();
 
   MDNS.begin(host);
 
@@ -609,17 +325,12 @@ void setup(void){
     evt.data.deviceDiscovered.name[0] = '\0'; // Will be filled from devices.json
 
     // Look up name from devices.json
-    if (LittleFS.exists("/devices.json")) {
-      File file = LittleFS.open("/devices.json", "r");
-      if (file) {
-        JsonDocument doc;
-        deserializeJson(doc, file);
-        file.close();
-        if (doc.containsKey("devices") && doc["devices"].containsKey(serial)) {
-          const char* name = doc["devices"][serial]["name"];
-          if (name) {
-            safeCopyString(evt.data.deviceDiscovered.name, name);
-          }
+    JsonDocument doc;
+    if (DeviceStorage::loadDevices(doc)) {
+      if (doc.containsKey("devices") && doc["devices"].containsKey(serial)) {
+        const char* name = doc["devices"][serial]["name"];
+        if (name) {
+          safeCopyString(evt.data.deviceDiscovered.name, name);
         }
       }
     }
@@ -693,197 +404,8 @@ void setup(void){
   ArduinoOTA.setHostname(host);
   ArduinoOTA.begin();
 
-  // Simple async endpoints for essential functionality
-  server.on("/version", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", "1.1.R-WS");
-  });
-
-  server.on("/devices", HTTP_GET, [](AsyncWebServerRequest *request){
-    String result = OICan::GetSavedDevices();
-    request->send(200, "application/json", result);
-  });
-
-  server.on("/params/json", HTTP_GET, [](AsyncWebServerRequest *request){
-    DBG_OUTPUT_PORT.println("[HTTP] /params/json request received");
-
-    // Require nodeId parameter for all requests (multi-client support)
-    if (!request->hasParam("nodeId")) {
-      DBG_OUTPUT_PORT.println("[HTTP] Sending 400 - nodeId parameter required");
-      request->send(400, "application/json", "{\"error\":\"nodeId parameter is required\"}");
-      return;
-    }
-
-    int nodeId = request->getParam("nodeId")->value().toInt();
-    DBG_OUTPUT_PORT.printf("[HTTP] Fetching params for nodeId: %d\n", nodeId);
-
-    // Download JSON - progress will be sent via WebSocket jsonProgress events
-    // No need for HTTP streaming since progress is tracked via WebSocket
-    String json = OICan::GetRawJson(nodeId);
-
-    DBG_OUTPUT_PORT.printf("[HTTP] GetRawJson returned %d bytes\n", json.length());
-
-    if (json.isEmpty() || json == "{}") {
-      DBG_OUTPUT_PORT.println("[HTTP] Sending 503 - device busy");
-      request->send(503, "application/json", "{\"error\":\"Device busy or not connected\"}");
-    } else {
-      DBG_OUTPUT_PORT.printf("[HTTP] Sending response with %d bytes\n", json.length());
-      request->send(200, "application/json", json);
-    }
-  });
-
-  server.on("/reloadjson", HTTP_GET, [](AsyncWebServerRequest *request){
-    DBG_OUTPUT_PORT.println("[HTTP] /reloadjson request received");
-    
-    // Require nodeId parameter for multi-client support
-    if (!request->hasParam("nodeId")) {
-      DBG_OUTPUT_PORT.println("[HTTP] Sending 400 - nodeId parameter required");
-      request->send(400, "application/json", "{\"error\":\"nodeId parameter is required\"}");
-      return;
-    }
-    
-    int nodeId = request->getParam("nodeId")->value().toInt();
-    DBG_OUTPUT_PORT.printf("[HTTP] Reloading JSON for nodeId: %d\n", nodeId);
-    
-    bool success = OICan::ReloadJson(nodeId);
-    if (success) {
-      request->send(200, "text/plain", "Cached JSON cleared, will reload from device");
-    } else {
-      request->send(503, "text/plain", "Device busy, cannot reload");
-    }
-  });
-
-  // Firmware update upload endpoint for remote devices via CAN
-  server.on("/ota/upload", HTTP_POST,
-    // Request complete handler
-    [](AsyncWebServerRequest *request) {
-      // Firmware update completion is handled via WebSocket events
-      // The actual update runs asynchronously in the background
-      request->send(200, "text/plain", "Firmware upload started");
-    },
-    // Upload handler
-    [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-      static File firmwareFile;
-      static String firmwareFilePath = "/firmware_update.bin";
-
-      if (!index) {
-        DBG_OUTPUT_PORT.printf("OTA Upload Start: %s (%zu bytes)\n", filename.c_str(), request->contentLength());
-
-        // Check if device is connected and idle
-        if (!OICan::IsIdle()) {
-          DBG_OUTPUT_PORT.println("OTA Upload failed - device not idle");
-          JsonDocument doc;
-          doc["event"] = "otaError";
-          doc["data"]["error"] = "Device is busy or not connected";
-          String output;
-          serializeJson(doc, output);
-          ws.textAll(output);
-          return;
-        }
-
-        // Delete old firmware file if it exists
-        if (LittleFS.exists(firmwareFilePath)) {
-          LittleFS.remove(firmwareFilePath);
-        }
-
-        // Create new firmware file
-        firmwareFile = LittleFS.open(firmwareFilePath, "w");
-        if (!firmwareFile) {
-          DBG_OUTPUT_PORT.println("Failed to create firmware file");
-          JsonDocument doc;
-          doc["event"] = "otaError";
-          doc["data"]["error"] = "Failed to create firmware file";
-          String output;
-          serializeJson(doc, output);
-          ws.textAll(output);
-          return;
-        }
-
-        setStatusLED(LED_UPDATE);
-      }
-
-      // Write chunk to file
-      if (firmwareFile && len > 0) {
-        size_t written = firmwareFile.write(data, len);
-        if (written != len) {
-          DBG_OUTPUT_PORT.printf("Failed to write firmware chunk (wrote %zu of %zu bytes)\n", written, len);
-          firmwareFile.close();
-
-          JsonDocument doc;
-          doc["event"] = "otaError";
-          doc["data"]["error"] = "Failed to write firmware data";
-          String output;
-          serializeJson(doc, output);
-          ws.textAll(output);
-
-          setStatusLED(LED_ERROR);
-          return;
-        }
-      }
-
-      if (final) {
-        firmwareFile.close();
-        DBG_OUTPUT_PORT.printf("Firmware file saved: %zu bytes\n", index + len);
-
-        // Start firmware update process
-        totalUpdatePages = OICan::StartUpdate(firmwareFilePath);
-        DBG_OUTPUT_PORT.printf("Starting firmware update - %d pages to send\n", totalUpdatePages);
-
-        // Send initial progress
-        JsonDocument doc;
-        doc["event"] = "otaProgress";
-        doc["data"]["progress"] = 0;
-        String output;
-        serializeJson(doc, output);
-        ws.textAll(output);
-      }
-    }
-  );
-
-  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
-    // If query parameters are provided, update settings
-    if (request->hasArg("canRXPin") || request->hasArg("canTXPin") ||
-        request->hasArg("canSpeed") || request->hasArg("scanStartNode") ||
-        request->hasArg("scanEndNode")) {
-
-      if (request->hasArg("canRXPin")) {
-        config.setCanRXPin(request->arg("canRXPin").toInt());
-      }
-      if (request->hasArg("canTXPin")) {
-        config.setCanTXPin(request->arg("canTXPin").toInt());
-      }
-      if (request->hasArg("canEnablePin")) {
-        config.setCanEnablePin(request->arg("canEnablePin").toInt());
-      }
-      if (request->hasArg("canSpeed")) {
-        config.setCanSpeed(request->arg("canSpeed").toInt());
-      }
-      if (request->hasArg("scanStartNode")) {
-        config.setScanStartNode(request->arg("scanStartNode").toInt());
-      }
-      if (request->hasArg("scanEndNode")) {
-        config.setScanEndNode(request->arg("scanEndNode").toInt());
-      }
-
-      config.saveSettings();
-      request->send(200, "text/plain", "Settings saved successfully");
-    } else {
-      // Return current settings as JSON
-      JsonDocument doc;
-      doc["canRXPin"] = config.getCanRXPin();
-      doc["canTXPin"] = config.getCanTXPin();
-      doc["canEnablePin"] = config.getCanEnablePin();
-      doc["canSpeed"] = config.getCanSpeed();
-      doc["scanStartNode"] = config.getScanStartNode();
-      doc["scanEndNode"] = config.getScanEndNode();
-
-      String output;
-      serializeJson(doc, output);
-      request->send(200, "application/json", output);
-    }
-  });
-
-  // Serve files - catch all handler
-  server.onNotFound(handleFileRequest);
+  // Register all HTTP routes
+  registerHttpRoutes(server);
 
   server.begin();
 
@@ -929,7 +451,7 @@ void processFirmwareUpdateProgress() {
       serializeJson(doc, output);
       ws.textAll(output);
 
-      setStatusLED(LED_SUCCESS);
+      setStatusLED(StatusLED::SUCCESS);
       delay(1000);
       statusLEDOff();
 

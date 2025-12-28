@@ -3,34 +3,29 @@
 #include "freertos/queue.h"
 #include "models/can_command.h"
 #include "models/can_types.h"
-#include <Adafruit_NeoPixel.h>
+#include "status_led.h"
+#include <ESPAsyncWebServer.h>
+
+// Forward declarations
+class Config;
 
 // External declarations for globals defined in main.cpp
 extern QueueHandle_t canCommandQueue;
-extern Adafruit_NeoPixel statusLED;
-
-// Status LED color definitions (uint32_t for NeoPixel)
-extern const uint32_t LED_OFF;
-extern const uint32_t LED_COMMAND;
-extern const uint32_t LED_CAN_MAP;
-extern const uint32_t LED_UPDATE;
-extern const uint32_t LED_WIFI_CONNECTING;
-extern const uint32_t LED_WIFI_CONNECTED;
-extern const uint32_t LED_SUCCESS;
-extern const uint32_t LED_ERROR;
+extern AsyncWebSocket ws;
+extern Config config;
+extern int totalUpdatePages;
 
 // DBG_OUTPUT_PORT is defined as Serial in main.cpp
 #define DBG_OUTPUT_PORT Serial
 
 // Helper function to set status LED color
 inline void setStatusLED(uint32_t color) {
-  statusLED.setPixelColor(0, color);
-  statusLED.show();
+  StatusLED::instance().setColor(color);
 }
 
 // Helper function to turn off status LED
 inline void statusLEDOff() {
-  setStatusLED(LED_OFF);
+  StatusLED::instance().off();
 }
 
 // Helper function to queue CAN commands
