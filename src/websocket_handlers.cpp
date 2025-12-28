@@ -15,39 +15,6 @@ extern std::vector<IntervalCanMessage> intervalCanMessages;
 extern std::map<int, double> latestSpotValues;
 extern AsyncWebSocket ws;
 
-// Forward declarations for all handlers
-static void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStopScan(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleSetDeviceName(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleGetNodeId(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStopSpotValues(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleResetDevice(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleGetCanMappings(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleAddCanMapping(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleLoadFromFlash(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleLoadDefaults(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStartDevice(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStopDevice(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleListErrors(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc);
-static void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc);
-
 // Handler function type
 using WebSocketHandler = void (*)(AsyncWebSocketClient*, JsonDocument&);
 
@@ -100,7 +67,7 @@ void dispatchWebSocketMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
 }
 
 // Handler implementations
-static void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   uint8_t start = doc["start"] | 1;
   uint8_t end = doc["end"] | 32;
 
@@ -112,14 +79,14 @@ static void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   queueCanCommand(cmd, "Scan start");
 }
 
-static void handleStopScan(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStopScan(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_SCAN;
 
   queueCanCommand(cmd, "Scan stop");
 }
 
-static void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   uint8_t nodeId = doc["nodeId"];
   String serial = doc["serial"] | "";
   uint32_t clientId = client->id();
@@ -164,7 +131,7 @@ static void handleConnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
-static void handleSetDeviceName(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleSetDeviceName(AsyncWebSocketClient* client, JsonDocument& doc) {
   String serial = doc["serial"];
   String name = doc["name"];
   int nodeId = doc["nodeId"] | -1;
@@ -178,7 +145,7 @@ static void handleSetDeviceName(AsyncWebSocketClient* client, JsonDocument& doc)
   queueCanCommand(cmd, "Set device name");
 }
 
-static void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   String serial = doc["serial"];
 
   CANCommand cmd;
@@ -188,7 +155,7 @@ static void handleDeleteDevice(AsyncWebSocketClient* client, JsonDocument& doc) 
   queueCanCommand(cmd, "Delete device");
 }
 
-static void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   String serial = doc["serial"];
   String name = doc["name"];
 
@@ -200,14 +167,14 @@ static void handleRenameDevice(AsyncWebSocketClient* client, JsonDocument& doc) 
   queueCanCommand(cmd, "Rename device");
 }
 
-static void handleGetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleGetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_GET_NODE_ID;
 
   queueCanCommand(cmd, "Get node ID");
 }
 
-static void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   int id = doc["id"];
 
   CANCommand cmd;
@@ -217,7 +184,7 @@ static void handleSetNodeId(AsyncWebSocketClient* client, JsonDocument& doc) {
   queueCanCommand(cmd, "Set node ID");
 }
 
-static void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_SEND_CAN_MESSAGE;
 
@@ -245,7 +212,7 @@ static void handleSendCanMessage(AsyncWebSocketClient* client, JsonDocument& doc
   queueCanCommand(cmd, "Send CAN message");
 }
 
-static void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_START_CAN_INTERVAL;
 
@@ -290,7 +257,7 @@ static void handleStartCanInterval(AsyncWebSocketClient* client, JsonDocument& d
   queueCanCommand(cmd, "Start CAN interval");
 }
 
-static void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_CAN_INTERVAL;
 
@@ -305,7 +272,7 @@ static void handleStopCanInterval(AsyncWebSocketClient* client, JsonDocument& do
   queueCanCommand(cmd, "Stop CAN interval");
 }
 
-static void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_START_CANIO_INTERVAL;
 
@@ -334,14 +301,14 @@ static void handleStartCanIoInterval(AsyncWebSocketClient* client, JsonDocument&
   queueCanCommand(cmd, "Start CAN IO interval");
 }
 
-static void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStopCanIoInterval(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_CANIO_INTERVAL;
 
   queueCanCommand(cmd, "Stop CAN IO interval");
 }
 
-static void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_UPDATE_CANIO_FLAGS;
 
@@ -355,7 +322,7 @@ static void handleUpdateCanIoFlags(AsyncWebSocketClient* client, JsonDocument& d
   queueCanCommand(cmd, "Update CAN IO flags");
 }
 
-static void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_START_SPOT_VALUES;
 
@@ -380,14 +347,14 @@ static void handleStartSpotValues(AsyncWebSocketClient* client, JsonDocument& do
   queueCanCommand(cmd, "Start spot values");
 }
 
-static void handleStopSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStopSpotValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   CANCommand cmd;
   cmd.type = CMD_STOP_SPOT_VALUES;
 
   queueCanCommand(cmd, "Stop spot values");
 }
 
-static void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
   int paramId = doc["paramId"];
   double value = doc["value"];
 
@@ -437,7 +404,7 @@ static void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
-static void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Reload params request for nodeId: %d\n", nodeId);
 
@@ -460,7 +427,7 @@ static void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) 
   DBG_OUTPUT_PORT.printf("[WebSocket] Sent reload response (success=%d)\n", success);
 }
 
-static void handleResetDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleResetDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Reset device request");
 
   bool success = OICan::ResetDevice();
@@ -480,7 +447,7 @@ static void handleResetDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.printf("[WebSocket] Sent reset response (success=%d)\n", success);
 }
 
-static void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Get param schema request for nodeId: %d\n", nodeId);
 
@@ -513,7 +480,7 @@ static void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc
   }
 }
 
-static void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Get param values request for nodeId: %d\n", nodeId);
 
@@ -566,7 +533,7 @@ static void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc
   }
 }
 
-static void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   // Release device lock when explicitly disconnecting
   uint32_t clientId = client->id();
   if (clientDevices.count(clientId) > 0) {
@@ -598,7 +565,7 @@ static void handleDisconnect(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
-static void handleGetCanMappings(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleGetCanMappings(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Get CAN mappings request");
 
   // Check if CAN is idle
@@ -625,7 +592,7 @@ static void handleGetCanMappings(AsyncWebSocketClient* client, JsonDocument& doc
   DBG_OUTPUT_PORT.printf("[WebSocket] Sent CAN mappings data (%d bytes)\n", output.length());
 }
 
-static void handleAddCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleAddCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Add CAN mapping request");
 
   // Check if CAN is idle
@@ -675,7 +642,7 @@ static void handleAddCanMapping(AsyncWebSocketClient* client, JsonDocument& doc)
   client->text(output);
 }
 
-static void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Remove CAN mapping request");
 
   // Check if CAN is idle
@@ -720,7 +687,7 @@ static void handleRemoveCanMapping(AsyncWebSocketClient* client, JsonDocument& d
   client->text(output);
 }
 
-static void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Save to flash request");
 
   // Check if CAN is idle
@@ -749,7 +716,7 @@ static void handleSaveToFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
-static void handleLoadFromFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleLoadFromFlash(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Load from flash request");
 
   // Check if CAN is idle
@@ -778,7 +745,7 @@ static void handleLoadFromFlash(AsyncWebSocketClient* client, JsonDocument& doc)
   client->text(output);
 }
 
-static void handleLoadDefaults(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleLoadDefaults(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Load defaults request");
 
   // Check if CAN is idle
@@ -807,7 +774,7 @@ static void handleLoadDefaults(AsyncWebSocketClient* client, JsonDocument& doc) 
   client->text(output);
 }
 
-static void handleStartDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStartDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Start device request");
 
   // Check if CAN is idle
@@ -839,7 +806,7 @@ static void handleStartDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
-static void handleStopDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleStopDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] Stop device request");
 
   // Check if CAN is idle
@@ -868,7 +835,7 @@ static void handleStopDevice(AsyncWebSocketClient* client, JsonDocument& doc) {
   client->text(output);
 }
 
-static void handleListErrors(AsyncWebSocketClient* client, JsonDocument& doc) {
+void handleListErrors(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.println("[WebSocket] List errors request");
 
   // Check if CAN is idle
