@@ -4,3 +4,5 @@
 * Use intlayer translations / keys for text
 * If you need to test code compilation, ask me to do it for you.
 * Use `#pragma once` for header guards
+* Where possible, switch from Arduino String to std::string
+* When creating single use classes that need to be thread safe, create a singleton instance to do so
