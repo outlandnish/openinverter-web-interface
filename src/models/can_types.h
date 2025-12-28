@@ -27,6 +27,9 @@
 #define CAN_IO_CRUISE_MASK 0x3FFF    // 14 bits for cruise speed
 #define CAN_IO_REGEN_MASK 0xFF       // 8 bits for regen preset
 
+// CAN baud rates
+enum BaudRate { Baud125k, Baud250k, Baud500k };
+
 // Command types for CAN task
 enum CANCommandType {
   CMD_START_SCAN,
