@@ -28,6 +28,8 @@
 #include <vector>
 #include "oi_can.h"
 #include "models/can_types.h"
+#include "utils/can_utils.h"
+#include "managers/device_storage.h"
 
 #define DBG_OUTPUT_PORT Serial
 #define SDO_REQUEST_DOWNLOAD  (1 << 5)
@@ -381,21 +383,6 @@ static void handleSdoResponse(twai_message_t *rxframe) {
       // Do not exit this state
       break;
   }
-}
-
-static uint32_t crc32_word(uint32_t Crc, uint32_t Data)
-{
-  int i;
-
-  Crc = Crc ^ Data;
-
-  for(i=0; i<32; i++)
-    if (Crc & 0x80000000)
-      Crc = (Crc << 1) ^ 0x04C11DB7; // Polynomial used in STM32
-    else
-      Crc = (Crc << 1);
-
-  return(Crc);
 }
 
 static void handleUpdate(twai_message_t *rxframe) {
@@ -1867,44 +1854,6 @@ static bool requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4]) {
 
 // Helper function: Load devices.json from LittleFS
 // Returns true if file was successfully loaded and parsed
-static bool loadDevicesJson(JsonDocument& doc) {
-  if (!LittleFS.exists("/devices.json")) {
-    return false;
-  }
-
-  File file = LittleFS.open("/devices.json", "r");
-  if (!file) {
-    return false;
-  }
-
-  DeserializationError error = deserializeJson(doc, file);
-  file.close();
-  return error == DeserializationError::Ok;
-}
-
-// Helper function: Save devices.json to LittleFS
-// Returns true if file was successfully saved
-static bool saveDevicesJson(const JsonDocument& doc) {
-  File file = LittleFS.open("/devices.json", "w");
-  if (!file) {
-    return false;
-  }
-
-  serializeJson(doc, file);
-  file.close();
-  return true;
-}
-
-// Helper function: Update or add a device in the devices JSON object
-static void updateDeviceInJson(JsonObject& savedDevices, const char* serial, uint8_t nodeId) {
-  if (!savedDevices.containsKey(serial)) {
-    savedDevices.createNestedObject(serial);
-  }
-  JsonObject savedDevice = savedDevices[serial].as<JsonObject>();
-  savedDevice["nodeId"] = nodeId;
-  savedDevice["lastSeen"] = millis();
-}
-
 String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
   if (state != IDLE) return "[]";
 
@@ -1913,7 +1862,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
   // Load saved devices to update them
   JsonDocument savedDoc;
-  loadDevicesJson(savedDoc);
+  DeviceStorage::loadDevices(savedDoc);
 
   // Ensure devices object exists in saved doc
   if (!savedDoc.containsKey("devices")) {
@@ -1952,7 +1901,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
       device["lastSeen"] = millis();
 
       // Update saved devices with new nodeId and lastSeen
-      updateDeviceInJson(savedDevices, serialStr, nodeId);
+      DeviceStorage::updateDeviceInJson(savedDevices, serialStr, nodeId);
       devicesUpdated = true;
 
       DBG_OUTPUT_PORT.printf("Updated stored nodeId for %s to %d\n", serialStr, nodeId);
@@ -1965,7 +1914,7 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
 
   // Save updated devices back to LittleFS
   if (devicesUpdated) {
-    if (saveDevicesJson(savedDoc)) {
+    if (DeviceStorage::saveDevices(savedDoc)) {
       DBG_OUTPUT_PORT.println("Updated devices.json with new nodeIds");
     }
   }
@@ -1999,13 +1948,7 @@ bool SaveDeviceName(String serial, String name, int nodeId) {
   JsonDocument doc;
 
   // Load existing devices
-  if (LittleFS.exists("/devices.json")) {
-    File file = LittleFS.open("/devices.json", "r");
-    if (file) {
-      deserializeJson(doc, file);
-      file.close();
-    }
-  }
+  DeviceStorage::loadDevices(doc);
 
   // Ensure devices object exists
   if (!doc.containsKey("devices")) {
@@ -2029,14 +1972,10 @@ bool SaveDeviceName(String serial, String name, int nodeId) {
   DBG_OUTPUT_PORT.printf("Saved device: %s -> %s (nodeId: %d)\n", serial.c_str(), name.c_str(), nodeId);
 
   // Save back to file
-  File file = LittleFS.open("/devices.json", "w");
-  if (!file) {
-    DBG_OUTPUT_PORT.println("Failed to open devices file for writing");
+  if (!DeviceStorage::saveDevices(doc)) {
+    DBG_OUTPUT_PORT.println("Failed to save devices file");
     return false;
   }
-
-  serializeJson(doc, file);
-  file.close();
 
   // Also update in-memory list
   AddOrUpdateDevice(serial.c_str(), nodeId >= 0 ? nodeId : 0, name.c_str(), 0);
@@ -2049,13 +1988,7 @@ bool DeleteDevice(String serial) {
   JsonDocument doc;
 
   // Load existing devices
-  if (LittleFS.exists("/devices.json")) {
-    File file = LittleFS.open("/devices.json", "r");
-    if (file) {
-      deserializeJson(doc, file);
-      file.close();
-    }
-  }
+  DeviceStorage::loadDevices(doc);
 
   // Check if devices object exists
   if (!doc.containsKey("devices")) {
@@ -2073,18 +2006,14 @@ bool DeleteDevice(String serial) {
 
   // Remove device
   devices.remove(serial);
-  
+
   DBG_OUTPUT_PORT.printf("Deleted device: %s\n", serial.c_str());
 
   // Save back to file
-  File file = LittleFS.open("/devices.json", "w");
-  if (!file) {
-    DBG_OUTPUT_PORT.println("Failed to open devices file for writing");
+  if (!DeviceStorage::saveDevices(doc)) {
+    DBG_OUTPUT_PORT.println("Failed to save devices file");
     return false;
   }
-
-  serializeJson(doc, file);
-  file.close();
 
   // Also remove from in-memory list
   deviceList.erase(serial.c_str());
@@ -2182,23 +2111,9 @@ void ProcessContinuousScan() {
 void LoadDevices() {
   deviceList.clear();
 
-  if (!LittleFS.exists("/devices.json")) {
-    DBG_OUTPUT_PORT.println("No devices.json file, starting with empty device list");
-    return;
-  }
-
-  File file = LittleFS.open("/devices.json", "r");
-  if (!file) {
-    DBG_OUTPUT_PORT.println("Failed to open devices.json for reading");
-    return;
-  }
-
   JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, file);
-  file.close();
-
-  if (error) {
-    DBG_OUTPUT_PORT.printf("Failed to parse devices.json: %s\n", error.c_str());
+  if (!DeviceStorage::loadDevices(doc)) {
+    DBG_OUTPUT_PORT.println("No devices.json file, starting with empty device list");
     return;
   }
 

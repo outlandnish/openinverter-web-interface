@@ -4,6 +4,7 @@
 #include "models/can_event.h"
 #include "models/interval_messages.h"
 #include "utils/string_utils.h"
+#include "utils/can_io_utils.h"
 #include "oi_can.h"
 #include "config.h"
 #include <vector>
@@ -35,8 +36,6 @@ extern std::deque<int> spotValuesRequestQueue;
 extern void reloadSpotValuesQueue();
 extern void processSpotValuesQueue();
 extern void flushSpotValuesBatch();
-extern void buildCanIoMessage(uint8_t* msg, uint16_t pot, uint16_t pot2, uint8_t canio,
-                               uint8_t counter, uint16_t cruisespeed, uint8_t regenpreset, bool useCrc);
 
 #define DBG_OUTPUT_PORT Serial
 
