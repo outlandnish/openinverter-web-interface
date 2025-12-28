@@ -84,88 +84,38 @@ int StartUpdate(String fileName) {
   return totalPages;
 }
 
-String GetRawJson() {
-  // Return cached JSON if available (avoid blocking download)
-  if (!conn.getJsonReceiveBuffer().isEmpty()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", conn.getJsonReceiveBuffer().length());
-    return conn.getJsonReceiveBuffer();
-  }
-
-  if (!conn.isIdle()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Cannot get JSON - device busy (conn.getState()=%d)\n", conn.getState());
-    return "{}";
-  }
-
-  // Trigger JSON download from device
+// Helper: Initiate JSON download from device
+static void initiateJsonDownload() {
   DBG_OUTPUT_PORT.printf("[GetRawJson] Starting JSON download from node %d\n", conn.getNodeId());
   conn.setState(DeviceConnection::OBTAIN_JSON);
   conn.clearJsonCache();
   SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_STRINGS, 0);
   DBG_OUTPUT_PORT.println("[GetRawJson] Sent SDO request, waiting for response...");
+}
 
-  // Wait for download to complete (with per-segment timeout)
-  // Timeout only if no segment received within timeout period (not total time)
-  unsigned long lastSegmentTime = millis();
-  unsigned long lastProgressUpdate = 0;
-  int lastBufferSize = 0;
-  int lastStreamedSize = 0; // Track how much we've sent via streaming callback
-  int loopCount = 0;
-  const unsigned long SEGMENT_TIMEOUT_MS = 5000; // 5 second timeout per segment
-  const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200; // Throttle progress updates to 200ms
-
-  while (conn.getState() == DeviceConnection::OBTAIN_JSON) {
-    // CAN messages are now processed by canTask in background
-    // Just wait and check the state
-
-    // Check if we received a new segment (buffer grew)
-    if (conn.getJsonReceiveBuffer().length() > lastBufferSize) {
-      lastBufferSize = conn.getJsonReceiveBuffer().length();
-      lastSegmentTime = millis(); // Reset timeout on new data
-
-      // Stream new data chunk to callback if registered
-      JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
-      if (streamCallback && conn.getJsonReceiveBuffer().length() > lastStreamedSize) {
-        int chunkSize = conn.getJsonReceiveBuffer().length() - lastStreamedSize;
-        const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
-        streamCallback(chunkStart, chunkSize, false); // isComplete = false
-        lastStreamedSize = conn.getJsonReceiveBuffer().length();
-      }
-
-      // Send progress update via callback (throttled)
-      JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
-      if (progressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-        progressCallback(conn.getJsonReceiveBuffer().length());
-        lastProgressUpdate = millis();
-      }
-
-      if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
-      }
-    }
-
-    // Check for segment timeout (no data received for too long)
-    if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
-      DBG_OUTPUT_PORT.printf("[GetRawJson] Segment timeout! No data for %lu ms, buffer size=%d\n",
-        millis() - lastSegmentTime, conn.getJsonReceiveBuffer().length());
-      conn.setState(DeviceConnection::IDLE);
-      return "{}";
-    }
-
-    // Yield to other tasks (especially async_tcp) to prevent watchdog timeout
-    delay(10);
-
-    // Feed the watchdog to prevent timeout during long transfers
-    esp_task_wdt_reset();
-
-    loopCount++;
+// Helper: Handle streaming callback updates during JSON download
+static void handleJsonStreamingUpdate(int& lastStreamedSize) {
+  JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
+  if (streamCallback && conn.getJsonReceiveBuffer().length() > lastStreamedSize) {
+    int chunkSize = conn.getJsonReceiveBuffer().length() - lastStreamedSize;
+    const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
+    streamCallback(chunkStart, chunkSize, false); // isComplete = false
+    lastStreamedSize = conn.getJsonReceiveBuffer().length();
   }
+}
 
-  if (!conn.isIdle()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", conn.getState(), conn.getJsonReceiveBuffer().length());
-    conn.setState(DeviceConnection::IDLE);
-    return "{}";
+// Helper: Handle progress callback updates during JSON download
+static void handleJsonProgressUpdate(unsigned long& lastProgressUpdate) {
+  const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200;
+  JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
+  if (progressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
+    progressCallback(conn.getJsonReceiveBuffer().length());
+    lastProgressUpdate = millis();
   }
+}
 
+// Helper: Send final streaming and progress notifications
+static void handleJsonDownloadCompletion(int lastStreamedSize) {
   DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
 
   // Send final chunk with completion flag if streaming
@@ -184,6 +134,83 @@ String GetRawJson() {
   if (progressCallback) {
     progressCallback(0);
   }
+}
+
+// Helper: Wait for JSON download to complete
+static bool waitForJsonDownload(int& lastStreamedSize) {
+  const unsigned long SEGMENT_TIMEOUT_MS = 5000;
+  unsigned long lastSegmentTime = millis();
+  unsigned long lastProgressUpdate = 0;
+  int lastBufferSize = 0;
+  int loopCount = 0;
+
+  while (conn.getState() == DeviceConnection::OBTAIN_JSON) {
+    // CAN messages are now processed by canTask in background
+    // Just wait and check the state
+
+    // Check if we received a new segment (buffer grew)
+    if (conn.getJsonReceiveBuffer().length() > lastBufferSize) {
+      lastBufferSize = conn.getJsonReceiveBuffer().length();
+      lastSegmentTime = millis(); // Reset timeout on new data
+
+      handleJsonStreamingUpdate(lastStreamedSize);
+      handleJsonProgressUpdate(lastProgressUpdate);
+
+      if (loopCount % 100 == 0) {
+        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
+      }
+    }
+
+    // Check for segment timeout (no data received for too long)
+    if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
+      DBG_OUTPUT_PORT.printf("[GetRawJson] Segment timeout! No data for %lu ms, buffer size=%d\n",
+        millis() - lastSegmentTime, conn.getJsonReceiveBuffer().length());
+      conn.setState(DeviceConnection::IDLE);
+      return false;
+    }
+
+    // Yield to other tasks (especially async_tcp) to prevent watchdog timeout
+    delay(10);
+
+    // Feed the watchdog to prevent timeout during long transfers
+    esp_task_wdt_reset();
+
+    loopCount++;
+  }
+
+  // Check if download completed successfully
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", conn.getState(), conn.getJsonReceiveBuffer().length());
+    conn.setState(DeviceConnection::IDLE);
+    return false;
+  }
+
+  return true;
+}
+
+String GetRawJson() {
+  // Return cached JSON if available (avoid blocking download)
+  if (!conn.getJsonReceiveBuffer().isEmpty()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", conn.getJsonReceiveBuffer().length());
+    return conn.getJsonReceiveBuffer();
+  }
+
+  if (!conn.isIdle()) {
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Cannot get JSON - device busy (conn.getState()=%d)\n", conn.getState());
+    return "{}";
+  }
+
+  // Trigger JSON download from device
+  initiateJsonDownload();
+
+  // Wait for download to complete
+  int lastStreamedSize = 0;
+  if (!waitForJsonDownload(lastStreamedSize)) {
+    return "{}";
+  }
+
+  // Handle completion notifications
+  handleJsonDownloadCompletion(lastStreamedSize);
 
   return conn.getJsonReceiveBuffer();
 }
