@@ -277,6 +277,41 @@
    - Reusable validation utilities
    - Easier to unit test debug and validation helpers
 
+27. **Moved TWAI Driver Initialization to can_task.cpp**
+   - Created `configureTwaiDriver()` static helper function in can_task.cpp for common TWAI setup
+   - Added `initCanBusScanning()` public function for accepting all CAN messages
+   - Added `initCanBusForDevice()` public function for filtering specific device SDO responses
+   - Updated `Init()` and `InitCAN()` in oi_can.cpp to call can_task initialization functions
+   - Removed TWAI driver setup code from oi_can.cpp (~80 lines)
+   - Architecture now cleanly separated:
+     - can_task.cpp = Complete CAN I/O layer (driver init + message RX/TX)
+     - oi_can.cpp = CAN business logic (mappings, parameters, device commands)
+   - Better separation of concerns: hardware layer vs business logic
+   - Eliminated code duplication between Init() and InitCAN()
+
+28. **Extracted ListErrors() Helper Functions**
+   - Created `buildErrorDescriptionMap()` helper to extract error descriptions from cached JSON
+   - Created `determineTickDuration()` helper to get tick duration from uptime parameter unit
+   - Created `requestErrorAtIndex()` helper to request timestamp and error number for a specific index
+   - Created `createErrorJsonObject()` helper to create JSON object for an error entry
+   - Simplified `ListErrors()` from 99 lines to ~35 lines
+   - Each helper has a single, well-defined responsibility
+   - Improved code readability and maintainability
+   - Easier to test individual error handling components
+   - Better separation of concerns: data extraction, SDO requests, JSON formatting
+
+29. **Refactored GetRawJson() into Smaller Functions**
+   - Created `initiateJsonDownload()` helper to trigger JSON download from device
+   - Created `handleJsonStreamingUpdate()` helper to handle streaming callback updates
+   - Created `handleJsonProgressUpdate()` helper to handle progress callback updates (with throttling)
+   - Created `handleJsonDownloadCompletion()` helper to send final streaming and progress notifications
+   - Created `waitForJsonDownload()` helper for main wait loop with timeout handling
+   - Simplified `GetRawJson()` from ~103 lines to ~25 lines with clear, linear flow
+   - Each helper has a single, focused responsibility
+   - Improved code readability - main function now clearly shows the download flow
+   - Better separation of concerns: initiation, streaming, progress, completion
+   - Easier to test individual download phases independently
+
 ---
 
 ## Remaining Refactorings 📋
