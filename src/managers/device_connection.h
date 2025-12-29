@@ -36,8 +36,19 @@ typedef void (*JsonStreamCallback)(const char* chunk, int chunkSize, bool isComp
  */
 class DeviceConnection {
 public:
-    // Connection states
-    enum State { IDLE, ERROR, OBTAINSERIAL, OBTAIN_JSON };
+    // Connection states - non-blocking state machine
+    enum State {
+        IDLE,
+        ERROR,
+        // Serial number acquisition
+        SERIAL_SENDING,      // Sending request for serial part
+        SERIAL_WAITING,      // Waiting for serial part response
+        // JSON download
+        JSON_INIT_SENDING,   // Sending JSON initiate request
+        JSON_INIT_WAITING,   // Waiting for JSON initiate response
+        JSON_SEGMENT_SENDING,// Sending segment request
+        JSON_SEGMENT_WAITING // Waiting for segment response
+    };
 
     // Singleton access
     static DeviceConnection& instance();
@@ -52,6 +63,13 @@ public:
     void setState(State newState);
     State getState() const { return state_; }
     bool isIdle() const { return state_ == IDLE; }
+    bool isDownloadingJson() const {
+        return state_ == JSON_INIT_SENDING || state_ == JSON_INIT_WAITING ||
+               state_ == JSON_SEGMENT_SENDING || state_ == JSON_SEGMENT_WAITING;
+    }
+    bool isAcquiringSerial() const {
+        return state_ == SERIAL_SENDING || state_ == SERIAL_WAITING;
+    }
 
     void setCanPins(int txPin, int rxPin) {
         canTxPin_ = txPin;
@@ -122,11 +140,14 @@ public:
     bool canSendParameterRequest();
     void markParameterRequestSent();
 
-    // State timeout checking
-    void checkSerialTimeout(); // Check if OBTAINSERIAL has timed out
+    // Non-blocking state machine processing (called from can_task loop)
+    void processConnection();
 
-    // SDO response processing
-    void processSdoResponse(twai_message_t* rxframe); // Process SDO response based on state
+    // Start JSON download (called when browser requests JSON)
+    void startJsonDownload();
+
+    // Start serial acquisition (used after device reset)
+    void startSerialAcquisition();
 
 private:
     DeviceConnection(); // Private constructor for singleton
@@ -158,10 +179,13 @@ private:
     unsigned long lastParamRequestTime_ = 0;
     unsigned long minParamRequestIntervalUs_ = 500; // Default: 500 microseconds
 
-    // SDO response state (used by processSdoResponse)
+    // SDO state machine
     bool toggleBit_ = false;
+    uint8_t currentSerialPart_ = 0;  // Current serial part being requested (0-3)
+    unsigned long requestSentTime_ = 0;  // When we sent the current request
     File file_; // Used during firmware update
 
     // Constants
-    static const unsigned long OBTAINSERIAL_TIMEOUT_MS = 5000;
+    static const unsigned long SDO_TIMEOUT_MS = 100;  // Timeout for SDO response
+    static const unsigned long CONNECTION_TIMEOUT_MS = 5000;  // Overall connection timeout
 };

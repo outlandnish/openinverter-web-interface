@@ -461,27 +461,9 @@ void receiveAndProcessCanMessages() {
             uint8_t nodeId = rxframe.identifier & 0x7F;
             DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
 
-            // Route to SDO response queue if:
-            // 1. We're scanning (route all SDO responses for device discovery), OR
-            // 2. The response is from the connected device
-            bool isScanning = DeviceDiscovery::instance().isScanActive();
-            bool isFromConnectedDevice = (rxframe.identifier == (SDO_RESPONSE_BASE_ID | DeviceConnection::instance().getNodeId()));
-
-            DBG_OUTPUT_PORT.printf("[CAN Route] nodeId=%d isScanning=%d isFromConnected=%d\n",
-                                   nodeId, isScanning, isFromConnectedDevice);
-
-            if (isScanning || isFromConnectedDevice) {
-                // Route to SDO response queue for scan or SDO protocol layer
-                if (sdoResponseQueue != nullptr) {
-                    BaseType_t result = xQueueSend(sdoResponseQueue, &rxframe, 0);
-                    DBG_OUTPUT_PORT.printf("[CAN Route] Queued to sdoResponseQueue: %s\n",
-                                           result == pdTRUE ? "OK" : "FAILED");
-                }
-            }
-
-            // Also process in DeviceConnection for JSON download state machine (only for connected device)
-            if (isFromConnectedDevice) {
-                DeviceConnection::instance().processSdoResponse(&rxframe);
+            // Route all SDO responses to the queue for processing by scan or device connection
+            if (sdoResponseQueue != nullptr) {
+                xQueueSend(sdoResponseQueue, &rxframe, 0);
             }
         }
         else {
@@ -490,30 +472,24 @@ void receiveAndProcessCanMessages() {
     }
 }
 
-void processStateTimeouts() {
-    DeviceConnection::instance().checkSerialTimeout();
-
+void processFirmwareUpdateState() {
     if (FirmwareUpdateHandler::instance().getState() == FirmwareUpdateHandler::REQUEST_JSON) {
         DeviceConnection& conn = DeviceConnection::instance();
 
-        if (conn.getState() != DeviceConnection::OBTAINSERIAL) {
-            if (conn.getState() == DeviceConnection::IDLE) {
-                FirmwareUpdateHandler::instance().reset();
-                return;
-            }
-            conn.setState(DeviceConnection::OBTAINSERIAL);
-            conn.setRetries(50);
-        }
-
-        conn.decrementRetries();
-
-        if (conn.getRetries() < 0) {
+        // If device connection is idle, reset firmware update
+        if (conn.getState() == DeviceConnection::IDLE) {
             FirmwareUpdateHandler::instance().reset();
-        } else {
-            SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
+            return;
         }
 
-        delay(100);
+        // If device is in error state, reset firmware update
+        if (conn.getState() == DeviceConnection::ERROR) {
+            FirmwareUpdateHandler::instance().reset();
+            return;
+        }
+
+        // Otherwise, wait for serial acquisition to complete
+        // The DeviceConnection state machine handles the actual communication
     }
 }
 
@@ -543,11 +519,14 @@ void canTask(void* parameter) {
         // CAN message reception and routing
         receiveAndProcessCanMessages();
 
-        // State machine timeouts
-        processStateTimeouts();
+        // Device connection state machine
+        DeviceConnection::instance().processConnection();
 
         // Device scanning
         DeviceDiscovery::instance().processScan();
+
+        // Firmware update state handling
+        processFirmwareUpdateState();
 
         // Small delay to prevent task starvation
         vTaskDelay(pdMS_TO_TICKS(1));

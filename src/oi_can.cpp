@@ -87,10 +87,9 @@ int StartUpdate(String fileName) {
 // Helper: Initiate JSON download from device
 static void initiateJsonDownload() {
   DBG_OUTPUT_PORT.printf("[GetRawJson] Starting JSON download from node %d\n", conn.getNodeId());
-  conn.setState(DeviceConnection::OBTAIN_JSON);
   conn.clearJsonCache();
-  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_STRINGS, 0);
-  DBG_OUTPUT_PORT.println("[GetRawJson] Sent SDO request, waiting for response...");
+  conn.startJsonDownload();
+  DBG_OUTPUT_PORT.println("[GetRawJson] Started JSON download state machine");
 }
 
 // Helper: Handle streaming callback updates during JSON download
@@ -144,7 +143,7 @@ static bool waitForJsonDownload(int& lastStreamedSize) {
   int lastBufferSize = 0;
   int loopCount = 0;
 
-  while (conn.getState() == DeviceConnection::OBTAIN_JSON) {
+  while (conn.isDownloadingJson()) {
     // CAN messages are now processed by canTask in background
     // Just wait and check the state
 
@@ -879,9 +878,9 @@ bool ReloadJson() {
     DBG_OUTPUT_PORT.printf("Removed cached JSON file: %s\r\n", conn.getJsonFileName());
   }
 
-  // Trigger JSON download
-  conn.setState(DeviceConnection::OBTAINSERIAL);
-  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
+  // Clear cached JSON and trigger download
+  conn.clearJsonCache();
+  conn.startJsonDownload();
 
   DBG_OUTPUT_PORT.println("Reloading JSON from device");
   return true;
@@ -918,10 +917,9 @@ bool ResetDevice() {
   DBG_OUTPUT_PORT.println("Device reset command sent");
 
   // The device will reset immediately and won't send an acknowledgment
-  // After a short delay, trigger JSON reload
+  // After a short delay, trigger serial re-acquisition
   delay(500); // Give device time to start resetting
-  conn.setState(DeviceConnection::OBTAINSERIAL);
-  conn.setRetries(50);
+  conn.startSerialAcquisition();
 
   return true;
 }
