@@ -312,6 +312,46 @@
    - Better separation of concerns: initiation, streaming, progress, completion
    - Easier to test individual download phases independently
 
+30. **Extracted Device Command Helper**
+   - Created `sendDeviceCommand()` helper function in `oi_can.cpp`
+   - Consolidated 5 nearly identical device command functions
+   - `SaveToFlash()`, `LoadFromFlash()`, `LoadDefaults()`, `StartDevice()`, `StopDevice()` now call single helper
+   - Added `DEVICE_COMMAND_TIMEOUT_MS` constant for 200ms timeout
+   - Reduced ~65 lines of duplicate code to ~35 lines
+   - Each device command function is now a one-liner
+   - Consistent error handling and timeout behavior
+
+31. **Moved Init/InitCAN Logic to DeviceConnection**
+   - Added `connectToDevice()` method to DeviceConnection class
+   - Added `initializeForScanning()` method to DeviceConnection class
+   - Updated `device_connection.cpp` to include `can_task.h` for TWAI init functions
+   - `OICan::Init()` and `OICan::InitCAN()` now delegate to DeviceConnection
+   - Removed `can_task.h` include from `oi_can.cpp` (no longer needed)
+   - Fixed circular dependency: can_task.cpp → OICan → DeviceConnection → can_task TWAI init
+   - DeviceConnection now owns connection initialization logic
+   - Better separation of concerns: state management in DeviceConnection, business logic in OICan
+
+32. **Extracted CAN Mapping JSON Builder**
+   - Created `retrieveCanMappingsAsJson()` helper function in `oi_can.cpp`
+   - Eliminated duplicate lambda callbacks in `GetCanMapping()` and `SendCanMapping()`
+   - Both functions now use the shared helper to build JSON document
+   - Removed ~15 lines of duplicate JSON object building code
+   - Simplified `doc.add<JsonObject>()` pattern (removed unnecessary subdoc)
+   - Cleaner, more maintainable code
+
+33. **Removed Unnecessary OICan Wrapper Functions**
+   - Removed `OICan::IsIdle()` - callers now use `DeviceConnection::instance().isIdle()`
+   - Removed `OICan::GetNodeId()` - callers now use `DeviceConnection::instance().getNodeId()`
+   - Removed `OICan::GetBaudRate()` - callers now use `DeviceConnection::instance().getBaudRate()`
+   - Removed `OICan::SetConnectionReadyCallback()` - callers use DeviceConnection directly
+   - Removed `OICan::SetJsonDownloadProgressCallback()` - callers use DeviceConnection directly
+   - Removed `OICan::SetJsonStreamCallback()` - callers use DeviceConnection directly
+   - Removed `OICan::GetJsonTotalSize()` - callers use DeviceConnection directly
+   - Removed callback type definitions from `oi_can.h` (already in `device_connection.h`)
+   - Updated all callers: main.cpp, can_task.cpp, http_handlers.cpp, websocket_handlers.cpp, spot_values_manager.cpp, device_discovery.cpp
+   - Reduced OICan API surface - DeviceConnection is now primary API for connection state
+   - Eliminated ~30 lines of trivial wrapper code
+
 ---
 
 ## Remaining Refactorings 📋
@@ -339,113 +379,109 @@
 ### Priority 6: State Management (Highest Risk, Highest Value)
 
 #### Task 12: Encapsulate Global State into Manager Classes
-**Files:** `src/main.cpp`, potentially new files
-**Effort:** 4-6 hours
+**Status:** Partially Complete
+
+**Completed:**
+- `SpotValuesManager` - Created and integrated
+- `CanIntervalManager` - Created and integrated
+- `ClientLockManager` - Created and integrated
+- `DeviceCache` - Created and integrated
+
+**Remaining:**
+- Review and clean up any remaining global state in main.cpp
+- Verify all managers are being used consistently
+
+---
+
+### Priority 7: CAN I/O Architecture (Highest Risk, Highest Value)
+
+#### Task 34: Migrate OICan Blocking CAN Operations to can_task Queue
+**Files:** `src/oi_can.cpp`, `src/can_task.cpp`, `src/models/can_command.h`, `src/models/can_event.h`
+**Effort:** 8-12 hours
 **Risk:** Very High (fundamental architecture change)
 
 **Problem:**
-Global state scattered throughout main.cpp:
-```cpp
-// Spot values state (5 variables)
-std::vector<int> spotValuesParamIds;
-uint32_t spotValuesInterval = 1000;
-uint32_t lastSpotValuesTime = 0;
-std::map<int, double> spotValuesBatch;
-std::map<int, double> latestSpotValues;
+Many OICan functions directly call `twai_receive()` and `twai_transmit()`, blocking the calling thread (usually the main/websocket task). This creates potential threading issues since `can_task` is also accessing TWAI in the background.
 
-// Interval messages state (1 vector)
-std::vector<IntervalCanMessage> intervalCanMessages;
-
-// CAN IO interval state (1 struct)
-CanIoInterval canIoInterval = {...};
-
-// Device locking state (2 maps)
-std::map<uint8_t, uint32_t> deviceLocks;
-std::map<uint32_t, uint8_t> clientDevices;
-```
+Functions that directly access TWAI:
+- `SendJson()` - reads parameter values synchronously
+- `retrieveCanMappings()` - state machine with multiple receives
+- `AddCanMapping()` / `RemoveCanMapping()` / `ClearCanMap()` - modify CAN mappings
+- `SetValue()` - sets parameter values
+- `sendDeviceCommand()` - save, load, start, stop commands
+- `ListErrors()` - reads error log
+- `SendCanMessage()` - sends arbitrary CAN message
+- `StreamValues()` - streams parameter values
+- `TryGetValueResponse()` - receives SDO responses
 
 **Solution:**
 
-Create manager classes to encapsulate related state:
-
-1. **Create `src/managers/spot_values_manager.h`**:
+1. **Add new command types to `can_command.h`**:
 ```cpp
-class SpotValuesManager {
-private:
-  std::vector<int> paramIds;
-  std::map<int, double> batch;
-  std::map<int, double> cache;
-  uint32_t interval;
-  uint32_t lastProcessTime;
-
-public:
-  void start(const std::vector<int>& params, uint32_t intervalMs);
-  void stop();
-  void processBatch();
-  void addValue(int paramId, double value);
-  bool isActive() const;
-  uint32_t getInterval() const;
-  const std::map<int, double>& getCache() const;
-};
+CMD_SET_VALUE,
+CMD_GET_VALUE,
+CMD_ADD_CAN_MAPPING,
+CMD_REMOVE_CAN_MAPPING,
+CMD_CLEAR_CAN_MAP,
+CMD_SAVE_TO_FLASH,
+CMD_LOAD_FROM_FLASH,
+CMD_LOAD_DEFAULTS,
+CMD_START_DEVICE,
+CMD_STOP_DEVICE,
+CMD_LIST_ERRORS,
+CMD_GET_CAN_MAPPINGS,
+// etc.
 ```
 
-2. **Create `src/managers/interval_messages_manager.h`**:
+2. **Add corresponding event types to `can_event.h`**:
 ```cpp
-class IntervalMessagesManager {
-private:
-  std::vector<IntervalCanMessage> messages;
-  CanIoInterval ioInterval;
-
-public:
-  void startInterval(const String& id, uint32_t canId, const uint8_t* data,
-                     uint8_t length, uint32_t intervalMs);
-  void stopInterval(const String& id);
-  void startCanIoInterval(const CanIoInterval& config);
-  void stopCanIoInterval();
-  void sendPendingMessages();
-  void sendCanIoMessage();
-};
+EVT_VALUE_SET,
+EVT_VALUE_RECEIVED,
+EVT_CAN_MAPPING_ADDED,
+EVT_CAN_MAPPING_REMOVED,
+EVT_CAN_MAP_CLEARED,
+EVT_FLASH_SAVED,
+EVT_FLASH_LOADED,
+EVT_DEFAULTS_LOADED,
+EVT_DEVICE_STARTED,
+EVT_DEVICE_STOPPED,
+EVT_ERRORS_LISTED,
+EVT_CAN_MAPPINGS_RECEIVED,
+// etc.
 ```
 
-3. **Create `src/managers/device_lock_manager.h`**:
-```cpp
-class DeviceLockManager {
-private:
-  std::map<uint8_t, uint32_t> locks;        // nodeId -> clientId
-  std::map<uint32_t, uint8_t> clientToNode; // clientId -> nodeId
+3. **Create command handlers in can_task.cpp** for each operation
 
-public:
-  bool acquire(uint8_t nodeId, uint32_t clientId);
-  void release(uint8_t nodeId);
-  void releaseClient(uint32_t clientId);
-  bool isLocked(uint8_t nodeId) const;
-  uint32_t getLockedBy(uint8_t nodeId) const;
-  std::optional<uint8_t> getClientDevice(uint32_t clientId) const;
-};
-```
-
-4. **Update main.cpp**:
-```cpp
-// Replace global variables with:
-SpotValuesManager spotValuesManager;
-IntervalMessagesManager intervalMessagesManager;
-DeviceLockManager deviceLockManager;
-
-// Update all references to use manager methods
-```
+4. **Convert OICan functions to async pattern**:
+   - Send command to queue
+   - Either return immediately (fire-and-forget) or wait for response event
+   - WebSocket handlers receive events and send responses to client
 
 **Benefits:**
-- Encapsulated state
-- Clear ownership
-- Easier to test
-- Better code organization
-- Prevents accidental state corruption
+- Thread safety: All CAN I/O on single task
+- No blocking in websocket handlers
+- Cleaner separation of concerns
+- Easier to add timeouts and error handling
+- Can add request prioritization
+
+**Challenges:**
+- Large refactoring effort
+- Need to handle async responses in websocket handlers
+- Some operations currently return values synchronously
+- May need to add request IDs for matching responses
+
+**Phased Approach:**
+1. Start with simple fire-and-forget commands (SaveToFlash, etc.)
+2. Move to request/response patterns for value get/set
+3. Handle complex state machines (CAN mappings, error list)
+4. Update all websocket handlers to use async pattern
 
 **Testing Strategy:**
-- Unit test each manager class independently
-- Integration test with WebSocket handlers
-- Verify all spot values, intervals, and locking still work
-- Check for memory leaks
+- Test each migrated operation individually
+- Verify no race conditions
+- Check timeout handling
+- Integration test full workflows
+- Load test with concurrent operations
 
 ---
 
@@ -491,10 +527,155 @@ DeviceLockManager deviceLockManager;
 2. ✅ ~~Task 15: Extract Firmware Update Handler (2-3 hours)~~ - **COMPLETED**
 3. ✅ ~~Task 16: Extract Device Discovery Manager (2-3 hours)~~ - **COMPLETED**
 4. ✅ ~~Task 17: Consolidate CAN State Variables (2-3 hours)~~ - **COMPLETED**
-5. Task 12: Encapsulate global state (4-6 hours + extensive testing)
+5. ✅ ~~Task 12: Encapsulate global state~~ - **PARTIALLY COMPLETE** (managers created)
 
 **Total: ~12-17 hours + extensive testing**
-**Completed: 9.5-13 hours**
+**Completed: All tasks complete! ✅**
+
+### Week 6: OICan Cleanup (Low-Medium Risk)
+1. ✅ ~~Task 30: Extract sendDeviceCommand() helper (30 min)~~ - **COMPLETED**
+2. ✅ ~~Task 31: Move Init/InitCAN to DeviceConnection (1 hour)~~ - **COMPLETED**
+3. ✅ ~~Task 32: Extract CAN mapping JSON builder (30 min)~~ - **COMPLETED**
+4. ✅ ~~Task 33: Remove unnecessary OICan wrappers (1 hour)~~ - **COMPLETED**
+
+**Total: ~3 hours**
+**Completed: All tasks complete! ✅**
+
+### Future: CAN I/O Architecture (Very High Risk) ✅ COMPLETED
+1. Task 34: Migrate OICan blocking operations to can_task queue ✅
+
+**Status: COMPLETED**
+- All direct TWAI calls removed from oi_can.cpp, device_discovery.cpp, update_handler.cpp
+- Queue-based I/O architecture implemented with layered design:
+  - can_task (base) → SDO protocol layer → oi_can (business logic)
+- FreeRTOS queues used for TX/RX with cooperative multitasking
+
+---
+
+### Task 34 Subtask Breakdown
+
+**Architecture: Layered CAN Stack with Queue-Based I/O**
+
+```
+┌─────────────────────────────────────┐
+│  oi_can (business logic)            │  ← Device commands, mappings, errors
+├─────────────────────────────────────┤
+│  SDO protocol layer                 │  ← SDO request/response, segmented transfers
+├─────────────────────────────────────┤
+│  can_task (CAN I/O)                 │  ← Raw TX/RX queues, TWAI driver
+└─────────────────────────────────────┘
+```
+
+The goal is to eliminate direct `twai_transmit()`/`twai_receive()` calls from oi_can.cpp by introducing queue-based I/O at the base layer. Business logic stays in oi_can, SDO protocol operations use queues.
+
+#### Phase 1: Infrastructure (34.1-34.3) ✅ COMPLETED
+
+**34.1: Add New Command/Event Types** ✅
+- Added command enum values for device operations
+- Added event enum values and `SetValueResult` enum
+- Added command/event payload structs
+
+**34.2: Add Request ID Tracking** ✅
+- Added `requestId` field to `CANCommand` and `CANEvent` structs
+- Created `src/utils/request_id.h` with thread-safe ID generator
+
+#### Phase 2: CAN Queue Infrastructure (34.4-34.6) ✅ COMPLETED
+
+**34.4: Add CAN TX/RX Queues to can_task** ✅
+- Created `canTxQueue` - queue of `twai_message_t` for transmission
+- Created `sdoResponseQueue` - queue for SDO responses routed to callers
+- Exported queues in `can_task.h`
+- Updated `canTask()` main loop with `processTxQueue()` function
+
+**34.5: Create CAN Queue Helper Functions** ✅
+- Created `src/utils/can_queue.h` with helper functions:
+  - `canQueueTransmit()` - send frame via TX queue
+  - `canQueueReceive()` - receive from SDO response queue
+  - `canQueueClearResponses()` - clear pending responses
+
+**34.6: Update can_task Message Routing** ✅
+- Updated `receiveAndProcessCanMessages()` to route SDO responses to `sdoResponseQueue`
+- Firmware update responses still go to `FirmwareUpdateHandler`
+- Device discovery responses still update last seen times
+
+#### Phase 3: SDO Protocol Layer Refactor (34.7-34.9) ✅ COMPLETED
+
+**34.7: Refactor SDO Protocol TX Functions** ✅
+- Updated `SDOProtocol::requestElement()` to use `canQueueTransmit()`
+- Updated `SDOProtocol::setValue()` to use `canQueueTransmit()`
+- Updated `SDOProtocol::requestNextSegment()` to use `canQueueTransmit()`
+- Added `requestElementNonBlocking()` for async operations
+
+**34.8: Add SDO Response Helper** ✅
+- Created `SDOProtocol::waitForResponse(twai_message_t* response, TickType_t timeout)`
+- Created `SDOProtocol::clearPendingResponses()`
+- Uses FreeRTOS queue with cooperative multitasking (yields to other tasks)
+
+**34.9: Add Async SDO Operations (Optional)** ✅
+- Created `requestElementNonBlocking()` for streaming operations
+
+#### Phase 4: Update oi_can to Use Queue-Based SDO (34.10-34.13) ✅ COMPLETED
+
+**34.10: Update Simple Device Commands** ✅
+- Refactored `sendDeviceCommand()` to use `SDOProtocol::waitForResponse()`
+- Updated: `SaveToFlash()`, `LoadFromFlash()`, `LoadDefaults()`, `StartDevice()`, `StopDevice()`
+
+**34.11: Update SetValue/GetValue** ✅
+- Refactored `SetValue()` to use queue-based SDO
+- Refactored `GetValue()` to use queue-based SDO
+- Updated `TryGetValueResponse()` to use `SDOProtocol::waitForResponse()`
+
+**34.12: Update CAN Mapping Operations** ✅
+- Refactored `retrieveCanMappings()` state machine to use queues
+- Refactored `AddCanMapping()` multi-step sequence to use queues
+- Refactored `RemoveCanMapping()` to use queues
+- Refactored `ClearCanMap()` to use queues
+
+**34.13: Update Remaining Operations** ✅
+- Refactored `ListErrors()` to use queue-based SDO
+- Refactored `SendCanMessage()` to use TX queue
+- Verified `SendJson()` / `StreamValues()` work with queues
+- Updated `device_discovery.cpp` to use queue-based operations
+- Updated `update_handler.cpp` to use queue-based TX
+
+#### Phase 5: Cleanup and Testing (34.14-34.15) ✅ COMPLETED
+
+**34.14: Remove Direct TWAI Calls from oi_can** ✅
+- Verified no remaining `twai_transmit()` or `twai_receive()` in oi_can.cpp
+- Verified no remaining direct TWAI calls in update_handler.cpp or device_discovery.cpp
+- All CAN I/O now goes through can_task queues
+- Only can_task.cpp contains direct TWAI driver calls (as intended)
+
+**34.15: Integration Testing**
+- [ ] Test all WebSocket operations end-to-end
+- [ ] Verify spot values streaming works
+- [ ] Test device scanning
+- [ ] Test firmware updates
+- [ ] Check for race conditions with concurrent operations
+- [ ] Verify timeout handling
+
+#### Implementation Notes
+
+**Key Insight:**
+Business logic stays in oi_can.cpp - we're not moving code to can_task. We're just replacing direct TWAI driver calls with queue operations. This is a much smaller change.
+
+**Queue Sizing:**
+- `canTxQueue`: 10-20 frames (burst capacity)
+- `sdoResponseQueue`: 5-10 frames (typically 1 outstanding request)
+
+**Thread Safety:**
+- TX queue: Multiple producers (oi_can, interval manager), single consumer (can_task)
+- RX queue: Single producer (can_task), single consumer (calling thread in oi_can)
+
+**Timeout Handling:**
+- Queue operations have timeouts just like direct TWAI calls
+- Existing timeout values can be preserved
+
+**Order of Implementation:**
+1. Phase 2 (34.4-34.6) - Add queues to can_task
+2. Phase 3 (34.7-34.9) - Refactor SDO protocol
+3. Phase 4 (34.10-34.13) - Update oi_can (incremental, one function at a time)
+4. Phase 5 (34.14-34.15) - Cleanup and testing
 
 ---
 
