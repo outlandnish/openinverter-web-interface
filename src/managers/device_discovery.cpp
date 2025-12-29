@@ -409,11 +409,11 @@ void DeviceDiscovery::updateLastSeen(const char* serial, uint32_t lastSeen) {
 
 // Update device last seen by node ID
 void DeviceDiscovery::updateLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen) {
-  // Don't send discovery events when actively connected to a device
+  // Don't send discovery events for the currently connected device
   // This prevents "device discovered" spam during normal communication
   DeviceConnection& conn = DeviceConnection::instance();
-  if (!conn.isIdle() && conn.getNodeId() == nodeId) {
-    // We're actively communicating with this device - just update lastSeen quietly
+  if (conn.getNodeId() == nodeId && conn.getNodeId() != 0) {
+    // We're connected to this device - just update lastSeen quietly without callback
     for (auto& kv : devices) {
       if (kv.second.nodeId == nodeId) {
         kv.second.lastSeen = lastSeen;
