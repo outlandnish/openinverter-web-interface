@@ -42,14 +42,3 @@ Out of the box, this works with:
 * [CANLite](https://openinverter.org/shop/index.php?route=product/product&product_id=78)
 
 The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3. Just add the appropriate Platformio environments or use the override file
-
-# Firmware
-To compile it follow the [instructions below](#development).
-
-# Development
-
-## PlatformIO
-[PlatformIO](https://platformio.org/) is a set of tools, among which [PlatformIO Core (CLI)](https://docs.platformio.org/en/latest/core/index.html) is a command line interface that can be used to build many kind of projects. In particular Arduino-based projects like this one.
-(Note: even if PlatformIO provides an IDE, these instructions only target the CLI.)
-* [Initial setup](doc/PLATFORMIO_setup.md)
-* [Day to day usage](doc/PLATFORMIO_usage.md)
