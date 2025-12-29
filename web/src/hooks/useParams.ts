@@ -85,7 +85,7 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
 
   const pendingValuesRequestRef = useRef<{
     nodeId: number
-    resolve: (values: Record<string, number | string>) => void
+    resolve: (rawParams: ParameterList) => void
     reject: (error: Error) => void
     timeoutId?: ReturnType<typeof setTimeout>
   } | null>(null)
@@ -94,27 +94,9 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
     setRefreshTrigger(prev => prev + 1)
   }
 
-  // Request schema via WebSocket and return a promise
-  const requestSchemaViaWebSocket = (nodeId: number): Promise<ParameterList> => {
-    return new Promise((resolve, reject) => {
-      // Set a timeout in case we don't get a response
-      const timeoutId = setTimeout(() => {
-        if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
-          pendingSchemaRequestRef.current.reject(new Error('Schema request timeout'))
-          pendingSchemaRequestRef.current = null
-        }
-      }, 60000) // 60 second timeout
-
-      // Store the pending request with timeout reference
-      pendingSchemaRequestRef.current = { nodeId, resolve, reject, timeoutId }
-
-      // Send WebSocket message
-      sendMessage('getParamSchema', { nodeId })
-    })
-  }
-
   // Request values via WebSocket and return a promise
-  const requestValuesViaWebSocket = (nodeId: number): Promise<Record<string, number | string>> => {
+  // Returns the full raw params (which contains both schema info and values)
+  const requestValuesViaWebSocket = (nodeId: number): Promise<ParameterList> => {
     return new Promise((resolve, reject) => {
       // Set a timeout in case we don't get a response
       const timeoutId = setTimeout(() => {
@@ -238,7 +220,7 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
       // Handle values data response
       else if (message.event === 'paramValuesData') {
         const nodeId = message.data.nodeId
-        const rawParams = message.data.rawParams
+        const rawParams = message.data.rawParams as ParameterList
 
         // Check if this response is for a pending request
         if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
@@ -249,15 +231,8 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
             clearTimeout(pendingValuesRequestRef.current.timeoutId)
           }
 
-          // Extract id -> value mapping from raw params on frontend
-          const values: Record<string, number | string> = {}
-          for (const param of Object.values(rawParams as ParameterList)) {
-            if (param.id !== undefined && param.value !== undefined) {
-              values[param.id.toString()] = param.value
-            }
-          }
-
-          pendingValuesRequestRef.current.resolve(values)
+          // Return the full raw params (contains both schema and values)
+          pendingValuesRequestRef.current.resolve(rawParams)
           pendingValuesRequestRef.current = null
         }
       }
@@ -332,45 +307,19 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         setDownloadProgress(0)
         setDownloadTotal(0) // Reset for new download
 
-        // STEP 1: Get schema (from cache or fetch from device)
-        let schema: ParameterList
-        const cachedSchema = !forceRefresh ? ParamStorage.getSchema(deviceSerial) : null
+        // Check for cached schema in localStorage
+        let schema: ParameterList | null = !forceRefresh ? ParamStorage.getSchema(deviceSerial) : null
 
-        if (cachedSchema) {
+        if (schema) {
           console.log('Using cached schema from localStorage for device:', deviceSerial)
-          schema = cachedSchema
-        } else {
-          console.log('Fetching fresh schema from device for nodeId:', explicitNodeId)
-          try {
-            schema = await requestSchemaViaWebSocket(explicitNodeId)
-
-            // Check if request was aborted while waiting
-            if (abortController.signal.aborted) {
-              console.log('Schema fetch aborted for device:', deviceSerial)
-              return
-            }
-
-            // Process schema to parse enums from unit strings
-            schema = processParameters(schema)
-
-            // Save schema to localStorage
-            ParamStorage.saveSchema(deviceSerial, schema)
-          } catch (err) {
-            // Clear pending request on abort
-            if (abortController.signal.aborted) {
-              pendingSchemaRequestRef.current = null
-              console.log('Schema fetch was aborted')
-              return
-            }
-            throw err // Re-throw if not aborted
-          }
         }
 
-        // STEP 2: Always fetch fresh values from device
-        console.log('Fetching fresh values from device for nodeId:', explicitNodeId)
-        let values: Record<string, number | string>
+        // Always fetch values from device - this also downloads the full JSON if not cached
+        // The values response contains the full parameter data (schema + values)
+        console.log('Fetching values from device for nodeId:', explicitNodeId)
+        let rawParams: ParameterList
         try {
-          values = await requestValuesViaWebSocket(explicitNodeId)
+          rawParams = await requestValuesViaWebSocket(explicitNodeId)
 
           // Check if request was aborted while waiting
           if (abortController.signal.aborted) {
@@ -387,16 +336,28 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
           throw err // Re-throw if not aborted
         }
 
-        // STEP 3: Merge schema + values
+        // If no cached schema, extract from rawParams and cache it
+        if (!schema) {
+          console.log('Extracting schema from raw params for device:', deviceSerial)
+          schema = {}
+          for (const [key, param] of Object.entries(rawParams)) {
+            // Strip 'value' field for schema
+            const { value, ...schemaFields } = param
+            schema[key] = schemaFields as any
+          }
+          // Process schema to parse enums from unit strings
+          schema = processParameters(schema)
+          // Save schema to localStorage for future use
+          ParamStorage.saveSchema(deviceSerial, schema)
+        }
+
+        // Merge cached schema with fresh values from rawParams
         const mergedParams: ParameterList = {}
         for (const [key, paramDef] of Object.entries(schema)) {
-          const paramId = paramDef.id
           mergedParams[key] = {
             ...paramDef,
-            // Update value from fresh values if available
-            value: paramId !== undefined && values[paramId] !== undefined
-              ? values[paramId]
-              : paramDef.value // Fallback to schema value if not found
+            // Use value from rawParams (fresh from device)
+            value: rawParams[key]?.value ?? paramDef.value
           }
         }
 
