@@ -107,6 +107,6 @@ private:
   bool requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4]);
 
   // Constants
-  static const unsigned long SCAN_DELAY_MS = 50; // Delay between node probes
-  static const unsigned long SCAN_TIMEOUT_MS = 100; // Timeout for scan response
+  static const unsigned long SCAN_DELAY_MS = 20; // Delay between node probes
+  static const unsigned long SCAN_TIMEOUT_MS = 50; // Timeout for scan response
 };
