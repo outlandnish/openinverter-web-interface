@@ -80,12 +80,14 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
     nodeId: number
     resolve: (schema: ParameterList) => void
     reject: (error: Error) => void
+    timeoutId?: ReturnType<typeof setTimeout>
   } | null>(null)
 
   const pendingValuesRequestRef = useRef<{
     nodeId: number
     resolve: (values: Record<string, number | string>) => void
     reject: (error: Error) => void
+    timeoutId?: ReturnType<typeof setTimeout>
   } | null>(null)
 
   const refresh = async () => {
@@ -95,38 +97,38 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
   // Request schema via WebSocket and return a promise
   const requestSchemaViaWebSocket = (nodeId: number): Promise<ParameterList> => {
     return new Promise((resolve, reject) => {
-      // Store the pending request
-      pendingSchemaRequestRef.current = { nodeId, resolve, reject }
-
-      // Send WebSocket message
-      sendMessage('getParamSchema', { nodeId })
-
       // Set a timeout in case we don't get a response
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
           pendingSchemaRequestRef.current.reject(new Error('Schema request timeout'))
           pendingSchemaRequestRef.current = null
         }
-      }, 30000) // 30 second timeout
+      }, 60000) // 60 second timeout
+
+      // Store the pending request with timeout reference
+      pendingSchemaRequestRef.current = { nodeId, resolve, reject, timeoutId }
+
+      // Send WebSocket message
+      sendMessage('getParamSchema', { nodeId })
     })
   }
 
   // Request values via WebSocket and return a promise
   const requestValuesViaWebSocket = (nodeId: number): Promise<Record<string, number | string>> => {
     return new Promise((resolve, reject) => {
-      // Store the pending request
-      pendingValuesRequestRef.current = { nodeId, resolve, reject }
-
-      // Send WebSocket message
-      sendMessage('getParamValues', { nodeId })
-
       // Set a timeout in case we don't get a response
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
           pendingValuesRequestRef.current.reject(new Error('Values request timeout'))
           pendingValuesRequestRef.current = null
         }
-      }, 10000) // 10 second timeout (values are faster than full schema)
+      }, 60000) // 60 second timeout (downloads can take a while for large param sets)
+
+      // Store the pending request with timeout reference
+      pendingValuesRequestRef.current = { nodeId, resolve, reject, timeoutId }
+
+      // Send WebSocket message
+      sendMessage('getParamValues', { nodeId })
     })
   }
 
@@ -177,6 +179,11 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
           console.log('Received param schema via WebSocket for nodeId:', nodeId)
 
+          // Clear timeout
+          if (pendingSchemaRequestRef.current.timeoutId) {
+            clearTimeout(pendingSchemaRequestRef.current.timeoutId)
+          }
+
           // Strip 'value' fields from schema on frontend
           const schema: ParameterList = {}
           for (const [key, param] of Object.entries(rawSchema as ParameterList)) {
@@ -197,8 +204,34 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         // Check if this error is for a pending request
         if (pendingSchemaRequestRef.current && pendingSchemaRequestRef.current.nodeId === nodeId) {
           console.error('Schema error via WebSocket:', error)
+
+          // Clear timeout
+          if (pendingSchemaRequestRef.current.timeoutId) {
+            clearTimeout(pendingSchemaRequestRef.current.timeoutId)
+          }
+
           pendingSchemaRequestRef.current.reject(new Error(error))
           pendingSchemaRequestRef.current = null
+        }
+      }
+
+      // Handle values pending response (download in progress)
+      else if (message.event === 'paramValuesPending') {
+        const nodeId = message.data.nodeId
+        console.log('Param values download pending for nodeId:', nodeId, message.data.message)
+
+        // Reset timeout when we receive pending - download is in progress
+        if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
+          // Clear existing timeout and set a new one
+          if (pendingValuesRequestRef.current.timeoutId) {
+            clearTimeout(pendingValuesRequestRef.current.timeoutId)
+          }
+          pendingValuesRequestRef.current.timeoutId = setTimeout(() => {
+            if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
+              pendingValuesRequestRef.current.reject(new Error('Values download timeout'))
+              pendingValuesRequestRef.current = null
+            }
+          }, 120000) // 120 second timeout for active downloads
         }
       }
 
@@ -210,6 +243,11 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         // Check if this response is for a pending request
         if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
           console.log('Received param values via WebSocket for nodeId:', nodeId)
+
+          // Clear timeout
+          if (pendingValuesRequestRef.current.timeoutId) {
+            clearTimeout(pendingValuesRequestRef.current.timeoutId)
+          }
 
           // Extract id -> value mapping from raw params on frontend
           const values: Record<string, number | string> = {}
@@ -232,6 +270,12 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
         // Check if this error is for a pending request
         if (pendingValuesRequestRef.current && pendingValuesRequestRef.current.nodeId === nodeId) {
           console.error('Values error via WebSocket:', error)
+
+          // Clear timeout
+          if (pendingValuesRequestRef.current.timeoutId) {
+            clearTimeout(pendingValuesRequestRef.current.timeoutId)
+          }
+
           pendingValuesRequestRef.current.reject(new Error(error))
           pendingValuesRequestRef.current = null
         }
@@ -390,12 +434,18 @@ export function useParams(deviceSerial: string | undefined, nodeId: number | und
     // Cleanup: abort the request when component unmounts or deviceSerial/refreshTrigger/nodeId changes
     return () => {
       abortController.abort()
-      // Clear any pending WebSocket requests
+      // Clear any pending WebSocket requests and their timeouts
       if (pendingSchemaRequestRef.current) {
+        if (pendingSchemaRequestRef.current.timeoutId) {
+          clearTimeout(pendingSchemaRequestRef.current.timeoutId)
+        }
         pendingSchemaRequestRef.current.reject(new Error('Request cancelled'))
         pendingSchemaRequestRef.current = null
       }
       if (pendingValuesRequestRef.current) {
+        if (pendingValuesRequestRef.current.timeoutId) {
+          clearTimeout(pendingValuesRequestRef.current.timeoutId)
+        }
         pendingValuesRequestRef.current.reject(new Error('Request cancelled'))
         pendingValuesRequestRef.current = null
       }
