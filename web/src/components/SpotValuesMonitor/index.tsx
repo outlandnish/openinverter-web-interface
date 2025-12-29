@@ -1,6 +1,6 @@
 import { useEffect } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
-import { useParams } from '@hooks/useParams'
+import { useParamSchema } from '@hooks/useParamSchema'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import MultiLineChart from '@components/MultiLineChart'
@@ -12,7 +12,7 @@ const MAX_HISTORY_POINTS = 100
 
 interface SpotValuesMonitorProps {
   serial: string
-  nodeId: number  // Required: nodeId for explicit device parameter loading (multi-client support)
+  nodeId: number
   showHeader?: boolean
   showBackButton?: boolean
   onBack?: () => void
@@ -54,8 +54,9 @@ export default function SpotValuesMonitor({
   // Destructure monitoring state for easier access
   const { streaming, interval, spotValues, historicalData, selectedParams, connectedSerial } = monitoring
 
-  // Load device parameters using explicit nodeId for multi-client support
-  const { params, loading: paramsLoading, getDisplayName } = useParams(serial, nodeId)
+  // Load cached parameter schema (does not trigger full download from OpenInverter)
+  // Tries: 1) localStorage cache, 2) ESP32 cache, 3) shows "no schema" message
+  const { schema: params, loading: schemaLoading, getDisplayName } = useParamSchema(serial, nodeId)
 
   // WebSocket connection
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
@@ -224,29 +225,41 @@ export default function SpotValuesMonitor({
     }
   }
 
-  // Only show loading screen on initial load (when params don't exist yet)
-  if (paramsLoading && !params) {
+  // Show loading state while fetching schema
+  if (schemaLoading) {
     return (
-      <div class="loading" style={{
+      <div class="spot-values-loading" style={{
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '300px'
       }}>
-        <LoadingSpinner size="large" label={content.loadingParameters} />
-        {serial && connectedSerial && normalizeSerial(connectedSerial) !== normalizeSerial(serial) && (
-          <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', color: '#856404', maxWidth: '500px' }}>
-            {content.loadingWrongDeviceWarningPrefix} <strong>{connectedSerial}</strong>{content.loadingWrongDeviceWarningEnd}
-          </div>
-        )}
+        <LoadingSpinner size="large" label={content.loadingSchema} />
       </div>
     )
   }
 
+  // If no schema available (download failed or not connected)
   if (!params) {
     return (
-      <div class="error-message">{content.noParametersLoaded}</div>
+      <div class="spot-values-no-schema" style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '300px',
+        padding: '2rem',
+        textAlign: 'center',
+        color: 'var(--text-muted)'
+      }}>
+        <div style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>
+          {content.noSchemaAvailable}
+        </div>
+        <div style={{ fontSize: '0.9rem' }}>
+          {content.schemaLoadFailed}
+        </div>
+      </div>
     )
   }
 

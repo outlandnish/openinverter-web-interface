@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'preact/hooks'
 import { useRoute } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
-import { useParams } from '@hooks/useParams'
+import { useParamSchema } from '@hooks/useParamSchema'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
 import { DeviceDetailsProvider, useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import Layout from '@components/Layout'
@@ -40,9 +40,9 @@ function DeviceDetailsContent() {
   const [deviceName, setDeviceName] = useState<string>('')
   const [deviceInfoExpanded, setDeviceInfoExpanded] = useState(false)
 
-  // Load device parameters (only when savedNodeId is available)
-  const { params } = useParams(
-    routeParams?.serial, 
+  // Load parameter schema (does not block UI - downloads in background if needed)
+  const { schema: params } = useParamSchema(
+    routeParams?.serial,
     savedNodeId > 0 ? savedNodeId : undefined
   )
 
@@ -50,7 +50,7 @@ function DeviceDetailsContent() {
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
 
   // Use shared device details context
-  const { monitoring, canIo, setStreaming, clearHistoricalData, setCanIoActive, setConnectedSerial } = useDeviceDetailsContext()
+  const { monitoring, setStreaming, clearHistoricalData, setCanIoActive, setConnectedSerial } = useDeviceDetailsContext()
 
   // Disconnect from device and stop all activities when component unmounts (navigating away)
   useEffect(() => {

@@ -68,8 +68,17 @@ const spotValuesContent = {
     loadingParameters: t({
       en: 'Loading parameters...',
     }),
+    loadingSchema: t({
+      en: 'Loading parameter definitions...',
+    }),
     noParametersLoaded: t({
       en: 'Failed to load device parameters. Please try refreshing the page.',
+    }),
+    noSchemaAvailable: t({
+      en: 'Parameter definitions not available',
+    }),
+    schemaLoadFailed: t({
+      en: 'Unable to load device configuration. Check device connection.',
     }),
     clearHistory: t({
       en: 'Clear History',
