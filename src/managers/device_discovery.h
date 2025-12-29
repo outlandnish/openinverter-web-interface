@@ -27,6 +27,13 @@
 
 class DeviceDiscovery {
 public:
+  // Scan state machine states
+  enum class ScanState {
+    IDLE,           // Not actively scanning a node
+    SENDING,        // Need to send request
+    WAITING         // Waiting for response (non-blocking)
+  };
+
   // Callback types
   using DiscoveryCallback = std::function<void(uint8_t nodeId, const char* serial, uint32_t lastSeen)>;
   using ProgressCallback = std::function<void(uint8_t currentNode, uint8_t startNode, uint8_t endNode)>;
@@ -72,12 +79,14 @@ private:
 
   // Scanning state
   bool scanActive = false;
+  ScanState scanState = ScanState::IDLE;
   uint8_t scanStart = 1;
   uint8_t scanEnd = 32;
   uint8_t currentNode = 1;
   uint8_t currentSerialPart = 0;
   uint32_t currentSerial[4];
   unsigned long lastScanTime = 0;
+  unsigned long requestSentTime = 0;  // When we sent the current request
 
   // Throttle passive heartbeat updates to prevent flooding WebSocket
   static const unsigned long PASSIVE_HEARTBEAT_THROTTLE_MS = 1000; // Update at most once per second

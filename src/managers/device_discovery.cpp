@@ -24,7 +24,6 @@
 #include "oi_can.h"
 #include "utils/can_queue.h"
 #include "protocols/sdo_protocol.h"
-#include "can_task.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
@@ -218,11 +217,13 @@ bool DeviceDiscovery::startContinuousScan(uint8_t startNode, uint8_t endNode) {
 
   // Note: CAN bus reinitialization will be handled by OICan::InitCAN() from caller
   scanActive = true;
+  scanState = ScanState::SENDING;  // Start in SENDING state
   scanStart = startNode;
   scanEnd = endNode;
   currentNode = startNode;
   currentSerialPart = 0;
   lastScanTime = 0;
+  requestSentTime = 0;
 
   DBG_OUTPUT_PORT.printf("Started continuous CAN scan (nodes %d-%d)\n", startNode, endNode);
   return true;
@@ -231,6 +232,7 @@ bool DeviceDiscovery::startContinuousScan(uint8_t startNode, uint8_t endNode) {
 // Stop continuous scanning
 void DeviceDiscovery::stopContinuousScan() {
   scanActive = false;
+  scanState = ScanState::IDLE;
   DBG_OUTPUT_PORT.println("Stopped continuous CAN scan");
 }
 
@@ -239,61 +241,94 @@ bool DeviceDiscovery::isScanActive() const {
   return scanActive;
 }
 
-// Process continuous scan (called from main loop)
+// Process continuous scan (called from main loop) - non-blocking state machine
 void DeviceDiscovery::processScan() {
-  unsigned long currentTime = millis();
-
-  if (!shouldProcessScan(currentTime)) {
+  if (!scanActive) {
     return;
   }
 
-  lastScanTime = currentTime;
-
-  DBG_OUTPUT_PORT.printf("[Scan] Probing node %d, part %d\n", currentNode, currentSerialPart);
-
-  // Clear any stale responses before sending new request
-  SDOProtocol::clearPendingResponses();
-
-  // Request serial number part from current scan node
-  twai_message_t tx_frame;
-  tx_frame.extd = false;
-  tx_frame.identifier = SDO_REQUEST_BASE_ID | currentNode;
-  tx_frame.data_length_code = 8;
-  tx_frame.data[0] = SDO_READ;
-  tx_frame.data[1] = SDO_INDEX_SERIAL & 0xFF;
-  tx_frame.data[2] = SDO_INDEX_SERIAL >> 8;
-  tx_frame.data[3] = currentSerialPart;
-  tx_frame.data[4] = 0;
-  tx_frame.data[5] = 0;
-  tx_frame.data[6] = 0;
-  tx_frame.data[7] = 0;
-
-  bool txResult = canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
-  DBG_OUTPUT_PORT.printf("[Scan] TX queued: %s\n", txResult ? "OK" : "FAILED");
-
-  // Flush TX queue immediately so the frame is transmitted before we wait
-  flushCanTxQueue();
-
-  // Notify scan progress when starting a new node (first serial part)
-  if (currentSerialPart == 0 && progressCallback) {
-    progressCallback(currentNode, scanStart, scanEnd);
+  // Don't scan while device is busy
+  if (!DeviceConnection::instance().isIdle()) {
+    return;
   }
 
-  twai_message_t rxframe;
-  bool gotResponse = SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS));
-  DBG_OUTPUT_PORT.printf("[Scan] waitForResponse: %s\n", gotResponse ? "GOT RESPONSE" : "TIMEOUT");
+  unsigned long currentTime = millis();
 
-  if (gotResponse) {
-    DBG_OUTPUT_PORT.printf("[Scan] Response ID=0x%03lX Data[0]=0x%02X\n",
-                           (unsigned long)rxframe.identifier, rxframe.data[0]);
-    if (!handleScanResponse(rxframe, currentTime)) {
-      // No response or error - move to next node
-      DBG_OUTPUT_PORT.println("[Scan] Invalid response, advancing to next node");
-      advanceToNextNode();
+  switch (scanState) {
+    case ScanState::IDLE:
+      // Check if enough time has passed since last scan
+      if ((currentTime - lastScanTime) >= SCAN_DELAY_MS) {
+        scanState = ScanState::SENDING;
+      }
+      break;
+
+    case ScanState::SENDING: {
+      DBG_OUTPUT_PORT.printf("[Scan] Probing node %d, part %d\n", currentNode, currentSerialPart);
+
+      // Clear any stale responses before sending new request
+      SDOProtocol::clearPendingResponses();
+
+      // Request serial number part from current scan node
+      twai_message_t tx_frame;
+      tx_frame.extd = false;
+      tx_frame.identifier = SDO_REQUEST_BASE_ID | currentNode;
+      tx_frame.data_length_code = 8;
+      tx_frame.data[0] = SDO_READ;
+      tx_frame.data[1] = SDO_INDEX_SERIAL & 0xFF;
+      tx_frame.data[2] = SDO_INDEX_SERIAL >> 8;
+      tx_frame.data[3] = currentSerialPart;
+      tx_frame.data[4] = 0;
+      tx_frame.data[5] = 0;
+      tx_frame.data[6] = 0;
+      tx_frame.data[7] = 0;
+
+      bool txResult = canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
+      DBG_OUTPUT_PORT.printf("[Scan] TX queued: %s\n", txResult ? "OK" : "FAILED");
+
+      // Notify scan progress when starting a new node (first serial part)
+      if (currentSerialPart == 0 && progressCallback) {
+        progressCallback(currentNode, scanStart, scanEnd);
+      }
+
+      requestSentTime = currentTime;
+      scanState = ScanState::WAITING;
+      break;
     }
-  } else {
-    // Timeout - move to next node
-    advanceToNextNode();
+
+    case ScanState::WAITING: {
+      // Non-blocking check for response
+      twai_message_t rxframe;
+      if (SDOProtocol::waitForResponse(&rxframe, 0)) {  // timeout=0 for non-blocking
+        DBG_OUTPUT_PORT.printf("[Scan] Response ID=0x%03lX Data[0]=0x%02X\n",
+                               (unsigned long)rxframe.identifier, rxframe.data[0]);
+
+        if (handleScanResponse(rxframe, currentTime)) {
+          // Valid response handled
+          if (currentSerialPart > 0) {
+            // More parts to fetch - continue immediately (no delay)
+            scanState = ScanState::SENDING;
+          } else {
+            // Got all 4 parts, device found, moved to next node - add delay
+            lastScanTime = currentTime;
+            scanState = ScanState::IDLE;
+          }
+        } else {
+          // Invalid response - move to next node
+          DBG_OUTPUT_PORT.println("[Scan] Invalid response, advancing to next node");
+          advanceToNextNode();
+          lastScanTime = currentTime;
+          scanState = ScanState::IDLE;
+        }
+      } else if ((currentTime - requestSentTime) >= SCAN_TIMEOUT_MS) {
+        // Timeout - move to next node
+        DBG_OUTPUT_PORT.printf("[Scan] Timeout for node %d\n", currentNode);
+        advanceToNextNode();
+        lastScanTime = currentTime;
+        scanState = ScanState::IDLE;
+      }
+      // Otherwise keep waiting (non-blocking)
+      break;
+    }
   }
 }
 

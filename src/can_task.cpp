@@ -442,10 +442,6 @@ void processTxQueue() {
     processTxQueueInternal(5);
 }
 
-void flushCanTxQueue() {
-    // Flush all pending TX frames immediately
-    processTxQueueInternal(CAN_TX_QUEUE_SIZE);
-}
 
 // ============================================================================
 // CAN Message Reception and Processing

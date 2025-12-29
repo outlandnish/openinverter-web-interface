@@ -24,5 +24,3 @@ void canTask(void* parameter);
 bool initCanBusScanning(BaudRate baud, int txPin, int rxPin); // Initialize for scanning (accept all)
 bool initCanBusForDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin); // Initialize for specific device
 
-// Flush pending TX frames immediately (for use when immediate transmission is needed)
-void flushCanTxQueue();
