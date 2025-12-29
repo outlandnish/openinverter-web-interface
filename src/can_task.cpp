@@ -420,11 +420,10 @@ bool initCanBusForDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 // CAN TX Queue Processing
 // ============================================================================
 
-void processTxQueue() {
+static void processTxQueueInternal(int maxFrames) {
     twai_message_t txframe;
 
-    // Process up to a few frames per iteration to avoid blocking
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < maxFrames; i++) {
         if (xQueueReceive(canTxQueue, &txframe, 0) == pdTRUE) {
             esp_err_t result = twai_transmit(&txframe, pdMS_TO_TICKS(10));
             if (result != ESP_OK) {
@@ -436,6 +435,16 @@ void processTxQueue() {
             break;  // Queue empty
         }
     }
+}
+
+void processTxQueue() {
+    // Process up to a few frames per iteration to avoid blocking
+    processTxQueueInternal(5);
+}
+
+void flushCanTxQueue() {
+    // Flush all pending TX frames immediately
+    processTxQueueInternal(CAN_TX_QUEUE_SIZE);
 }
 
 // ============================================================================

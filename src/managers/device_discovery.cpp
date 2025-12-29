@@ -24,6 +24,7 @@
 #include "oi_can.h"
 #include "utils/can_queue.h"
 #include "protocols/sdo_protocol.h"
+#include "can_task.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
@@ -250,6 +251,9 @@ void DeviceDiscovery::processScan() {
 
   DBG_OUTPUT_PORT.printf("[Scan] Probing node %d, part %d\n", currentNode, currentSerialPart);
 
+  // Clear any stale responses before sending new request
+  SDOProtocol::clearPendingResponses();
+
   // Request serial number part from current scan node
   twai_message_t tx_frame;
   tx_frame.extd = false;
@@ -266,6 +270,9 @@ void DeviceDiscovery::processScan() {
 
   bool txResult = canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
   DBG_OUTPUT_PORT.printf("[Scan] TX queued: %s\n", txResult ? "OK" : "FAILED");
+
+  // Flush TX queue immediately so the frame is transmitted before we wait
+  flushCanTxQueue();
 
   // Notify scan progress when starting a new node (first serial part)
   if (currentSerialPart == 0 && progressCallback) {
