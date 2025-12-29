@@ -47,6 +47,10 @@ The firmware is easily adaptable to other ESP32 hardware as well, including the 
 * PlatformIO
 * Nodejs + npm - go to `web` folder and run `npm i` to install web dependencies
 
+## Web Development
+* Make sure you have the dependencies installed in the web project
+* `npm run dev` - you'll see the web app running on http://localhost:3000 - this automatically proxies requests to inverter.local your firmware is running for hot reload / live development
+
 ## Running the code
 1. Build and flash the firmware to the ESP32: `pio run -t upload`
 2. Add your wifi.txt file into the data folder with your WiFi credentials (or leave it out if you want to run in access point mode)
