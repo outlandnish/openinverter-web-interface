@@ -457,12 +457,21 @@ void receiveAndProcessCanMessages() {
             uint8_t nodeId = rxframe.identifier & 0x7F;
             DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
 
-            if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | DeviceConnection::instance().getNodeId())) {
-                // Route to SDO response queue for oi_can/SDO protocol layer
+            // Route to SDO response queue if:
+            // 1. We're scanning (route all SDO responses for device discovery), OR
+            // 2. The response is from the connected device
+            bool isScanning = DeviceDiscovery::instance().isScanActive();
+            bool isFromConnectedDevice = (rxframe.identifier == (SDO_RESPONSE_BASE_ID | DeviceConnection::instance().getNodeId()));
+
+            if (isScanning || isFromConnectedDevice) {
+                // Route to SDO response queue for scan or SDO protocol layer
                 if (sdoResponseQueue != nullptr) {
                     xQueueSend(sdoResponseQueue, &rxframe, 0);
                 }
-                // Also process in DeviceConnection for JSON download state machine
+            }
+
+            // Also process in DeviceConnection for JSON download state machine (only for connected device)
+            if (isFromConnectedDevice) {
                 DeviceConnection::instance().processSdoResponse(&rxframe);
             }
         }
