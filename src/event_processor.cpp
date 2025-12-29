@@ -15,10 +15,6 @@
 // External queue handle
 extern QueueHandle_t canEventQueue;
 
-// Firmware progress monitoring state
-static int lastReportedPage = -1;
-static bool updateWasInProgress = false;
-
 namespace EventProcessor {
 
 // Event serializer function type
@@ -248,33 +244,23 @@ void processEvents(AsyncWebSocket& ws) {
 
 void processFirmwareProgress(AsyncWebSocket& ws) {
     FirmwareUpdateHandler& handler = FirmwareUpdateHandler::instance();
-    bool updateInProgress = handler.isInProgress();
 
-    if (updateInProgress) {
-        updateWasInProgress = true;
-        int currentPage = handler.getCurrentPage();
-        int totalPages = handler.getTotalPages();
+    // Check for progress updates
+    int progress = 0;
+    if (handler.checkProgressUpdate(progress)) {
+        DBG_OUTPUT_PORT.printf("Firmware update progress: page %d/%d (%d%%)\n",
+                               handler.getCurrentPage(), handler.getTotalPages(), progress);
 
-        // Only send progress updates when page changes
-        if (currentPage != lastReportedPage && totalPages > 0) {
-            lastReportedPage = currentPage;
-            int progress = (currentPage * 100) / totalPages;
+        JsonDocument doc;
+        doc["event"] = "otaProgress";
+        doc["data"]["progress"] = progress;
+        String output;
+        serializeJson(doc, output);
+        ws.textAll(output);
+    }
 
-            DBG_OUTPUT_PORT.printf("Firmware update progress: page %d/%d (%d%%)\n",
-                                   currentPage, totalPages, progress);
-
-            JsonDocument doc;
-            doc["event"] = "otaProgress";
-            doc["data"]["progress"] = progress;
-            String output;
-            serializeJson(doc, output);
-            ws.textAll(output);
-        }
-    } else if (updateWasInProgress) {
-        // Update just finished
-        updateWasInProgress = false;
-        lastReportedPage = -1;
-
+    // Check for completion
+    if (handler.checkCompletion()) {
         DBG_OUTPUT_PORT.println("Firmware update completed successfully");
 
         JsonDocument doc;

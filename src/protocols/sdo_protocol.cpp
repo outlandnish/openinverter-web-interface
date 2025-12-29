@@ -1,7 +1,8 @@
 /*
- * This file is part of the esp32 web interface
+ * This file is part of the openinverter web interface
  *
  * Copyright (C) 2023 Johannes Huebner <dev@johanneshuebner.com>
+ * Copyright (C) 2025 Nishanth Samala <contact@outlandnish.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

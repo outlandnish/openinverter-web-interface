@@ -218,4 +218,37 @@ void FirmwareUpdateHandler::reset() {
   totalPages = 0;
   crc = 0xFFFFFFFF;
   currentByte = 0;
+  lastReportedPage_ = -1;
+  wasInProgress_ = false;
+}
+
+bool FirmwareUpdateHandler::checkProgressUpdate(int& progressPercent) {
+  if (!isInProgress() || totalPages <= 0) {
+    return false;
+  }
+
+  wasInProgress_ = true;
+
+  if (currentPage == lastReportedPage_) {
+    return false;
+  }
+
+  lastReportedPage_ = currentPage;
+  progressPercent = (currentPage * 100) / totalPages;
+  return true;
+}
+
+bool FirmwareUpdateHandler::checkCompletion() {
+  if (!wasInProgress_) {
+    return false;
+  }
+
+  if (!isInProgress()) {
+    // Update just finished
+    wasInProgress_ = false;
+    lastReportedPage_ = -1;
+    return true;
+  }
+
+  return false;
 }

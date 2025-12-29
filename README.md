@@ -5,9 +5,10 @@ This is a fork of the [esp32-web-interface](https://github.com/jsphuebner/esp32-
 **Note:** This fork doesn't support UART based connections. It only works over CAN.
 
 ## Notable differences to the original
-* The web app has been replaced with a Preact single page app 
+* The web app has been replaced with a Preact single page web app 
+* Lifecycle management of communication to both the ESP32 as well as remote devices on the CAN network
 * Responsive UI for different screen viewport sizes
-* Discover and name multiple OpenInverter devices on a network
+* You can discover and name multiple OpenInverter devices on a network
 * Internationalization (please submit translations for your respective language)
 * Get values now works in a burst mode and asyncronously (doesn't assume the next received value is for a setting)
 * OpenInverter devices that publish a name key for each parameter have a more legible display
@@ -35,13 +36,10 @@ Out of the box, this works with:
 * ESP32-C3-DevKitM-1
 * [Canipulator](https://www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) (ESP32-C6)
 
-The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3.
+The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3. Just add the appropriate Platformio environments or use the override file
 
 # Firmware
 To compile it follow the [instructions below](#development).
-
-# Documentations
-* [Openinverter Web Interface Protocol](PROTOCOL.md)
 
 # Development
 

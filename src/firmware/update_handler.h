@@ -1,7 +1,8 @@
 /*
- * This file is part of the esp32 web interface
+ * This file is part of the openinverter web interface
  *
  * Copyright (C) 2023 Johannes Huebner <dev@johanneshuebner.com>
+ * Copyright (C) 2025 Nishanth Samala <contact@outlandnish.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,6 +50,12 @@ public:
   int getTotalPages() const;
   State getState() const;
 
+  // Progress tracking for UI updates
+  // Returns true if progress changed since last check, sets progressPercent
+  bool checkProgressUpdate(int& progressPercent);
+  // Returns true if update just completed (was in progress, now finished)
+  bool checkCompletion();
+
   // Reset to idle state
   void reset();
 
@@ -68,6 +75,10 @@ private:
   uint32_t crc = 0xFFFFFFFF;
   int currentByte = 0;
   uint8_t nodeId = 0;
+
+  // Progress tracking for UI (used by checkProgressUpdate/checkCompletion)
+  int lastReportedPage_ = -1;
+  bool wasInProgress_ = false;
 
   // Constants
   static const size_t PAGE_SIZE_BYTES = 1024;

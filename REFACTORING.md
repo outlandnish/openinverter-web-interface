@@ -378,18 +378,22 @@
 
 ### Priority 6: State Management (Highest Risk, Highest Value)
 
-#### Task 12: Encapsulate Global State into Manager Classes
-**Status:** Partially Complete
+#### Task 12: Encapsulate Global State into Manager Classes ✅
+**Status:** Complete
 
 **Completed:**
 - `SpotValuesManager` - Created and integrated
 - `CanIntervalManager` - Created and integrated
 - `ClientLockManager` - Created and integrated
 - `DeviceCache` - Created and integrated
+- `DeviceConnection` - Created and integrated (connection state, JSON cache, callbacks)
+- `DeviceDiscovery` - Created and integrated (scanning state, device list)
+- `FirmwareUpdateHandler` - Created and integrated (update state machine, progress tracking)
 
-**Remaining:**
-- Review and clean up any remaining global state in main.cpp
-- Verify all managers are being used consistently
+**Final cleanup:**
+- Moved firmware update progress tracking (`lastReportedPage`, `wasInProgress`) from `event_processor.cpp` into `FirmwareUpdateHandler`
+- Added `checkProgressUpdate()` and `checkCompletion()` methods to `FirmwareUpdateHandler`
+- Remaining globals in `main.cpp` are infrastructure (queues, server, websocket, config) - appropriate as globals
 
 ---
 
@@ -638,7 +642,7 @@ The goal is to eliminate direct `twai_transmit()`/`twai_receive()` calls from oi
 - Updated `device_discovery.cpp` to use queue-based operations
 - Updated `update_handler.cpp` to use queue-based TX
 
-#### Phase 5: Cleanup and Testing (34.14-34.15) ✅ COMPLETED
+#### Phase 5: Cleanup and Testing (34.14-34.15) 
 
 **34.14: Remove Direct TWAI Calls from oi_can** ✅
 - Verified no remaining `twai_transmit()` or `twai_receive()` in oi_can.cpp
@@ -646,13 +650,13 @@ The goal is to eliminate direct `twai_transmit()`/`twai_receive()` calls from oi
 - All CAN I/O now goes through can_task queues
 - Only can_task.cpp contains direct TWAI driver calls (as intended)
 
-**34.15: Integration Testing**
-- [ ] Test all WebSocket operations end-to-end
-- [ ] Verify spot values streaming works
-- [ ] Test device scanning
+**34.15: Integration Testing** Partial
+- [x] Test all WebSocket operations end-to-end
+- [x] Verify spot values streaming works
+- [x] Test device scanning
 - [ ] Test firmware updates
-- [ ] Check for race conditions with concurrent operations
-- [ ] Verify timeout handling
+- [x] Check for race conditions with concurrent operations
+- [x] Verify timeout handling
 
 #### Implementation Notes
 

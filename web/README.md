@@ -1,4 +1,4 @@
-# ESP32 Web Interface Development
+# Open Inverter Web Interface Development
 
 This folder contains the source code for the Preact + TypeScript web interface.
 
