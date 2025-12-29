@@ -93,8 +93,6 @@ export default function SpotValuesMonitor({
   // Subscribe to WebSocket messages
   useEffect(() => {
     const unsubscribe = subscribe((message) => {
-      console.log('WebSocket event:', message.event, message.data)
-
       switch (message.event) {
         case 'spotValuesStatus':
           setStreaming(message.data.active)

@@ -65,8 +65,6 @@ export function DeviceProvider({ children }: DeviceProviderProps) {
   // Subscribe to WebSocket messages for device updates
   useEffect(() => {
     const unsubscribe = subscribe((message: any) => {
-      console.log('[DeviceContext] WebSocket event:', message.event, message.data)
-
       switch (message.event) {
         case 'error':
           console.error('[DeviceContext] Error:', message.data.message)
