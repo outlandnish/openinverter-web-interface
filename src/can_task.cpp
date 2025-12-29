@@ -81,6 +81,29 @@ void handleStopScanCommand(const CANCommand& cmd) {
 void handleConnectCommand(const CANCommand& cmd) {
     DBG_OUTPUT_PORT.printf("[CAN Task] Connecting to node %d\n", cmd.data.connect.nodeId);
 
+    // Stop scanning if active (prevents duplicate device events during connection)
+    if (DeviceDiscovery::instance().isScanActive()) {
+        DBG_OUTPUT_PORT.println("[CAN Task] Stopping scan before connecting");
+        DeviceDiscovery::instance().stopContinuousScan();
+
+        // Notify frontend that scan has stopped
+        CANEvent evt;
+        evt.type = EVT_SCAN_STATUS;
+        evt.data.scanStatus.active = false;
+        xQueueSend(canEventQueue, &evt, 0);
+    }
+
+    // Stop spot values (parameter IDs are device-specific)
+    if (SpotValuesManager::instance().isActive()) {
+        DBG_OUTPUT_PORT.println("[CAN Task] Stopping spot values before connecting");
+        SpotValuesManager::instance().stop();
+
+        CANEvent evt;
+        evt.type = EVT_SPOT_VALUES_STATUS;
+        evt.data.spotValuesStatus.active = false;
+        xQueueSend(canEventQueue, &evt, 0);
+    }
+
     // Clear interval messages when switching devices
     CanIntervalManager::instance().clearAllIntervals();
 

@@ -361,6 +361,22 @@ bool DeviceConnection::connectToDevice(uint8_t nodeId, BaudRate baud, int txPin,
     setCanPins(txPin, rxPin);
     setBaudRate(baud);
 
+    // If a JSON download was in progress, send error to waiting client
+    if (jsonRequestClientId_ != 0 && isDownloadingJson()) {
+        DBG_OUTPUT_PORT.printf("[DeviceConnection] Interrupting download for client %lu due to reconnect\n",
+                               (unsigned long)jsonRequestClientId_);
+        // Send error event for interrupted download
+        if (canEventQueue != nullptr) {
+            CANEvent evt;
+            evt.type = EVT_JSON_READY;
+            evt.data.jsonReady.clientId = jsonRequestClientId_;
+            evt.data.jsonReady.nodeId = nodeId_;
+            evt.data.jsonReady.success = false;
+            xQueueSend(canEventQueue, &evt, 0);
+        }
+        jsonRequestClientId_ = 0;
+    }
+
     if (!initCanBusForDevice(nodeId, baud, txPin, rxPin)) {
         DBG_OUTPUT_PORT.println("Failed to initialize CAN bus");
         return false;

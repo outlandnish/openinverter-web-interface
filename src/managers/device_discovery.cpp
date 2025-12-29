@@ -409,6 +409,20 @@ void DeviceDiscovery::updateLastSeen(const char* serial, uint32_t lastSeen) {
 
 // Update device last seen by node ID
 void DeviceDiscovery::updateLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen) {
+  // Don't send discovery events when actively connected to a device
+  // This prevents "device discovered" spam during normal communication
+  DeviceConnection& conn = DeviceConnection::instance();
+  if (!conn.isIdle() && conn.getNodeId() == nodeId) {
+    // We're actively communicating with this device - just update lastSeen quietly
+    for (auto& kv : devices) {
+      if (kv.second.nodeId == nodeId) {
+        kv.second.lastSeen = lastSeen;
+        return;
+      }
+    }
+    return;
+  }
+
   // Throttle updates to prevent flooding WebSocket with too many messages
   // Only update if enough time has passed since last update for this node
   if (lastPassiveHeartbeatByNode.count(nodeId) > 0) {
