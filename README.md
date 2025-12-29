@@ -42,3 +42,15 @@ Out of the box, this works with:
 * [CANLite](https://openinverter.org/shop/index.php?route=product/product&product_id=78)
 
 The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3. Just add the appropriate Platformio environments or use the override file
+
+## Dependencies
+* PlatformIO
+* Nodejs + npm
+
+## Running the code
+1. Build and flash the firmware to the ESP32: `pio run -t upload`
+2. Add your wifi.txt file into the data folder with your WiFi credentials (or leave it out if you want to run in access point mode)
+3. Build the web app: `cd web && npm run build`
+4. Flash the web app from the root directory: `pio run -t uploadfs`
+
+Additionally, if you want to run on alternate hardware, you'll need to run the `pio` command with the `-e <environment name>` flag. (e.g. `pio run -t upload -e canipulator-release`)
