@@ -45,7 +45,7 @@ The firmware is easily adaptable to other ESP32 hardware as well, including the 
 
 ## Dependencies
 * PlatformIO
-* Nodejs + npm
+* Nodejs + npm - go to `web` folder and run `npm i` to install web dependencies
 
 ## Running the code
 1. Build and flash the firmware to the ESP32: `pio run -t upload`
