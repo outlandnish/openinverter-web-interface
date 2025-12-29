@@ -248,6 +248,8 @@ void DeviceDiscovery::processScan() {
 
   lastScanTime = currentTime;
 
+  DBG_OUTPUT_PORT.printf("[Scan] Probing node %d, part %d\n", currentNode, currentSerialPart);
+
   // Request serial number part from current scan node
   twai_message_t tx_frame;
   tx_frame.extd = false;
@@ -262,7 +264,8 @@ void DeviceDiscovery::processScan() {
   tx_frame.data[6] = 0;
   tx_frame.data[7] = 0;
 
-  canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
+  bool txResult = canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
+  DBG_OUTPUT_PORT.printf("[Scan] TX queued: %s\n", txResult ? "OK" : "FAILED");
 
   // Notify scan progress when starting a new node (first serial part)
   if (currentSerialPart == 0 && progressCallback) {
@@ -270,9 +273,15 @@ void DeviceDiscovery::processScan() {
   }
 
   twai_message_t rxframe;
-  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS))) {
+  bool gotResponse = SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS));
+  DBG_OUTPUT_PORT.printf("[Scan] waitForResponse: %s\n", gotResponse ? "GOT RESPONSE" : "TIMEOUT");
+
+  if (gotResponse) {
+    DBG_OUTPUT_PORT.printf("[Scan] Response ID=0x%03lX Data[0]=0x%02X\n",
+                           (unsigned long)rxframe.identifier, rxframe.data[0]);
     if (!handleScanResponse(rxframe, currentTime)) {
       // No response or error - move to next node
+      DBG_OUTPUT_PORT.println("[Scan] Invalid response, advancing to next node");
       advanceToNextNode();
     }
   } else {

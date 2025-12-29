@@ -17,27 +17,21 @@ uint32_t crc32_word(uint32_t crc, uint32_t word) {
 }
 
 // Debug helper for transmitted CAN frames
-// Currently disabled for production, but available for debugging
 void printCanTx(const twai_message_t* frame) {
-  // Debug output disabled
-  // To enable: uncomment and use Serial.printf() or similar
-  // Serial.printf("TX: ID=0x%03X Data=", frame->identifier);
-  // for (int i = 0; i < frame->data_length_code; i++) {
-  //   Serial.printf("%02X ", frame->data[i]);
-  // }
-  // Serial.println();
+  Serial.printf("[CAN TX] ID=0x%03lX Data=", (unsigned long)frame->identifier);
+  for (int i = 0; i < frame->data_length_code; i++) {
+    Serial.printf("%02X ", frame->data[i]);
+  }
+  Serial.println();
 }
 
 // Debug helper for received CAN frames
-// Currently disabled for production, but available for debugging
 void printCanRx(const twai_message_t* frame) {
-  // Debug output disabled
-  // To enable: uncomment and use Serial.printf() or similar
-  // Serial.printf("RX: ID=0x%03X Data=", frame->identifier);
-  // for (int i = 0; i < frame->data_length_code; i++) {
-  //   Serial.printf("%02X ", frame->data[i]);
-  // }
-  // Serial.println();
+  Serial.printf("[CAN RX] ID=0x%03lX Data=", (unsigned long)frame->identifier);
+  for (int i = 0; i < frame->data_length_code; i++) {
+    Serial.printf("%02X ", frame->data[i]);
+  }
+  Serial.println();
 }
 
 // Validate that a CAN frame is a valid SDO response for the given node and index

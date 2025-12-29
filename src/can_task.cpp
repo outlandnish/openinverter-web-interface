@@ -428,11 +428,10 @@ void processTxQueue() {
         if (xQueueReceive(canTxQueue, &txframe, 0) == pdTRUE) {
             esp_err_t result = twai_transmit(&txframe, pdMS_TO_TICKS(10));
             if (result != ESP_OK) {
-                DBG_OUTPUT_PORT.printf("[CAN TX] Failed to transmit frame ID 0x%lX: %d\n",
+                DBG_OUTPUT_PORT.printf("[CAN TX] Failed to transmit frame ID 0x%lX: err=%d\n",
                                        (unsigned long)txframe.identifier, result);
-            } else {
-                printCanTx(&txframe);
             }
+            printCanTx(&txframe);
         } else {
             break;  // Queue empty
         }
@@ -463,10 +462,15 @@ void receiveAndProcessCanMessages() {
             bool isScanning = DeviceDiscovery::instance().isScanActive();
             bool isFromConnectedDevice = (rxframe.identifier == (SDO_RESPONSE_BASE_ID | DeviceConnection::instance().getNodeId()));
 
+            DBG_OUTPUT_PORT.printf("[CAN Route] nodeId=%d isScanning=%d isFromConnected=%d\n",
+                                   nodeId, isScanning, isFromConnectedDevice);
+
             if (isScanning || isFromConnectedDevice) {
                 // Route to SDO response queue for scan or SDO protocol layer
                 if (sdoResponseQueue != nullptr) {
-                    xQueueSend(sdoResponseQueue, &rxframe, 0);
+                    BaseType_t result = xQueueSend(sdoResponseQueue, &rxframe, 0);
+                    DBG_OUTPUT_PORT.printf("[CAN Route] Queued to sdoResponseQueue: %s\n",
+                                           result == pdTRUE ? "OK" : "FAILED");
                 }
             }
 
