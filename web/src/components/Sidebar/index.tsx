@@ -2,6 +2,7 @@ import { useLocation } from 'wouter'
 import { useIntlayer } from 'preact-intlayer'
 import { SavedDevice } from '@api/inverter'
 import ConnectionStatus from '@components/ConnectionStatus'
+import LanguageSelector from '@components/LanguageSelector'
 
 interface SidebarProps {
   devices: Record<string, SavedDevice>
@@ -158,6 +159,10 @@ export default function Sidebar({ devices, isOpen, onToggle, currentSerial, onQu
             )}
           </div>
         </nav>
+
+        <div class="sidebar-footer">
+          <LanguageSelector />
+        </div>
       </aside>
     </>
   )
