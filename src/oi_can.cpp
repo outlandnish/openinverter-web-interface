@@ -93,14 +93,11 @@ static void initiateJsonDownload() {
 }
 
 // Helper: Handle streaming callback updates during JSON download
+// Note: Streaming is disabled during download due to thread safety - only final result is sent
 static void handleJsonStreamingUpdate(int& lastStreamedSize) {
-  JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
-  if (streamCallback && conn.getJsonReceiveBuffer().length() > lastStreamedSize) {
-    int chunkSize = conn.getJsonReceiveBuffer().length() - lastStreamedSize;
-    const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
-    streamCallback(chunkStart, chunkSize, false); // isComplete = false
-    lastStreamedSize = conn.getJsonReceiveBuffer().length();
-  }
+  // Skip streaming during download - will send complete data at end
+  // This avoids race condition with CAN task modifying buffer
+  lastStreamedSize = conn.getJsonReceiveBufferLength();
 }
 
 // Helper: Handle progress callback updates during JSON download
@@ -108,19 +105,21 @@ static void handleJsonProgressUpdate(unsigned long& lastProgressUpdate) {
   const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200;
   JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
   if (progressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-    progressCallback(conn.getJsonReceiveBuffer().length());
+    progressCallback(conn.getJsonReceiveBufferLength());
     lastProgressUpdate = millis();
   }
 }
 
 // Helper: Send final streaming and progress notifications
 static void handleJsonDownloadCompletion(int lastStreamedSize) {
-  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
+  // Download is complete, safe to access buffer directly now
+  int bufferLen = conn.getJsonReceiveBuffer().length();
+  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", bufferLen);
 
   // Send final chunk with completion flag if streaming
   JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
-  if (streamCallback && conn.getJsonReceiveBuffer().length() > lastStreamedSize) {
-    int chunkSize = conn.getJsonReceiveBuffer().length() - lastStreamedSize;
+  if (streamCallback && bufferLen > lastStreamedSize) {
+    int chunkSize = bufferLen - lastStreamedSize;
     const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
     streamCallback(chunkStart, chunkSize, true); // isComplete = true
   } else if (streamCallback) {
@@ -147,23 +146,24 @@ static bool waitForJsonDownload(int& lastStreamedSize) {
     // CAN messages are now processed by canTask in background
     // Just wait and check the state
 
-    // Check if we received a new segment (buffer grew)
-    if (conn.getJsonReceiveBuffer().length() > lastBufferSize) {
-      lastBufferSize = conn.getJsonReceiveBuffer().length();
+    // Check if we received a new segment (buffer grew) - use thread-safe accessor
+    int currentBufferSize = conn.getJsonReceiveBufferLength();
+    if (currentBufferSize > lastBufferSize) {
+      lastBufferSize = currentBufferSize;
       lastSegmentTime = millis(); // Reset timeout on new data
 
       handleJsonStreamingUpdate(lastStreamedSize);
       handleJsonProgressUpdate(lastProgressUpdate);
 
       if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", conn.getJsonReceiveBuffer().length());
+        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", currentBufferSize);
       }
     }
 
     // Check for segment timeout (no data received for too long)
     if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
       DBG_OUTPUT_PORT.printf("[GetRawJson] Segment timeout! No data for %lu ms, buffer size=%d\n",
-        millis() - lastSegmentTime, conn.getJsonReceiveBuffer().length());
+        millis() - lastSegmentTime, lastBufferSize);
       conn.setState(DeviceConnection::IDLE);
       return false;
     }
@@ -189,9 +189,10 @@ static bool waitForJsonDownload(int& lastStreamedSize) {
 
 String GetRawJson() {
   // Return cached JSON if available (avoid blocking download)
-  if (!conn.getJsonReceiveBuffer().isEmpty()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", conn.getJsonReceiveBuffer().length());
-    return conn.getJsonReceiveBuffer();
+  if (!conn.isJsonBufferEmpty()) {
+    String cached = conn.getJsonReceiveBufferCopy();
+    DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", cached.length());
+    return cached;
   }
 
   if (!conn.isIdle()) {

@@ -23,6 +23,7 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 #include "driver/twai.h"
+#include "freertos/semphr.h"
 #include "models/can_types.h"
 
 // Forward declarations for callback types
@@ -100,10 +101,16 @@ public:
     bool connectToDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin);
     bool initializeForScanning(BaudRate baud, int txPin, int rxPin);
 
-    // JSON cache management
+    // JSON cache management (thread-safe)
     JsonDocument& getCachedJson() { return cachedParamJson_; }
     const JsonDocument& getCachedJson() const { return cachedParamJson_; }
 
+    // Thread-safe JSON buffer accessors
+    String getJsonReceiveBufferCopy();  // Returns a copy (thread-safe)
+    int getJsonReceiveBufferLength();   // Returns length (thread-safe)
+    bool isJsonBufferEmpty();           // Check if empty (thread-safe)
+
+    // Legacy accessors (only use from CAN task or when download is complete)
     String& getJsonReceiveBuffer() { return jsonReceiveBuffer_; }
     const String& getJsonReceiveBuffer() const { return jsonReceiveBuffer_; }
 
@@ -169,6 +176,7 @@ private:
     JsonDocument cachedParamJson_;
     String jsonReceiveBuffer_;
     int jsonTotalSize_ = 0;
+    SemaphoreHandle_t jsonBufferMutex_ = nullptr;  // Protects jsonReceiveBuffer_
 
     // Callbacks
     ConnectionReadyCallback connectionReadyCallback_ = nullptr;

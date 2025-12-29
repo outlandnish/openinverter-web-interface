@@ -31,6 +31,9 @@ DeviceConnection::DeviceConnection() {
         serial_[i] = 0;
     }
     jsonFileName_[0] = '\0';
+
+    // Create mutex for JSON buffer protection
+    jsonBufferMutex_ = xSemaphoreCreateMutex();
 }
 
 DeviceConnection& DeviceConnection::instance() {
@@ -70,9 +73,40 @@ bool DeviceConnection::hasStateTimedOut(unsigned long timeoutMs) const {
 }
 
 void DeviceConnection::clearJsonCache() {
-    cachedParamJson_.clear();
-    jsonReceiveBuffer_ = "";
-    jsonTotalSize_ = 0;
+    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        cachedParamJson_.clear();
+        jsonReceiveBuffer_ = "";
+        jsonTotalSize_ = 0;
+        xSemaphoreGive(jsonBufferMutex_);
+    }
+}
+
+// Thread-safe JSON buffer accessors
+String DeviceConnection::getJsonReceiveBufferCopy() {
+    String copy;
+    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        copy = jsonReceiveBuffer_;
+        xSemaphoreGive(jsonBufferMutex_);
+    }
+    return copy;
+}
+
+int DeviceConnection::getJsonReceiveBufferLength() {
+    int len = 0;
+    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        len = jsonReceiveBuffer_.length();
+        xSemaphoreGive(jsonBufferMutex_);
+    }
+    return len;
+}
+
+bool DeviceConnection::isJsonBufferEmpty() {
+    bool empty = true;
+    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        empty = jsonReceiveBuffer_.isEmpty();
+        xSemaphoreGive(jsonBufferMutex_);
+    }
+    return empty;
 }
 
 bool DeviceConnection::canSendParameterRequest() {
@@ -245,29 +279,36 @@ void DeviceConnection::processConnection() {
 
                 // Check for last segment
                 if ((rxframe.data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe.data[0] & SDOProtocol::READ) == 0) {
-                    // Last segment
-                    int size = 7 - ((rxframe.data[0] >> 1) & 0x7);
-                    for (int i = 0; i < size; i++) {
-                        jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
-                    }
+                    // Last segment - protect buffer access
+                    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        int size = 7 - ((rxframe.data[0] >> 1) & 0x7);
+                        for (int i = 0; i < size; i++) {
+                            jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
+                        }
 
-                    DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
-                    DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer_.length());
+                        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
+                        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer_.length());
 
-                    // Parse JSON
-                    DeserializationError error = deserializeJson(cachedParamJson_, jsonReceiveBuffer_);
-                    if (error) {
-                        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
-                    } else {
-                        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
+                        // Parse JSON
+                        DeserializationError error = deserializeJson(cachedParamJson_, jsonReceiveBuffer_);
+                        if (error) {
+                            DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
+                        } else {
+                            DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
+                        }
+                        xSemaphoreGive(jsonBufferMutex_);
                     }
 
                     setState(IDLE);
                 }
                 // Normal segment
                 else if ((rxframe.data[0] & 0xE0) == 0 && rxframe.data[0] == (toggleBit_ << 4)) {
-                    for (int i = 0; i < 7; i++) {
-                        jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
+                    // Protect buffer access
+                    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        for (int i = 0; i < 7; i++) {
+                            jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
+                        }
+                        xSemaphoreGive(jsonBufferMutex_);
                     }
                     toggleBit_ = !toggleBit_;
                     state_ = JSON_SEGMENT_SENDING;
