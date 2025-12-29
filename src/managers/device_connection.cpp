@@ -21,7 +21,11 @@
 #include "device_discovery.h"
 #include "protocols/sdo_protocol.h"
 #include "can_task.h"
+#include "models/can_event.h"
 #include <Arduino.h>
+
+// External queue for events
+extern QueueHandle_t canEventQueue;
 
 #define DBG_OUTPUT_PORT Serial
 
@@ -130,6 +134,23 @@ void DeviceConnection::startJsonDownload() {
     jsonTotalSize_ = 0;
     toggleBit_ = false;
     setState(JSON_INIT_SENDING);
+}
+
+// Start JSON download for a specific client (non-blocking)
+bool DeviceConnection::startJsonDownloadAsync(uint32_t clientId) {
+    if (state_ != IDLE) {
+        DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start JSON download - not in IDLE state");
+        return false;
+    }
+
+    jsonRequestClientId_ = clientId;
+    clearJsonCache();
+    jsonReceiveBuffer_ = "";
+    jsonTotalSize_ = 0;
+    toggleBit_ = false;
+    setState(JSON_INIT_SENDING);
+    DBG_OUTPUT_PORT.printf("[DeviceConnection] Started async JSON download for client %lu\n", (unsigned long)clientId);
+    return true;
 }
 
 // Start serial acquisition (used after device reset)
@@ -280,6 +301,7 @@ void DeviceConnection::processConnection() {
                 // Check for last segment
                 if ((rxframe.data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe.data[0] & SDOProtocol::READ) == 0) {
                     // Last segment - protect buffer access
+                    bool parseSuccess = false;
                     if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
                         int size = 7 - ((rxframe.data[0] >> 1) & 0x7);
                         for (int i = 0; i < size; i++) {
@@ -295,8 +317,21 @@ void DeviceConnection::processConnection() {
                             DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
                         } else {
                             DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
+                            parseSuccess = true;
                         }
                         xSemaphoreGive(jsonBufferMutex_);
+                    }
+
+                    // Send JSON ready event if a client requested it
+                    if (jsonRequestClientId_ != 0 && canEventQueue != nullptr) {
+                        CANEvent evt;
+                        evt.type = EVT_JSON_READY;
+                        evt.data.jsonReady.clientId = jsonRequestClientId_;
+                        evt.data.jsonReady.nodeId = nodeId_;
+                        evt.data.jsonReady.success = parseSuccess;
+                        xQueueSend(canEventQueue, &evt, 0);
+                        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Sent JSON ready event for client %lu\n", (unsigned long)jsonRequestClientId_);
+                        jsonRequestClientId_ = 0;  // Clear after sending
                     }
 
                     setState(IDLE);

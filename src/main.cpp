@@ -119,17 +119,8 @@ void setup(void) {
         xQueueSend(canEventQueue, &evt, 0);
     });
 
-    // Setup JSON download progress callback
-    DeviceConnection::instance().setJsonProgressCallback([](int bytesReceived) {
-        JsonDocument doc;
-        doc["event"] = "jsonProgress";
-        doc["data"]["bytesReceived"] = bytesReceived;
-        doc["data"]["complete"] = (bytesReceived == 0);
-        doc["data"]["totalBytes"] = DeviceConnection::instance().getJsonTotalSize();
-        String output;
-        serializeJson(doc, output);
-        ws.textAll(output);
-    });
+    // Note: JSON download progress callback removed - async download now uses
+    // EVT_JSON_READY event for completion notification to specific client
 
     // Initialize CAN queues and spawn CAN task
     initCanQueues();

@@ -84,153 +84,31 @@ int StartUpdate(String fileName) {
   return totalPages;
 }
 
-// Helper: Initiate JSON download from device
-static void initiateJsonDownload() {
-  DBG_OUTPUT_PORT.printf("[GetRawJson] Starting JSON download from node %d\n", conn.getNodeId());
-  conn.clearJsonCache();
-  conn.startJsonDownload();
-  DBG_OUTPUT_PORT.println("[GetRawJson] Started JSON download state machine");
-}
-
-// Helper: Handle streaming callback updates during JSON download
-// Note: Streaming is disabled during download due to thread safety - only final result is sent
-static void handleJsonStreamingUpdate(int& lastStreamedSize) {
-  // Skip streaming during download - will send complete data at end
-  // This avoids race condition with CAN task modifying buffer
-  lastStreamedSize = conn.getJsonReceiveBufferLength();
-}
-
-// Helper: Handle progress callback updates during JSON download
-static void handleJsonProgressUpdate(unsigned long& lastProgressUpdate) {
-  const unsigned long PROGRESS_UPDATE_INTERVAL_MS = 200;
-  JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
-  if (progressCallback && (millis() - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS)) {
-    progressCallback(conn.getJsonReceiveBufferLength());
-    lastProgressUpdate = millis();
-  }
-}
-
-// Helper: Send final streaming and progress notifications
-static void handleJsonDownloadCompletion(int lastStreamedSize) {
-  // Download is complete, safe to access buffer directly now
-  int bufferLen = conn.getJsonReceiveBuffer().length();
-  DBG_OUTPUT_PORT.printf("[GetRawJson] Download complete! Buffer size: %d bytes\n", bufferLen);
-
-  // Send final chunk with completion flag if streaming
-  JsonStreamCallback streamCallback = conn.getJsonStreamCallback();
-  if (streamCallback && bufferLen > lastStreamedSize) {
-    int chunkSize = bufferLen - lastStreamedSize;
-    const char* chunkStart = conn.getJsonReceiveBuffer().c_str() + lastStreamedSize;
-    streamCallback(chunkStart, chunkSize, true); // isComplete = true
-  } else if (streamCallback) {
-    // No remaining data, but signal completion
-    streamCallback("", 0, true);
-  }
-
-  // Send completion notification (0 = done)
-  JsonDownloadProgressCallback progressCallback = conn.getJsonProgressCallback();
-  if (progressCallback) {
-    progressCallback(0);
-  }
-}
-
-// Helper: Wait for JSON download to complete
-static bool waitForJsonDownload(int& lastStreamedSize) {
-  const unsigned long SEGMENT_TIMEOUT_MS = 5000;
-  unsigned long lastSegmentTime = millis();
-  unsigned long lastProgressUpdate = 0;
-  int lastBufferSize = 0;
-  int loopCount = 0;
-
-  while (conn.isDownloadingJson()) {
-    // CAN messages are now processed by canTask in background
-    // Just wait and check the state
-
-    // Check if we received a new segment (buffer grew) - use thread-safe accessor
-    int currentBufferSize = conn.getJsonReceiveBufferLength();
-    if (currentBufferSize > lastBufferSize) {
-      lastBufferSize = currentBufferSize;
-      lastSegmentTime = millis(); // Reset timeout on new data
-
-      handleJsonStreamingUpdate(lastStreamedSize);
-      handleJsonProgressUpdate(lastProgressUpdate);
-
-      if (loopCount % 100 == 0) {
-        DBG_OUTPUT_PORT.printf("[GetRawJson] Progress: buffer size: %d bytes\n", currentBufferSize);
-      }
-    }
-
-    // Check for segment timeout (no data received for too long)
-    if ((millis() - lastSegmentTime) > SEGMENT_TIMEOUT_MS) {
-      DBG_OUTPUT_PORT.printf("[GetRawJson] Segment timeout! No data for %lu ms, buffer size=%d\n",
-        millis() - lastSegmentTime, lastBufferSize);
-      conn.setState(DeviceConnection::IDLE);
-      return false;
-    }
-
-    // Yield to other tasks (especially async_tcp) to prevent watchdog timeout
-    delay(10);
-
-    // Feed the watchdog to prevent timeout during long transfers
-    esp_task_wdt_reset();
-
-    loopCount++;
-  }
-
-  // Check if download completed successfully
-  if (!conn.isIdle()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Failed! State=%d, buffer size=%d\n", conn.getState(), conn.getJsonReceiveBuffer().length());
-    conn.setState(DeviceConnection::IDLE);
-    return false;
-  }
-
-  return true;
-}
-
+// GetRawJson - Returns cached JSON data (non-blocking)
+// JSON download is now handled asynchronously via DeviceConnection::startJsonDownloadAsync()
+// and the result is delivered via EVT_JSON_READY event
 String GetRawJson() {
-  // Return cached JSON if available (avoid blocking download)
+  // Return cached JSON if available
   if (!conn.isJsonBufferEmpty()) {
     String cached = conn.getJsonReceiveBufferCopy();
     DBG_OUTPUT_PORT.printf("[GetRawJson] Returning cached JSON (%d bytes)\n", cached.length());
     return cached;
   }
 
-  if (!conn.isIdle()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson] Cannot get JSON - device busy (conn.getState()=%d)\n", conn.getState());
-    return "{}";
-  }
-
-  // Trigger JSON download from device
-  initiateJsonDownload();
-
-  // Wait for download to complete
-  int lastStreamedSize = 0;
-  if (!waitForJsonDownload(lastStreamedSize)) {
-    return "{}";
-  }
-
-  // Handle completion notifications
-  handleJsonDownloadCompletion(lastStreamedSize);
-
-  return conn.getJsonReceiveBuffer();
+  // No cached data - return empty
+  // Callers should use startJsonDownloadAsync() for async download
+  DBG_OUTPUT_PORT.println("[GetRawJson] No cached JSON available");
+  return "{}";
 }
 
-// Overloaded version that fetches JSON from a specific device by nodeId
-// Simplified: only works if already connected to the requested node
+// Overloaded version that checks node ID first
 String GetRawJson(uint8_t nodeId) {
-  if (!conn.isIdle()) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Cannot get JSON - device busy (conn.getState()=%d)\n", conn.getState());
-    return "{}";
-  }
-
-  // Only fetch JSON if we're connected to the requested node
+  // Only return JSON if we're connected to the requested node
   if (conn.getNodeId() != nodeId) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Not connected to node %d (currently connected to %d). Use Init() to connect first.\n", nodeId, conn.getNodeId());
+    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Not connected to node %d (currently connected to %d)\n", nodeId, conn.getNodeId());
     return "{}";
   }
 
-  // We're connected to the right node - just delegate to the regular GetRawJson()
-  DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Connected to node %d, fetching JSON\n", nodeId);
   return GetRawJson();
 }
 

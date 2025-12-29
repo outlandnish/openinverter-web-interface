@@ -495,26 +495,31 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
     int nodeId = doc["nodeId"];
     DBG_OUTPUT_PORT.printf("[WebSocket] Get param values request for nodeId: %d\n", nodeId);
 
-    String json = OICan::GetRawJson(nodeId);
+    DeviceConnection& conn = DeviceConnection::instance();
 
-    if (json.isEmpty() || json == "{}") {
+    // Check if we're connected to the right node
+    if (conn.getNodeId() != nodeId) {
         JsonDocument errorDoc;
         errorDoc["event"] = "paramValuesError";
-        errorDoc["data"]["error"] = "Device busy or not connected";
+        errorDoc["data"]["error"] = "Not connected to requested device";
         errorDoc["data"]["nodeId"] = nodeId;
         String errorOutput;
         serializeJson(errorDoc, errorOutput);
         client->text(errorOutput);
-        DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - device busy");
-    } else {
-        DBG_OUTPUT_PORT.printf("[WebSocket] Sending raw JSON for values (%d bytes)\n", json.length());
+        DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - wrong node");
+        return;
+    }
 
-        // Update cached param values with latest spot values to avoid stale data
+    // Check if JSON is already cached
+    if (!conn.isJsonBufferEmpty()) {
+        DBG_OUTPUT_PORT.printf("[WebSocket] Returning cached JSON\n");
+        String json = conn.getJsonReceiveBufferCopy();
+
+        // Update with latest spot values
         const auto& latestSpotValues = SpotValuesManager::instance().getLatestValues();
         if (!latestSpotValues.empty()) {
             JsonDocument paramsDoc;
             DeserializationError error = deserializeJson(paramsDoc, json);
-
             if (!error) {
                 for (const auto& pair : latestSpotValues) {
                     String paramId = String(pair.first);
@@ -534,7 +539,57 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
         output += "}}";
 
         client->text(output);
-        DBG_OUTPUT_PORT.printf("[WebSocket] Sent param values (%d bytes)\n", output.length());
+        DBG_OUTPUT_PORT.printf("[WebSocket] Sent cached param values (%d bytes)\n", output.length());
+        return;
+    }
+
+    // No cached JSON - start async download
+    if (!conn.isIdle()) {
+        // Already downloading or busy
+        if (conn.isDownloadingJson()) {
+            // Download in progress - send pending status
+            JsonDocument pendingDoc;
+            pendingDoc["event"] = "paramValuesPending";
+            pendingDoc["data"]["nodeId"] = nodeId;
+            pendingDoc["data"]["message"] = "Download in progress";
+            String pendingOutput;
+            serializeJson(pendingDoc, pendingOutput);
+            client->text(pendingOutput);
+            DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesPending - download in progress");
+        } else {
+            JsonDocument errorDoc;
+            errorDoc["event"] = "paramValuesError";
+            errorDoc["data"]["error"] = "Device busy";
+            errorDoc["data"]["nodeId"] = nodeId;
+            String errorOutput;
+            serializeJson(errorDoc, errorOutput);
+            client->text(errorOutput);
+            DBG_OUTPUT_PORT.println("[WebSocket] Sent paramValuesError - device busy");
+        }
+        return;
+    }
+
+    // Start async download
+    uint32_t clientId = client->id();
+    if (conn.startJsonDownloadAsync(clientId)) {
+        // Send pending status - client will receive data via EVT_JSON_READY
+        JsonDocument pendingDoc;
+        pendingDoc["event"] = "paramValuesPending";
+        pendingDoc["data"]["nodeId"] = nodeId;
+        pendingDoc["data"]["message"] = "Starting download";
+        String pendingOutput;
+        serializeJson(pendingDoc, pendingOutput);
+        client->text(pendingOutput);
+        DBG_OUTPUT_PORT.printf("[WebSocket] Started async JSON download for client %lu\n", (unsigned long)clientId);
+    } else {
+        JsonDocument errorDoc;
+        errorDoc["event"] = "paramValuesError";
+        errorDoc["data"]["error"] = "Failed to start download";
+        errorDoc["data"]["nodeId"] = nodeId;
+        String errorOutput;
+        serializeJson(errorDoc, errorOutput);
+        client->text(errorOutput);
+        DBG_OUTPUT_PORT.println("[WebSocket] Failed to start JSON download");
     }
 }
 

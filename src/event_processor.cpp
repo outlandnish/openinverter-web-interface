@@ -1,6 +1,8 @@
 #include "event_processor.h"
 #include "models/can_event.h"
 #include "firmware/update_handler.h"
+#include "managers/device_connection.h"
+#include "managers/spot_values_manager.h"
 #include "status_led.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -151,11 +153,86 @@ const char* serializeEvent(const CANEvent& evt, JsonDocument& doc) {
     return info.eventName;
 }
 
+// Handle EVT_JSON_READY - sends to specific client
+static void handleJsonReadyEvent(AsyncWebSocket& ws, const CANEvent& evt) {
+    uint32_t clientId = evt.data.jsonReady.clientId;
+    AsyncWebSocketClient* client = ws.client(clientId);
+
+    if (client == nullptr || !client->canSend()) {
+        DBG_OUTPUT_PORT.printf("[EventProcessor] Client %lu not found or can't send\n", (unsigned long)clientId);
+        return;
+    }
+
+    if (!evt.data.jsonReady.success) {
+        // Send error response
+        JsonDocument errorDoc;
+        errorDoc["event"] = "paramValuesError";
+        errorDoc["data"]["error"] = "Failed to download parameters";
+        errorDoc["data"]["nodeId"] = evt.data.jsonReady.nodeId;
+        String errorOutput;
+        serializeJson(errorDoc, errorOutput);
+        client->text(errorOutput);
+        DBG_OUTPUT_PORT.println("[EventProcessor] Sent paramValuesError");
+        return;
+    }
+
+    // Get the cached JSON
+    DeviceConnection& conn = DeviceConnection::instance();
+    String json = conn.getJsonReceiveBufferCopy();
+
+    if (json.isEmpty()) {
+        JsonDocument errorDoc;
+        errorDoc["event"] = "paramValuesError";
+        errorDoc["data"]["error"] = "No parameter data available";
+        errorDoc["data"]["nodeId"] = evt.data.jsonReady.nodeId;
+        String errorOutput;
+        serializeJson(errorDoc, errorOutput);
+        client->text(errorOutput);
+        return;
+    }
+
+    DBG_OUTPUT_PORT.printf("[EventProcessor] Sending JSON to client %lu (%d bytes)\n",
+                           (unsigned long)clientId, json.length());
+
+    // Merge with latest spot values
+    const auto& latestSpotValues = SpotValuesManager::instance().getLatestValues();
+    if (!latestSpotValues.empty()) {
+        JsonDocument paramsDoc;
+        DeserializationError error = deserializeJson(paramsDoc, json);
+        if (!error) {
+            for (const auto& pair : latestSpotValues) {
+                String paramId = String(pair.first);
+                if (paramsDoc.containsKey(paramId)) {
+                    paramsDoc[paramId]["value"] = pair.second;
+                }
+            }
+            json = "";
+            serializeJson(paramsDoc, json);
+        }
+    }
+
+    // Build response
+    String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
+    output += evt.data.jsonReady.nodeId;
+    output += ",\"rawParams\":";
+    output += json;
+    output += "}}";
+
+    client->text(output);
+    DBG_OUTPUT_PORT.printf("[EventProcessor] Sent param values (%d bytes)\n", output.length());
+}
+
 void processEvents(AsyncWebSocket& ws) {
     CANEvent evt;
 
     // Process all pending events (non-blocking)
     while (xQueueReceive(canEventQueue, &evt, 0) == pdTRUE) {
+        // Handle special events that need per-client delivery
+        if (evt.type == EVT_JSON_READY) {
+            handleJsonReadyEvent(ws, evt);
+            continue;
+        }
+
         JsonDocument doc;
 
         const char* eventName = serializeEvent(evt, doc);

@@ -21,6 +21,19 @@ struct ScanProgressEvent {
   uint8_t endNode;
 };
 
+struct JsonProgressEvent {
+  uint32_t clientId;
+  int bytesReceived;
+  int totalBytes;
+  bool complete;
+};
+
+struct JsonReadyEvent {
+  uint32_t clientId;
+  uint8_t nodeId;
+  bool success;
+};
+
 struct ConnectedEvent {
   uint8_t nodeId;
   char serial[50];
@@ -127,6 +140,8 @@ struct CANEvent {
     DeviceDiscoveredEvent deviceDiscovered;
     ScanStatusEvent scanStatus;
     ScanProgressEvent scanProgress;
+    JsonProgressEvent jsonProgress;
+    JsonReadyEvent jsonReady;
     ConnectedEvent connected;
     NodeIdInfoEvent nodeIdInfo;
     NodeIdSetEvent nodeIdSet;

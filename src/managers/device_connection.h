@@ -153,6 +153,11 @@ public:
     // Start JSON download (called when browser requests JSON)
     void startJsonDownload();
 
+    // Start JSON download for a specific client (non-blocking)
+    bool startJsonDownloadAsync(uint32_t clientId);
+    uint32_t getJsonRequestClientId() const { return jsonRequestClientId_; }
+    void clearJsonRequestClientId() { jsonRequestClientId_ = 0; }
+
     // Start serial acquisition (used after device reset)
     void startSerialAcquisition();
 
@@ -177,6 +182,7 @@ private:
     String jsonReceiveBuffer_;
     int jsonTotalSize_ = 0;
     SemaphoreHandle_t jsonBufferMutex_ = nullptr;  // Protects jsonReceiveBuffer_
+    uint32_t jsonRequestClientId_ = 0;  // WebSocket client that requested JSON download
 
     // Callbacks
     ConnectionReadyCallback connectionReadyCallback_ = nullptr;
