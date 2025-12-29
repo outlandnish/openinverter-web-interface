@@ -1,8 +1,10 @@
-#ifndef CONFIG_H
-#define CONFIG_H
+#pragma once
+
+#include "models/can_types.h"
 
 #define EEPROM_VERSION 4
-typedef struct {
+
+struct EEPROMSettings {
     int version;
     int canRXPin;
     int canTXPin;
@@ -10,26 +12,27 @@ typedef struct {
     int canSpeed;
     int scanStartNode;
     int scanEndNode;
-} EEPROMSettings;
+};
 
-
-class Config
-{
-  public:
+class Config {
+public:
     Config();
     void load();
+
     int getCanRXPin();
     void setCanRXPin(int pin);
 
     int getCanTXPin();
     void setCanTXPin(int pin);
 
-
     int getCanEnablePin();
     void setCanEnablePin(int pin);
 
     int getCanSpeed();
     void setCanSpeed(int speed);
+
+    // Convert stored canSpeed integer to BaudRate enum
+    BaudRate getBaudRateEnum() const;
 
     int getScanStartNode();
     void setScanStartNode(int node);
@@ -38,8 +41,7 @@ class Config
     void setScanEndNode(int node);
 
     void saveSettings();
-  private:
-    EEPROMSettings settings;
 
+private:
+    EEPROMSettings settings;
 };
-#endif

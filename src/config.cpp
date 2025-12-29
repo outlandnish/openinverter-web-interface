@@ -59,6 +59,15 @@ void Config::setCanSpeed(int speed) {
     settings.canSpeed = speed;
 }
 
+BaudRate Config::getBaudRateEnum() const {
+    switch (settings.canSpeed) {
+        case 0: return Baud125k;
+        case 1: return Baud250k;
+        case 2:
+        default: return Baud500k;
+    }
+}
+
 int Config::getScanStartNode() {
     return settings.scanStartNode;
 }

@@ -18,7 +18,9 @@
  *
  */
 #include "device_connection.h"
+#include "device_discovery.h"
 #include "protocols/sdo_protocol.h"
+#include "can_task.h"
 #include <Arduino.h>
 
 #define DBG_OUTPUT_PORT Serial
@@ -188,4 +190,46 @@ void DeviceConnection::processSdoResponse(twai_message_t* rxframe) {
             // Do not exit this state
             break;
     }
+}
+
+bool DeviceConnection::connectToDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
+    setCanPins(txPin, rxPin);
+    setBaudRate(baud);
+
+    if (!initCanBusForDevice(nodeId, baud, txPin, rxPin)) {
+        DBG_OUTPUT_PORT.println("Failed to initialize CAN bus");
+        return false;
+    }
+
+    // Clear cached JSON when switching to a different device
+    if (nodeId_ != nodeId) {
+        clearJsonCache();
+        DBG_OUTPUT_PORT.println("Cleared cached JSON (switching devices)");
+    }
+
+    nodeId_ = nodeId;
+    setState(OBTAINSERIAL);
+    resetStateStartTime();
+    DBG_OUTPUT_PORT.printf("Requesting serial number from node %d (SDO 0x5000:0)\n", nodeId);
+    SDOProtocol::requestElement(nodeId_, SDOProtocol::INDEX_SERIAL, 0);
+    DBG_OUTPUT_PORT.println("Connected to device");
+    return true;
+}
+
+bool DeviceConnection::initializeForScanning(BaudRate baud, int txPin, int rxPin) {
+    setCanPins(txPin, rxPin);
+    setBaudRate(baud);
+
+    if (!initCanBusScanning(baud, txPin, rxPin)) {
+        DBG_OUTPUT_PORT.println("Failed to initialize CAN bus for scanning");
+        return false;
+    }
+
+    nodeId_ = 0; // No specific device connected yet
+    setState(IDLE);
+    DBG_OUTPUT_PORT.println("CAN bus initialized (no device connected)");
+
+    // Load saved devices into memory
+    DeviceDiscovery::instance().loadDevices();
+    return true;
 }

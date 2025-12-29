@@ -17,8 +17,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#ifndef OI_CAN_H
-#define OI_CAN_H
+#pragma once
+
 #include <WiFiClient.h>
 #include "models/can_types.h"
 
@@ -44,7 +44,6 @@ double GetValue(int paramId);
 bool RequestValue(int paramId); // Send SDO request without waiting (async, non-blocking with rate limiting, returns false if TX queue full)
 bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs); // Try to receive response (async)
 void SetParameterRequestRateLimit(unsigned long intervalUs); // Configure minimum interval between parameter requests (default: 500us)
-bool IsIdle(); // Check if CAN state machine is idle
 bool SaveToFlash();
 bool LoadFromFlash();
 bool LoadDefaults();
@@ -55,8 +54,6 @@ String ListErrors();
 bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength); // Send arbitrary CAN message
 String StreamValues(String paramIds, int samples);
 int StartUpdate(String fileName);
-int GetNodeId();
-BaudRate GetBaudRate();
 bool ReloadJson(); // Reload JSON for currently connected device
 bool ReloadJson(uint8_t nodeId); // Reload JSON for specific device by nodeId
 bool ResetDevice();
@@ -67,20 +64,4 @@ String ScanDevices(uint8_t startNodeId, uint8_t endNodeId);
 // Continuous scanning functions
 bool StartContinuousScan(uint8_t startNodeId = 1, uint8_t endNodeId = 32); // Returns true if scan started successfully
 
-// Callback type for when connection is fully established (state = IDLE)
-typedef void (*ConnectionReadyCallback)(uint8_t nodeId, const char* serial);
-void SetConnectionReadyCallback(ConnectionReadyCallback callback);
-
-// Callback type for JSON download progress
-typedef void (*JsonDownloadProgressCallback)(int bytesReceived);
-void SetJsonDownloadProgressCallback(JsonDownloadProgressCallback callback);
-
-// Callback type for streaming JSON data chunks as they arrive from CAN
-typedef void (*JsonStreamCallback)(const char* chunk, int chunkSize, bool isComplete);
-void SetJsonStreamCallback(JsonStreamCallback callback);
-
-// JSON download info
-int GetJsonTotalSize(); // Get total size of JSON being downloaded (0 if unknown)
-
 }
-#endif

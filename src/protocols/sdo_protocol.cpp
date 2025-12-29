@@ -19,6 +19,7 @@
  */
 #include "sdo_protocol.h"
 #include "models/can_types.h"
+#include "utils/can_queue.h"
 
 namespace SDOProtocol {
 
@@ -78,7 +79,7 @@ void requestElement(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
   tx_frame.data[6] = 0;
   tx_frame.data[7] = 0;
 
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
 }
 
 bool requestElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex) {
@@ -96,8 +97,7 @@ bool requestElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex)
   tx_frame.data[7] = 0;
 
   // Non-blocking transmit (timeout = 0)
-  esp_err_t result = twai_transmit(&tx_frame, 0);
-  return (result == ESP_OK);
+  return canQueueTransmit(&tx_frame, 0);
 }
 
 void setValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value) {
@@ -111,7 +111,7 @@ void setValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value) 
   tx_frame.data[3] = subIndex;
   *(uint32_t*)&tx_frame.data[4] = value;
 
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
 }
 
 void requestNextSegment(uint8_t nodeId, bool toggleBit) {
@@ -128,7 +128,15 @@ void requestNextSegment(uint8_t nodeId, bool toggleBit) {
   tx_frame.data[6] = 0;
   tx_frame.data[7] = 0;
 
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
+}
+
+bool waitForResponse(twai_message_t* response, TickType_t timeout) {
+  return canQueueReceive(response, timeout);
+}
+
+void clearPendingResponses() {
+  canQueueClearResponses();
 }
 
 } // namespace SDOProtocol

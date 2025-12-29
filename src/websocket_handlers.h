@@ -3,8 +3,28 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 
-// Main dispatch function - call this from onWebSocketEvent
+// WebSocket event handler - register this with ws.onEvent()
+void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
+                      AwsEventType type, void* arg, uint8_t* data, size_t len);
+
+// Main dispatch function - called from onWebSocketEvent for WS_EVT_DATA
 void dispatchWebSocketMessage(AsyncWebSocketClient* client, JsonDocument& doc);
+
+// ============================================================================
+// WebSocket Broadcast Helpers
+// ============================================================================
+
+/**
+ * Broadcast a JSON event to all connected WebSocket clients.
+ * @param event The event name
+ * @param data JSON string data payload
+ */
+void broadcastToWebSocket(const char* event, const char* data);
+
+/**
+ * Broadcast a device discovery event to all connected WebSocket clients.
+ */
+void broadcastDeviceDiscovery(uint8_t nodeId, const char* serial, uint32_t lastSeen);
 
 // Forward declarations for all handlers
 void handleStartScan(AsyncWebSocketClient* client, JsonDocument& doc);

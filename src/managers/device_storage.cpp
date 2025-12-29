@@ -1,4 +1,5 @@
 #include "device_storage.h"
+#include "device_cache.h"
 #include <LittleFS.h>
 
 #define DBG_OUTPUT_PORT Serial
@@ -28,6 +29,10 @@ bool DeviceStorage::saveDevices(const JsonDocument& doc) {
 
   serializeJson(doc, file);
   file.close();
+
+  // Invalidate cache since devices have been modified
+  DeviceCache::instance().invalidate();
+
   return true;
 }
 

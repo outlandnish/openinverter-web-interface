@@ -1,5 +1,4 @@
-#ifndef CAN_EVENT_H
-#define CAN_EVENT_H
+#pragma once
 
 #include "can_types.h"
 #include <cstdint>
@@ -85,9 +84,45 @@ struct CanIoIntervalStatusEvent {
   uint32_t intervalMs;
 };
 
+// Task 34: Device command event structures
+
+struct DeviceCommandEvent {
+  bool success;
+};
+
+struct ValueSetEvent {
+  SetValueResult result;
+  int paramId;
+  double value;
+};
+
+struct CanMapClearedEvent {
+  bool success;
+  bool isRx;
+};
+
+struct CanMappingsReceivedEvent {
+  bool success;
+  char mappingsJson[2048];  // JSON string of mappings
+};
+
+struct CanMappingAddedEvent {
+  SetValueResult result;
+};
+
+struct CanMappingRemovedEvent {
+  SetValueResult result;
+};
+
+struct ErrorsListedEvent {
+  bool success;
+  char errorsJson[1024];    // JSON string of errors
+};
+
 // Event message structure
 struct CANEvent {
   CANEventType type;
+  uint32_t requestId;  // Matches requestId from command (0 = unsolicited event)
   union {
     DeviceDiscoveredEvent deviceDiscovered;
     ScanStatusEvent scanStatus;
@@ -104,7 +139,13 @@ struct CANEvent {
     CanMessageSentEvent canMessageSent;
     CanIntervalStatusEvent canIntervalStatus;
     CanIoIntervalStatusEvent canIoIntervalStatus;
+    // Task 34: Device command events
+    DeviceCommandEvent deviceCommand;       // For save/load/start/stop/reset
+    ValueSetEvent valueSet;
+    CanMapClearedEvent canMapCleared;
+    CanMappingsReceivedEvent canMappingsReceived;
+    CanMappingAddedEvent canMappingAdded;
+    CanMappingRemovedEvent canMappingRemoved;
+    ErrorsListedEvent errorsListed;
   } data;
 };
-
-#endif // CAN_EVENT_H

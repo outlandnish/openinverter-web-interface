@@ -1,5 +1,4 @@
-#ifndef CAN_COMMAND_H
-#define CAN_COMMAND_H
+#pragma once
 
 #include "can_types.h"
 #include <cstdint>
@@ -77,9 +76,40 @@ struct UpdateCanIoFlagsCommand {
   uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
 };
 
+// Task 34: Device command payload structures
+
+struct StartDeviceCommand {
+  uint32_t mode;            // Start mode (0 = normal)
+};
+
+struct SetValueCommand {
+  int paramId;              // Parameter ID to set
+  double value;             // Value to set
+};
+
+struct ClearCanMapCommand {
+  bool isRx;                // true = clear RX mappings, false = clear TX mappings
+};
+
+struct AddCanMappingCommand {
+  bool isRx;                // true = RX mapping, false = TX mapping
+  uint32_t canId;           // CAN ID (COB-ID)
+  uint32_t paramId;         // Parameter ID
+  uint8_t position;         // Bit position in CAN frame
+  int8_t length;            // Bit length (negative = signed)
+  float gain;               // Gain multiplier
+  int8_t offset;            // Offset value
+};
+
+struct RemoveCanMappingCommand {
+  uint32_t index;           // SDO index of mapping to remove
+  uint8_t subIndex;         // SDO subindex
+};
+
 // Command message structure
 struct CANCommand {
   CANCommandType type;
+  uint32_t requestId;  // Unique ID for matching async responses (0 = no response expected)
   union {
     ScanCommand scan;
     ConnectCommand connect;
@@ -93,7 +123,11 @@ struct CANCommand {
     StopCanIntervalCommand stopCanInterval;
     StartCanIoIntervalCommand startCanIoInterval;
     UpdateCanIoFlagsCommand updateCanIoFlags;
+    // Task 34: Device commands
+    StartDeviceCommand startDevice;
+    SetValueCommand setValue;
+    ClearCanMapCommand clearCanMap;
+    AddCanMappingCommand addCanMapping;
+    RemoveCanMappingCommand removeCanMapping;
   } data;
 };
-
-#endif // CAN_COMMAND_H

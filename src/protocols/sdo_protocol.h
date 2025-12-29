@@ -70,4 +70,8 @@ bool requestElementNonBlocking(uint8_t nodeId, uint16_t index, uint8_t subIndex)
 void setValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value);
 void requestNextSegment(uint8_t nodeId, bool toggleBit);
 
+// SDO Response Functions (queue-based)
+bool waitForResponse(twai_message_t* response, TickType_t timeout);
+void clearPendingResponses();
+
 } // namespace SDOProtocol

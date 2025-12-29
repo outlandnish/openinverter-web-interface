@@ -1,5 +1,6 @@
 #include "http_handlers.h"
 #include "oi_can.h"
+#include "managers/device_connection.h"
 #include "managers/device_discovery.h"
 #include "main.h"
 #include "config.h"
@@ -10,7 +11,6 @@
 // External references to globals from main.cpp
 extern AsyncWebSocket ws;
 extern Config config;
-extern int totalUpdatePages;
 
 // Helper function to format byte sizes
 String formatBytes(uint64_t bytes) {
@@ -162,7 +162,7 @@ void handleOtaUpload(AsyncWebServerRequest *request, String filename,
     DBG_OUTPUT_PORT.printf("OTA Upload Start: %s (%zu bytes)\n", filename.c_str(), request->contentLength());
 
     // Check if device is connected and idle
-    if (!OICan::IsIdle()) {
+    if (!DeviceConnection::instance().isIdle()) {
       DBG_OUTPUT_PORT.println("OTA Upload failed - device not idle");
       JsonDocument doc;
       doc["event"] = "otaError";
@@ -218,8 +218,8 @@ void handleOtaUpload(AsyncWebServerRequest *request, String filename,
     DBG_OUTPUT_PORT.printf("Firmware file saved: %zu bytes\n", index + len);
 
     // Start firmware update process
-    totalUpdatePages = OICan::StartUpdate(firmwareFilePath);
-    DBG_OUTPUT_PORT.printf("Starting firmware update - %d pages to send\n", totalUpdatePages);
+    int totalPages = OICan::StartUpdate(firmwareFilePath);
+    DBG_OUTPUT_PORT.printf("Starting firmware update - %d pages to send\n", totalPages);
 
     // Send initial progress
     JsonDocument doc;

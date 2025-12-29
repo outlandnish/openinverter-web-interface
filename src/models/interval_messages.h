@@ -1,5 +1,4 @@
-#ifndef INTERVAL_MESSAGES_H
-#define INTERVAL_MESSAGES_H
+#pragma once
 
 #include <cstdint>
 #include <WString.h>  // Arduino String
@@ -28,5 +27,3 @@ struct CanIoInterval {
   uint8_t sequenceCounter; // 2-bit counter (0-3)
   bool useCrc;             // Use CRC-32 (true) or counter-only (false)
 };
-
-#endif // INTERVAL_MESSAGES_H

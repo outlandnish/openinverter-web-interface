@@ -3,308 +3,254 @@
 #include "driver/twai.h"
 #include "models/can_command.h"
 #include "models/can_event.h"
-#include "models/interval_messages.h"
 #include "models/can_types.h"
 #include "utils/string_utils.h"
-#include "utils/can_io_utils.h"
 #include "utils/can_utils.h"
 #include "managers/device_discovery.h"
 #include "managers/device_connection.h"
+#include "managers/spot_values_manager.h"
+#include "managers/can_interval_manager.h"
 #include "firmware/update_handler.h"
 #include "protocols/sdo_protocol.h"
 #include "oi_can.h"
 #include "config.h"
-#include <vector>
-#include <map>
-#include <deque>
 #include <Arduino.h>
 
-// External declarations for globals and functions defined in main.cpp
+// External declarations for globals defined in main.cpp
 extern QueueHandle_t canCommandQueue;
 extern QueueHandle_t canEventQueue;
 extern Config config;
 
-// Spot values globals
-extern std::vector<int> spotValuesParamIds;
-extern uint32_t spotValuesInterval;
-extern uint32_t lastSpotValuesTime;
-extern std::map<int, double> latestSpotValues;
-
-// Interval messages globals
-extern std::vector<IntervalCanMessage> intervalCanMessages;
-
-// CAN IO interval global
-extern CanIoInterval canIoInterval;
-
-// Spot values request queue
-extern std::deque<int> spotValuesRequestQueue;
-
-// Helper functions from main.cpp
-extern void reloadSpotValuesQueue();
-extern void processSpotValuesQueue();
-extern void flushSpotValuesBatch();
+// CAN I/O queues
+QueueHandle_t canTxQueue = nullptr;
+QueueHandle_t sdoResponseQueue = nullptr;
 
 #define DBG_OUTPUT_PORT Serial
+
+// ============================================================================
+// Queue Initialization
+// ============================================================================
+
+void initCanQueues() {
+    if (canTxQueue == nullptr) {
+        canTxQueue = xQueueCreate(CAN_TX_QUEUE_SIZE, sizeof(twai_message_t));
+        if (canTxQueue == nullptr) {
+            DBG_OUTPUT_PORT.println("[CAN Task] Failed to create canTxQueue");
+        }
+    }
+    if (sdoResponseQueue == nullptr) {
+        sdoResponseQueue = xQueueCreate(SDO_RESPONSE_QUEUE_SIZE, sizeof(twai_message_t));
+        if (sdoResponseQueue == nullptr) {
+            DBG_OUTPUT_PORT.println("[CAN Task] Failed to create sdoResponseQueue");
+        }
+    }
+}
 
 // ============================================================================
 // Command Handler Functions
 // ============================================================================
 
 void handleStartScanCommand(const CANCommand& cmd) {
-  DBG_OUTPUT_PORT.printf("[CAN Task] Starting scan %d-%d\n", cmd.data.scan.start, cmd.data.scan.end);
-  bool scanStarted = OICan::StartContinuousScan(cmd.data.scan.start, cmd.data.scan.end);
+    DBG_OUTPUT_PORT.printf("[CAN Task] Starting scan %d-%d\n", cmd.data.scan.start, cmd.data.scan.end);
+    bool scanStarted = OICan::StartContinuousScan(cmd.data.scan.start, cmd.data.scan.end);
 
-  if (scanStarted) {
-    // Send scan status event if scan actually started
-    CANEvent evt;
-    evt.type = EVT_SCAN_STATUS;
-    evt.data.scanStatus.active = true;
-    xQueueSend(canEventQueue, &evt, 0);
-  } else {
-    // Send error event if scan failed to start
-    DBG_OUTPUT_PORT.println("[CAN Task] Scan failed to start - device busy");
-    CANEvent evt;
-    evt.type = EVT_ERROR;
-    safeCopyString(evt.data.error.message, "Cannot start scan - device is busy. Please wait or disconnect from the current device.");
-    xQueueSend(canEventQueue, &evt, 0);
-  }
+    if (scanStarted) {
+        CANEvent evt;
+        evt.type = EVT_SCAN_STATUS;
+        evt.data.scanStatus.active = true;
+        xQueueSend(canEventQueue, &evt, 0);
+    } else {
+        DBG_OUTPUT_PORT.println("[CAN Task] Scan failed to start - device busy");
+        CANEvent evt;
+        evt.type = EVT_ERROR;
+        safeCopyString(evt.data.error.message, "Cannot start scan - device is busy. Please wait or disconnect from the current device.");
+        xQueueSend(canEventQueue, &evt, 0);
+    }
 }
 
 void handleStopScanCommand(const CANCommand& cmd) {
-  DBG_OUTPUT_PORT.println("[CAN Task] Stopping scan");
-  DeviceDiscovery::instance().stopContinuousScan();
+    DBG_OUTPUT_PORT.println("[CAN Task] Stopping scan");
+    DeviceDiscovery::instance().stopContinuousScan();
 
-  // Send scan status event
-  CANEvent evt;
-  evt.type = EVT_SCAN_STATUS;
-  evt.data.scanStatus.active = false;
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_SCAN_STATUS;
+    evt.data.scanStatus.active = false;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleConnectCommand(const CANCommand& cmd) {
-  DBG_OUTPUT_PORT.printf("[CAN Task] Connecting to node %d\n", cmd.data.connect.nodeId);
+    DBG_OUTPUT_PORT.printf("[CAN Task] Connecting to node %d\n", cmd.data.connect.nodeId);
 
-  // Clear interval messages when switching devices
-  if (!intervalCanMessages.empty()) {
-    DBG_OUTPUT_PORT.printf("[CAN Task] Clearing %d interval message(s) on device switch\n", intervalCanMessages.size());
-    intervalCanMessages.clear();
-  }
+    // Clear interval messages when switching devices
+    CanIntervalManager::instance().clearAllIntervals();
 
-  OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
-  OICan::Init(cmd.data.connect.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
-  // Connected event will be sent via ConnectionReadyCallback when device reaches IDLE state
+    OICan::Init(cmd.data.connect.nodeId, config.getBaudRateEnum(),
+                config.getCanTXPin(), config.getCanRXPin());
 }
 
 void handleSetNodeIdCommand(const CANCommand& cmd) {
-  DBG_OUTPUT_PORT.printf("[CAN Task] Setting node ID to %d\n", cmd.data.setNodeId.nodeId);
+    DBG_OUTPUT_PORT.printf("[CAN Task] Setting node ID to %d\n", cmd.data.setNodeId.nodeId);
 
-  // Clear interval messages when switching devices
-  if (!intervalCanMessages.empty()) {
-    DBG_OUTPUT_PORT.printf("[CAN Task] Clearing %d interval message(s) on node ID change\n", intervalCanMessages.size());
-    intervalCanMessages.clear();
-  }
+    // Clear interval messages when switching devices
+    CanIntervalManager::instance().clearAllIntervals();
 
-  OICan::BaudRate baud = config.getCanSpeed() == 0 ? OICan::Baud125k : (config.getCanSpeed() == 1 ? OICan::Baud250k : OICan::Baud500k);
-  OICan::Init(cmd.data.setNodeId.nodeId, baud, config.getCanTXPin(), config.getCanRXPin());
+    OICan::Init(cmd.data.setNodeId.nodeId, config.getBaudRateEnum(),
+                config.getCanTXPin(), config.getCanRXPin());
 
-  // Send node ID set event
-  CANEvent evt;
-  evt.type = EVT_NODE_ID_SET;
-  evt.data.nodeIdSet.id = OICan::GetNodeId();
-  evt.data.nodeIdSet.speed = OICan::GetBaudRate();
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_NODE_ID_SET;
+    evt.data.nodeIdSet.id = DeviceConnection::instance().getNodeId();
+    evt.data.nodeIdSet.speed = DeviceConnection::instance().getBaudRate();
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleGetNodeIdCommand(const CANCommand& cmd) {
-  CANEvent evt;
-  evt.type = EVT_NODE_ID_INFO;
-  evt.data.nodeIdInfo.id = OICan::GetNodeId();
-  evt.data.nodeIdInfo.speed = OICan::GetBaudRate();
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_NODE_ID_INFO;
+    evt.data.nodeIdInfo.id = DeviceConnection::instance().getNodeId();
+    evt.data.nodeIdInfo.speed = DeviceConnection::instance().getBaudRate();
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleSetDeviceNameCommand(const CANCommand& cmd) {
-  bool success = DeviceDiscovery::instance().saveDeviceName(cmd.data.setDeviceName.serial, cmd.data.setDeviceName.name, cmd.data.setDeviceName.nodeId);
-  CANEvent evt;
-  evt.type = EVT_DEVICE_NAME_SET;
-  evt.data.deviceNameSet.success = success;
-  safeCopyString(evt.data.deviceNameSet.serial, cmd.data.setDeviceName.serial);
-  safeCopyString(evt.data.deviceNameSet.name, cmd.data.setDeviceName.name);
-  xQueueSend(canEventQueue, &evt, 0);
+    bool success = DeviceDiscovery::instance().saveDeviceName(
+        cmd.data.setDeviceName.serial,
+        cmd.data.setDeviceName.name,
+        cmd.data.setDeviceName.nodeId);
+
+    CANEvent evt;
+    evt.type = EVT_DEVICE_NAME_SET;
+    evt.data.deviceNameSet.success = success;
+    safeCopyString(evt.data.deviceNameSet.serial, cmd.data.setDeviceName.serial);
+    safeCopyString(evt.data.deviceNameSet.name, cmd.data.setDeviceName.name);
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleStartSpotValuesCommand(const CANCommand& cmd) {
-  // Start streaming spot values
-  spotValuesInterval = cmd.data.spotValues.interval;
-  spotValuesParamIds.clear();
-  for(int i = 0; i < cmd.data.spotValues.paramCount; i++) {
-    spotValuesParamIds.push_back(cmd.data.spotValues.paramIds[i]);
-  }
-  lastSpotValuesTime = millis();
+    SpotValuesManager::instance().start(
+        cmd.data.spotValues.interval,
+        cmd.data.spotValues.paramIds,
+        cmd.data.spotValues.paramCount);
 
-  // Load initial request queue
-  reloadSpotValuesQueue();
-
-  CANEvent evt;
-  evt.type = EVT_SPOT_VALUES_STATUS;
-  evt.data.spotValuesStatus.active = true;
-  evt.data.spotValuesStatus.interval = spotValuesInterval;
-  evt.data.spotValuesStatus.paramCount = spotValuesParamIds.size();
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_SPOT_VALUES_STATUS;
+    evt.data.spotValuesStatus.active = true;
+    evt.data.spotValuesStatus.interval = cmd.data.spotValues.interval;
+    evt.data.spotValuesStatus.paramCount = cmd.data.spotValues.paramCount;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleStopSpotValuesCommand(const CANCommand& cmd) {
-  // Flush any remaining batched values before stopping
-  flushSpotValuesBatch();
+    SpotValuesManager::instance().stop();
 
-  spotValuesParamIds.clear();
-  spotValuesRequestQueue.clear(); // Clear the request queue
-  latestSpotValues.clear(); // Clear persistent cache
-
-  CANEvent evt;
-  evt.type = EVT_SPOT_VALUES_STATUS;
-  evt.data.spotValuesStatus.active = false;
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_SPOT_VALUES_STATUS;
+    evt.data.spotValuesStatus.active = false;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleDeleteDeviceCommand(const CANCommand& cmd) {
-  bool success = DeviceDiscovery::instance().deleteDevice(cmd.data.deleteDevice.serial);
-  CANEvent evt;
-  evt.type = EVT_DEVICE_DELETED;
-  evt.data.deviceDeleted.success = success;
-  safeCopyString(evt.data.deviceDeleted.serial, cmd.data.deleteDevice.serial);
-  xQueueSend(canEventQueue, &evt, 0);
+    bool success = DeviceDiscovery::instance().deleteDevice(cmd.data.deleteDevice.serial);
+
+    CANEvent evt;
+    evt.type = EVT_DEVICE_DELETED;
+    evt.data.deviceDeleted.success = success;
+    safeCopyString(evt.data.deviceDeleted.serial, cmd.data.deleteDevice.serial);
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleRenameDeviceCommand(const CANCommand& cmd) {
-  bool success = DeviceDiscovery::instance().saveDeviceName(cmd.data.renameDevice.serial, cmd.data.renameDevice.name, -1);
-  CANEvent evt;
-  evt.type = EVT_DEVICE_RENAMED;
-  evt.data.deviceRenamed.success = success;
-  safeCopyString(evt.data.deviceRenamed.serial, cmd.data.renameDevice.serial);
-  safeCopyString(evt.data.deviceRenamed.name, cmd.data.renameDevice.name);
-  xQueueSend(canEventQueue, &evt, 0);
+    bool success = DeviceDiscovery::instance().saveDeviceName(
+        cmd.data.renameDevice.serial,
+        cmd.data.renameDevice.name,
+        -1);
+
+    CANEvent evt;
+    evt.type = EVT_DEVICE_RENAMED;
+    evt.data.deviceRenamed.success = success;
+    safeCopyString(evt.data.deviceRenamed.serial, cmd.data.renameDevice.serial);
+    safeCopyString(evt.data.deviceRenamed.name, cmd.data.renameDevice.name);
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleSendCanMessageCommand(const CANCommand& cmd) {
-  bool success = OICan::SendCanMessage(
-    cmd.data.sendCanMessage.canId,
-    cmd.data.sendCanMessage.data,
-    cmd.data.sendCanMessage.dataLength
-  );
+    bool success = OICan::SendCanMessage(
+        cmd.data.sendCanMessage.canId,
+        cmd.data.sendCanMessage.data,
+        cmd.data.sendCanMessage.dataLength);
 
-  CANEvent evt;
-  evt.type = EVT_CAN_MESSAGE_SENT;
-  evt.data.canMessageSent.success = success;
-  evt.data.canMessageSent.canId = cmd.data.sendCanMessage.canId;
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_CAN_MESSAGE_SENT;
+    evt.data.canMessageSent.success = success;
+    evt.data.canMessageSent.canId = cmd.data.sendCanMessage.canId;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleStartCanIntervalCommand(const CANCommand& cmd) {
-  // Check if interval ID already exists and remove it
-  for (auto it = intervalCanMessages.begin(); it != intervalCanMessages.end(); ) {
-    if (it->id == cmd.data.startCanInterval.intervalId) {
-      it = intervalCanMessages.erase(it);
-    } else {
-      ++it;
-    }
-  }
+    CanIntervalManager::instance().startInterval(
+        cmd.data.startCanInterval.intervalId,
+        cmd.data.startCanInterval.canId,
+        cmd.data.startCanInterval.data,
+        cmd.data.startCanInterval.dataLength,
+        cmd.data.startCanInterval.intervalMs);
 
-  // Add new interval message
-  IntervalCanMessage msg;
-  msg.id = String(cmd.data.startCanInterval.intervalId);
-  msg.canId = cmd.data.startCanInterval.canId;
-  msg.dataLength = cmd.data.startCanInterval.dataLength;
-  for (uint8_t i = 0; i < msg.dataLength; i++) {
-    msg.data[i] = cmd.data.startCanInterval.data[i];
-  }
-  msg.intervalMs = cmd.data.startCanInterval.intervalMs;
-  msg.lastSentTime = millis();
-  intervalCanMessages.push_back(msg);
-
-  DBG_OUTPUT_PORT.printf("[CAN Task] Started interval message: ID=%s, CAN=0x%03lX, Interval=%lums\n",
-                         msg.id.c_str(), (unsigned long)msg.canId, (unsigned long)msg.intervalMs);
-
-  CANEvent evt;
-  evt.type = EVT_CAN_INTERVAL_STATUS;
-  evt.data.canIntervalStatus.active = true;
-  safeCopyString(evt.data.canIntervalStatus.intervalId, cmd.data.startCanInterval.intervalId);
-  evt.data.canIntervalStatus.intervalMs = cmd.data.startCanInterval.intervalMs;
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_CAN_INTERVAL_STATUS;
+    evt.data.canIntervalStatus.active = true;
+    safeCopyString(evt.data.canIntervalStatus.intervalId, cmd.data.startCanInterval.intervalId);
+    evt.data.canIntervalStatus.intervalMs = cmd.data.startCanInterval.intervalMs;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleStopCanIntervalCommand(const CANCommand& cmd) {
-  bool found = false;
-  for (auto it = intervalCanMessages.begin(); it != intervalCanMessages.end(); ) {
-    if (it->id == cmd.data.stopCanInterval.intervalId) {
-      DBG_OUTPUT_PORT.printf("[CAN Task] Stopped interval message: ID=%s\n", it->id.c_str());
-      it = intervalCanMessages.erase(it);
-      found = true;
-    } else {
-      ++it;
-    }
-  }
+    bool found = CanIntervalManager::instance().hasInterval(cmd.data.stopCanInterval.intervalId);
+    CanIntervalManager::instance().stopInterval(cmd.data.stopCanInterval.intervalId);
 
-  if (found) {
-    CANEvent evt;
-    evt.type = EVT_CAN_INTERVAL_STATUS;
-    evt.data.canIntervalStatus.active = false;
-    safeCopyString(evt.data.canIntervalStatus.intervalId, cmd.data.stopCanInterval.intervalId);
-    evt.data.canIntervalStatus.intervalMs = 0;
-    xQueueSend(canEventQueue, &evt, 0);
-  }
+    if (found) {
+        CANEvent evt;
+        evt.type = EVT_CAN_INTERVAL_STATUS;
+        evt.data.canIntervalStatus.active = false;
+        safeCopyString(evt.data.canIntervalStatus.intervalId, cmd.data.stopCanInterval.intervalId);
+        evt.data.canIntervalStatus.intervalMs = 0;
+        xQueueSend(canEventQueue, &evt, 0);
+    }
 }
 
 void handleStartCanIoIntervalCommand(const CANCommand& cmd) {
-  // Update CAN IO interval state
-  canIoInterval.active = true;
-  canIoInterval.canId = cmd.data.startCanIoInterval.canId;
-  canIoInterval.pot = cmd.data.startCanIoInterval.pot;
-  canIoInterval.pot2 = cmd.data.startCanIoInterval.pot2;
-  canIoInterval.canio = cmd.data.startCanIoInterval.canio;
-  canIoInterval.cruisespeed = cmd.data.startCanIoInterval.cruisespeed;
-  canIoInterval.regenpreset = cmd.data.startCanIoInterval.regenpreset;
-  canIoInterval.intervalMs = cmd.data.startCanIoInterval.intervalMs;
-  canIoInterval.useCrc = cmd.data.startCanIoInterval.useCrc;
-  canIoInterval.lastSentTime = millis();
-  // Start with counter=1 to avoid matching the last message from a previous session
-  // This prevents ERR_CANCOUNTER if the last message before restart was also counter=0
-  canIoInterval.sequenceCounter = 1;
+    CanIntervalManager::instance().startCanIoInterval(
+        cmd.data.startCanIoInterval.canId,
+        cmd.data.startCanIoInterval.pot,
+        cmd.data.startCanIoInterval.pot2,
+        cmd.data.startCanIoInterval.canio,
+        cmd.data.startCanIoInterval.cruisespeed,
+        cmd.data.startCanIoInterval.regenpreset,
+        cmd.data.startCanIoInterval.intervalMs,
+        cmd.data.startCanIoInterval.useCrc);
 
-  DBG_OUTPUT_PORT.printf("[CAN Task] Started CAN IO interval: CAN=0x%03lX, canio=0x%02X, Interval=%lums\n",
-                         (unsigned long)canIoInterval.canId, canIoInterval.canio, (unsigned long)canIoInterval.intervalMs);
-
-  // Send status event
-  CANEvent evt;
-  evt.type = EVT_CANIO_INTERVAL_STATUS;
-  evt.data.canIoIntervalStatus.active = true;
-  evt.data.canIoIntervalStatus.intervalMs = canIoInterval.intervalMs;
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_CANIO_INTERVAL_STATUS;
+    evt.data.canIoIntervalStatus.active = true;
+    evt.data.canIoIntervalStatus.intervalMs = cmd.data.startCanIoInterval.intervalMs;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleStopCanIoIntervalCommand(const CANCommand& cmd) {
-  canIoInterval.active = false;
-  DBG_OUTPUT_PORT.println("[CAN Task] Stopped CAN IO interval");
+    CanIntervalManager::instance().stopCanIoInterval();
 
-  // Send status event
-  CANEvent evt;
-  evt.type = EVT_CANIO_INTERVAL_STATUS;
-  evt.data.canIoIntervalStatus.active = false;
-  evt.data.canIoIntervalStatus.intervalMs = 0;
-  xQueueSend(canEventQueue, &evt, 0);
+    CANEvent evt;
+    evt.type = EVT_CANIO_INTERVAL_STATUS;
+    evt.data.canIoIntervalStatus.active = false;
+    evt.data.canIoIntervalStatus.intervalMs = 0;
+    xQueueSend(canEventQueue, &evt, 0);
 }
 
 void handleUpdateCanIoFlagsCommand(const CANCommand& cmd) {
-  if (canIoInterval.active) {
-    canIoInterval.pot = cmd.data.updateCanIoFlags.pot;
-    canIoInterval.pot2 = cmd.data.updateCanIoFlags.pot2;
-    canIoInterval.canio = cmd.data.updateCanIoFlags.canio;
-    canIoInterval.cruisespeed = cmd.data.updateCanIoFlags.cruisespeed;
-    canIoInterval.regenpreset = cmd.data.updateCanIoFlags.regenpreset;
-    DBG_OUTPUT_PORT.printf("[CAN Task] Updated CAN IO flags (canio=0x%02X)\n", canIoInterval.canio);
-  } else {
-    DBG_OUTPUT_PORT.println("[CAN Task] Ignoring update - CAN IO interval not active");
-  }
+    CanIntervalManager::instance().updateCanIoFlags(
+        cmd.data.updateCanIoFlags.pot,
+        cmd.data.updateCanIoFlags.pot2,
+        cmd.data.updateCanIoFlags.canio,
+        cmd.data.updateCanIoFlags.cruisespeed,
+        cmd.data.updateCanIoFlags.regenpreset);
 }
 
 // ============================================================================
@@ -312,48 +258,17 @@ void handleUpdateCanIoFlagsCommand(const CANCommand& cmd) {
 // ============================================================================
 
 void processSpotValuesSequence() {
-  if (!spotValuesParamIds.empty()) {
-    // Check if it's time to reload the queue
-    if ((millis() - lastSpotValuesTime) >= spotValuesInterval) {
-      lastSpotValuesTime = millis();
-      reloadSpotValuesQueue();
+    SpotValuesManager& spotMgr = SpotValuesManager::instance();
+
+    if (spotMgr.isActive()) {
+        // Check if it's time to reload the queue
+        if ((millis() - spotMgr.getLastCollectionTime()) >= spotMgr.getInterval()) {
+            spotMgr.updateLastCollectionTime(millis());
+            spotMgr.reloadQueue();
+        }
+        // Always process queue and responses
+        spotMgr.processQueue();
     }
-    // Always process queue and responses
-    processSpotValuesQueue();
-  }
-}
-
-void sendIntervalMessages() {
-  uint32_t currentTime = millis();
-  for (auto& msg : intervalCanMessages) {
-    if ((currentTime - msg.lastSentTime) >= msg.intervalMs) {
-      msg.lastSentTime = currentTime;
-      OICan::SendCanMessage(msg.canId, msg.data, msg.dataLength);
-    }
-  }
-}
-
-void sendCanIoIntervalMessage() {
-  if (!canIoInterval.active) {
-    return;
-  }
-
-  uint32_t currentTime = millis();
-  if ((currentTime - canIoInterval.lastSentTime) >= canIoInterval.intervalMs) {
-    canIoInterval.lastSentTime = currentTime;
-
-    // Build the CAN IO message with current state and sequence counter
-    // useCrc from user setting: false for counter-only mode (controlcheck=0), true for CRC mode (controlcheck=1)
-    uint8_t msgData[8];
-    buildCanIoMessage(msgData, canIoInterval.pot, canIoInterval.pot2, canIoInterval.canio,
-                      canIoInterval.sequenceCounter, canIoInterval.cruisespeed, canIoInterval.regenpreset, canIoInterval.useCrc);
-
-    // Send the message
-    OICan::SendCanMessage(canIoInterval.canId, msgData, 8);
-
-    // Increment sequence counter (0-3)
-    canIoInterval.sequenceCounter = (canIoInterval.sequenceCounter + 1) & 0x03;
-  }
 }
 
 // ============================================================================
@@ -361,81 +276,82 @@ void sendCanIoIntervalMessage() {
 // ============================================================================
 
 void dispatchCommand(const CANCommand& cmd) {
-  switch(cmd.type) {
-    case CMD_START_SCAN:
-      handleStartScanCommand(cmd);
-      break;
-
-    case CMD_STOP_SCAN:
-      handleStopScanCommand(cmd);
-      break;
-
-    case CMD_CONNECT:
-      handleConnectCommand(cmd);
-      break;
-
-    case CMD_SET_NODE_ID:
-      handleSetNodeIdCommand(cmd);
-      break;
-
-    case CMD_GET_NODE_ID:
-      handleGetNodeIdCommand(cmd);
-      break;
-
-    case CMD_SET_DEVICE_NAME:
-      handleSetDeviceNameCommand(cmd);
-      break;
-
-    case CMD_START_SPOT_VALUES:
-      handleStartSpotValuesCommand(cmd);
-      break;
-
-    case CMD_STOP_SPOT_VALUES:
-      handleStopSpotValuesCommand(cmd);
-      break;
-
-    case CMD_DELETE_DEVICE:
-      handleDeleteDeviceCommand(cmd);
-      break;
-
-    case CMD_RENAME_DEVICE:
-      handleRenameDeviceCommand(cmd);
-      break;
-
-    case CMD_SEND_CAN_MESSAGE:
-      handleSendCanMessageCommand(cmd);
-      break;
-
-    case CMD_START_CAN_INTERVAL:
-      handleStartCanIntervalCommand(cmd);
-      break;
-
-    case CMD_STOP_CAN_INTERVAL:
-      handleStopCanIntervalCommand(cmd);
-      break;
-
-    case CMD_START_CANIO_INTERVAL:
-      handleStartCanIoIntervalCommand(cmd);
-      break;
-
-    case CMD_STOP_CANIO_INTERVAL:
-      handleStopCanIoIntervalCommand(cmd);
-      break;
-
-    case CMD_UPDATE_CANIO_FLAGS:
-      handleUpdateCanIoFlagsCommand(cmd);
-      break;
-  }
+    switch (cmd.type) {
+        case CMD_START_SCAN:
+            handleStartScanCommand(cmd);
+            break;
+        case CMD_STOP_SCAN:
+            handleStopScanCommand(cmd);
+            break;
+        case CMD_CONNECT:
+            handleConnectCommand(cmd);
+            break;
+        case CMD_SET_NODE_ID:
+            handleSetNodeIdCommand(cmd);
+            break;
+        case CMD_GET_NODE_ID:
+            handleGetNodeIdCommand(cmd);
+            break;
+        case CMD_SET_DEVICE_NAME:
+            handleSetDeviceNameCommand(cmd);
+            break;
+        case CMD_START_SPOT_VALUES:
+            handleStartSpotValuesCommand(cmd);
+            break;
+        case CMD_STOP_SPOT_VALUES:
+            handleStopSpotValuesCommand(cmd);
+            break;
+        case CMD_DELETE_DEVICE:
+            handleDeleteDeviceCommand(cmd);
+            break;
+        case CMD_RENAME_DEVICE:
+            handleRenameDeviceCommand(cmd);
+            break;
+        case CMD_SEND_CAN_MESSAGE:
+            handleSendCanMessageCommand(cmd);
+            break;
+        case CMD_START_CAN_INTERVAL:
+            handleStartCanIntervalCommand(cmd);
+            break;
+        case CMD_STOP_CAN_INTERVAL:
+            handleStopCanIntervalCommand(cmd);
+            break;
+        case CMD_START_CANIO_INTERVAL:
+            handleStartCanIoIntervalCommand(cmd);
+            break;
+        case CMD_STOP_CANIO_INTERVAL:
+            handleStopCanIoIntervalCommand(cmd);
+            break;
+        case CMD_UPDATE_CANIO_FLAGS:
+            handleUpdateCanIoFlagsCommand(cmd);
+            break;
+        // Task 34: Commands handled via SDO protocol layer (not dispatched here)
+        case CMD_SAVE_TO_FLASH:
+        case CMD_LOAD_FROM_FLASH:
+        case CMD_LOAD_DEFAULTS:
+        case CMD_START_DEVICE:
+        case CMD_STOP_DEVICE:
+        case CMD_RESET_DEVICE:
+        case CMD_SET_VALUE:
+        case CMD_CLEAR_CAN_MAP:
+        case CMD_GET_CAN_MAPPINGS:
+        case CMD_ADD_CAN_MAPPING:
+        case CMD_REMOVE_CAN_MAPPING:
+        case CMD_LIST_ERRORS:
+            // These commands are processed directly in oi_can via SDO protocol
+            // They use canTxQueue/sdoResponseQueue, not the command dispatch
+            DBG_OUTPUT_PORT.printf("[CAN Task] Command %d should use SDO protocol layer\n", cmd.type);
+            break;
+    }
 }
 
 // ============================================================================
 // TWAI Driver Initialization
 // ============================================================================
 
-// Helper function to configure and start TWAI driver
-// Returns true on success, false on failure
-static bool configureTwaiDriver(BaudRate baud, int txPin, int rxPin, const twai_filter_config_t& filter) {
-  twai_general_config_t g_config = {
+static bool configureTwaiDriver(BaudRate baud, int txPin, int rxPin,
+                                 const twai_filter_config_t& filter) {
+    twai_general_config_t g_config = {
         .mode = TWAI_MODE_NORMAL,
         .tx_io = static_cast<gpio_num_t>(txPin),
         .rx_io = static_cast<gpio_num_t>(rxPin),
@@ -446,65 +362,81 @@ static bool configureTwaiDriver(BaudRate baud, int txPin, int rxPin, const twai_
         .alerts_enabled = TWAI_ALERT_NONE,
         .clkout_divider = 0,
         .intr_flags = 0
-  };
+    };
 
-  twai_stop();
-  twai_driver_uninstall();
+    twai_stop();
+    twai_driver_uninstall();
 
-  twai_timing_config_t t_config;
+    twai_timing_config_t t_config;
+    switch (baud) {
+        case Baud125k:
+            t_config = TWAI_TIMING_CONFIG_125KBITS();
+            break;
+        case Baud250k:
+            t_config = TWAI_TIMING_CONFIG_250KBITS();
+            break;
+        case Baud500k:
+            t_config = TWAI_TIMING_CONFIG_500KBITS();
+            break;
+    }
 
-  switch (baud)
-  {
-  case Baud125k:
-    t_config = TWAI_TIMING_CONFIG_125KBITS();
-    break;
-  case Baud250k:
-    t_config = TWAI_TIMING_CONFIG_250KBITS();
-    break;
-  case Baud500k:
-    t_config = TWAI_TIMING_CONFIG_500KBITS();
-    break;
-  }
+    if (twai_driver_install(&g_config, &t_config, &filter) == ESP_OK) {
+        DBG_OUTPUT_PORT.println("[CAN Driver] TWAI driver installed");
+    } else {
+        DBG_OUTPUT_PORT.println("[CAN Driver] Failed to install TWAI driver");
+        return false;
+    }
 
-  if (twai_driver_install(&g_config, &t_config, &filter) == ESP_OK) {
-     DBG_OUTPUT_PORT.println("[CAN Driver] TWAI driver installed");
-  } else {
-     DBG_OUTPUT_PORT.println("[CAN Driver] Failed to install TWAI driver");
-     return false;
-  }
-
-  // Start TWAI driver
-  if (twai_start() == ESP_OK) {
-    DBG_OUTPUT_PORT.println("[CAN Driver] TWAI driver started");
-    return true;
-  } else {
-    DBG_OUTPUT_PORT.println("[CAN Driver] Failed to start TWAI driver");
-    return false;
-  }
+    if (twai_start() == ESP_OK) {
+        DBG_OUTPUT_PORT.println("[CAN Driver] TWAI driver started");
+        return true;
+    } else {
+        DBG_OUTPUT_PORT.println("[CAN Driver] Failed to start TWAI driver");
+        return false;
+    }
 }
 
 bool initCanBusScanning(BaudRate baud, int txPin, int rxPin) {
-  DBG_OUTPUT_PORT.println("[CAN Driver] Initializing CAN bus for scanning (accept all messages)");
-
-  // Accept all messages for scanning (no filtering)
-  twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-
-  return configureTwaiDriver(baud, txPin, rxPin, filter);
+    DBG_OUTPUT_PORT.println("[CAN Driver] Initializing CAN bus for scanning (accept all messages)");
+    twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    return configureTwaiDriver(baud, txPin, rxPin, filter);
 }
 
 bool initCanBusForDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
-  DBG_OUTPUT_PORT.printf("[CAN Driver] Initializing CAN bus for device (nodeId=%d)\n", nodeId);
+    DBG_OUTPUT_PORT.printf("[CAN Driver] Initializing CAN bus for device (nodeId=%d)\n", nodeId);
 
-  uint16_t id = SDO_RESPONSE_BASE_ID + nodeId;
+    uint16_t id = SDO_RESPONSE_BASE_ID + nodeId;
 
-  // Filter for SDO responses and bootloader messages only
-  twai_filter_config_t filter = {
-    .acceptance_code = (uint32_t)(id << 5) | (uint32_t)(BOOTLOADER_RESPONSE_ID << 21),
-    .acceptance_mask = 0x001F001F,
-    .single_filter = false
-  };
+    twai_filter_config_t filter = {
+        .acceptance_code = (uint32_t)(id << 5) | (uint32_t)(BOOTLOADER_RESPONSE_ID << 21),
+        .acceptance_mask = 0x001F001F,
+        .single_filter = false
+    };
 
-  return configureTwaiDriver(baud, txPin, rxPin, filter);
+    return configureTwaiDriver(baud, txPin, rxPin, filter);
+}
+
+// ============================================================================
+// CAN TX Queue Processing
+// ============================================================================
+
+void processTxQueue() {
+    twai_message_t txframe;
+
+    // Process up to a few frames per iteration to avoid blocking
+    for (int i = 0; i < 5; i++) {
+        if (xQueueReceive(canTxQueue, &txframe, 0) == pdTRUE) {
+            esp_err_t result = twai_transmit(&txframe, pdMS_TO_TICKS(10));
+            if (result != ESP_OK) {
+                DBG_OUTPUT_PORT.printf("[CAN TX] Failed to transmit frame ID 0x%lX: %d\n",
+                                       (unsigned long)txframe.identifier, result);
+            } else {
+                printCanTx(&txframe);
+            }
+        } else {
+            break;  // Queue empty
+        }
+    }
 }
 
 // ============================================================================
@@ -512,96 +444,94 @@ bool initCanBusForDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 // ============================================================================
 
 void receiveAndProcessCanMessages() {
-  twai_message_t rxframe;
+    twai_message_t rxframe;
 
-  if (twai_receive(&rxframe, 0) == ESP_OK) {
-    printCanRx(&rxframe);
+    if (twai_receive(&rxframe, 0) == ESP_OK) {
+        printCanRx(&rxframe);
 
-    // Check bootloader messages first (before SDO responses)
-    if (rxframe.identifier == BOOTLOADER_RESPONSE_ID) {
-      FirmwareUpdateHandler::instance().processResponse(&rxframe);
+        if (rxframe.identifier == BOOTLOADER_RESPONSE_ID) {
+            FirmwareUpdateHandler::instance().processResponse(&rxframe);
+        }
+        else if (rxframe.identifier >= SDO_RESPONSE_BASE_ID &&
+                 rxframe.identifier <= SDO_RESPONSE_MAX_ID) {
+            uint8_t nodeId = rxframe.identifier & 0x7F;
+            DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
+
+            if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | DeviceConnection::instance().getNodeId())) {
+                // Route to SDO response queue for oi_can/SDO protocol layer
+                if (sdoResponseQueue != nullptr) {
+                    xQueueSend(sdoResponseQueue, &rxframe, 0);
+                }
+                // Also process in DeviceConnection for JSON download state machine
+                DeviceConnection::instance().processSdoResponse(&rxframe);
+            }
+        }
+        else {
+            DBG_OUTPUT_PORT.printf("Received unwanted frame %" PRIu32 "\r\n", rxframe.identifier);
+        }
     }
-    // Check if this is an SDO response (SDO_RESPONSE_BASE_ID to SDO_RESPONSE_MAX_ID range only)
-    else if (rxframe.identifier >= SDO_RESPONSE_BASE_ID && rxframe.identifier <= SDO_RESPONSE_MAX_ID) {
-      uint8_t nodeId = rxframe.identifier & 0x7F;
-
-      // Update lastSeen for any device we receive a message from
-      // This acts as a passive heartbeat mechanism
-      DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
-
-      // Route to connection state machine if it's our device
-      if (rxframe.identifier == (SDO_RESPONSE_BASE_ID | OICan::GetNodeId())) {
-        DeviceConnection::instance().processSdoResponse(&rxframe);
-      }
-    }
-    else {
-      DBG_OUTPUT_PORT.printf("Received unwanted frame %" PRIu32 "\r\n", rxframe.identifier);
-    }
-  }
 }
 
 void processStateTimeouts() {
-  // Check for connection timeout
-  DeviceConnection::instance().checkSerialTimeout();
+    DeviceConnection::instance().checkSerialTimeout();
 
-  // Process firmware update state machine
-  if (FirmwareUpdateHandler::instance().getState() == FirmwareUpdateHandler::REQUEST_JSON) {
-    DeviceConnection& conn = DeviceConnection::instance();
+    if (FirmwareUpdateHandler::instance().getState() == FirmwareUpdateHandler::REQUEST_JSON) {
+        DeviceConnection& conn = DeviceConnection::instance();
 
-    // Re-download JSON after firmware update completes
-    // Transition to OBTAINSERIAL state to get new device info
-    if (conn.getState() != DeviceConnection::OBTAINSERIAL) {
-      // If we're in IDLE, it means we successfully got the serial number
-      if (conn.getState() == DeviceConnection::IDLE) {
-        FirmwareUpdateHandler::instance().reset(); // Reset to UPD_IDLE
-        return;
-      }
+        if (conn.getState() != DeviceConnection::OBTAINSERIAL) {
+            if (conn.getState() == DeviceConnection::IDLE) {
+                FirmwareUpdateHandler::instance().reset();
+                return;
+            }
+            conn.setState(DeviceConnection::OBTAINSERIAL);
+            conn.setRetries(50);
+        }
 
-      // Start the serial number request process
-      conn.setState(DeviceConnection::OBTAINSERIAL);
-      conn.setRetries(50);
+        conn.decrementRetries();
+
+        if (conn.getRetries() < 0) {
+            FirmwareUpdateHandler::instance().reset();
+        } else {
+            SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
+        }
+
+        delay(100);
     }
-
-    conn.decrementRetries();
-
-    if (conn.getRetries() < 0) {
-      // Timeout - give up and reset
-      FirmwareUpdateHandler::instance().reset(); // Reset to UPD_IDLE
-    } else {
-      // Keep requesting serial number
-      SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_SERIAL, 0);
-    }
-
-    delay(100);
-  }
 }
 
+// ============================================================================
+// CAN Task Main Function
+// ============================================================================
+
 void canTask(void* parameter) {
-  DBG_OUTPUT_PORT.println("[CAN Task] Started");
+    DBG_OUTPUT_PORT.println("[CAN Task] Started");
 
-  CANCommand cmd;
+    CANCommand cmd;
 
-  while(true) {
-    // Process commands from queue
-    if (xQueueReceive(canCommandQueue, &cmd, 0) == pdTRUE) {
-      dispatchCommand(cmd);
+    while (true) {
+        // Process commands from queue
+        if (xQueueReceive(canCommandQueue, &cmd, 0) == pdTRUE) {
+            dispatchCommand(cmd);
+        }
+
+        // Process CAN TX queue (frames from SDO protocol layer)
+        processTxQueue();
+
+        // Periodic tasks
+        processSpotValuesSequence();
+        CanIntervalManager::instance().sendPendingMessages();
+        CanIntervalManager::instance().sendCanIoMessage();
+
+        // CAN message reception and routing
+        receiveAndProcessCanMessages();
+
+        // State machine timeouts
+        processStateTimeouts();
+
+        // Device scanning
+        DeviceDiscovery::instance().processScan();
+
+        // Small delay to prevent task starvation
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
-
-    // Periodic tasks
-    processSpotValuesSequence();
-    sendIntervalMessages();
-    sendCanIoIntervalMessage();
-
-    // CAN message reception and routing
-    receiveAndProcessCanMessages();
-
-    // State machine timeouts
-    processStateTimeouts();
-
-    // Device scanning
-    DeviceDiscovery::instance().processScan();
-
-    // Small delay to prevent task starvation
-    vTaskDelay(pdMS_TO_TICKS(1));
-  }
 }

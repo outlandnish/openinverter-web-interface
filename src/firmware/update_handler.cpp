@@ -21,6 +21,7 @@
 #include <LittleFS.h>
 #include "models/can_types.h"
 #include "utils/can_utils.h"
+#include "utils/can_queue.h"
 
 #define DBG_OUTPUT_PORT Serial
 
@@ -188,7 +189,7 @@ void FirmwareUpdateHandler::handleCrcResponse(const twai_message_t* rxframe) {
 }
 
 void FirmwareUpdateHandler::sendFrame(const twai_message_t& frame) {
-  twai_transmit(&frame, pdMS_TO_TICKS(10));
+  canQueueTransmit(&frame, pdMS_TO_TICKS(10));
   printCanTx(&frame);
 }
 

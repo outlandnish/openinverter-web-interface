@@ -78,6 +78,10 @@ public:
     unsigned long getStateElapsedTime() const;
     bool hasStateTimedOut(unsigned long timeoutMs) const;
 
+    // Connection initialization
+    bool connectToDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin);
+    bool initializeForScanning(BaudRate baud, int txPin, int rxPin);
+
     // JSON cache management
     JsonDocument& getCachedJson() { return cachedParamJson_; }
     const JsonDocument& getCachedJson() const { return cachedParamJson_; }

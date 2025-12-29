@@ -18,9 +18,12 @@
  *
  */
 #include "device_discovery.h"
+#include "device_connection.h"
 #include "device_storage.h"
 #include "models/can_types.h"
 #include "oi_can.h"
+#include "utils/can_queue.h"
+#include "protocols/sdo_protocol.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
@@ -62,7 +65,7 @@ void DeviceDiscovery::advanceToNextNode() {
 // Helper function: Check if we should process scan now
 bool DeviceDiscovery::shouldProcessScan(unsigned long currentTime) const {
   return scanActive &&
-         OICan::IsIdle() &&
+         DeviceConnection::instance().isIdle() &&
          (currentTime - lastScanTime >= SCAN_DELAY_MS);
 }
 
@@ -116,12 +119,12 @@ bool DeviceDiscovery::requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4
     tx_frame.data[2] = SDO_INDEX_SERIAL >> 8;
     tx_frame.data[3] = part;
 
-    if (twai_transmit(&tx_frame, pdMS_TO_TICKS(10)) != ESP_OK) {
+    if (!canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10))) {
       return false;
     }
 
     twai_message_t rxframe;
-    if (twai_receive(&rxframe, pdMS_TO_TICKS(100)) != ESP_OK) {
+    if (!SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(100))) {
       return false;
     }
 
@@ -136,7 +139,7 @@ bool DeviceDiscovery::requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4
 
 // Scan for devices on the CAN bus (one-time scan)
 String DeviceDiscovery::scanDevices(uint8_t startNode, uint8_t endNode, uint8_t& nodeId, BaudRate baudRate, int canTxPin, int canRxPin) {
-  if (!OICan::IsIdle()) return "[]";
+  if (!DeviceConnection::instance().isIdle()) return "[]";
 
   JsonDocument doc;
   JsonArray devicesArray = doc.to<JsonArray>();
@@ -207,7 +210,7 @@ String DeviceDiscovery::scanDevices(uint8_t startNode, uint8_t endNode, uint8_t&
 
 // Start continuous scanning
 bool DeviceDiscovery::startContinuousScan(uint8_t startNode, uint8_t endNode) {
-  if (!OICan::IsIdle()) {
+  if (!DeviceConnection::instance().isIdle()) {
     DBG_OUTPUT_PORT.printf("Cannot start continuous scan - device busy\n");
     return false;
   }
@@ -259,7 +262,7 @@ void DeviceDiscovery::processScan() {
   tx_frame.data[6] = 0;
   tx_frame.data[7] = 0;
 
-  twai_transmit(&tx_frame, pdMS_TO_TICKS(10));
+  canQueueTransmit(&tx_frame, pdMS_TO_TICKS(10));
 
   // Notify scan progress when starting a new node (first serial part)
   if (currentSerialPart == 0 && progressCallback) {
@@ -267,7 +270,7 @@ void DeviceDiscovery::processScan() {
   }
 
   twai_message_t rxframe;
-  if (twai_receive(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS)) == ESP_OK) {
+  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(SCAN_TIMEOUT_MS))) {
     if (!handleScanResponse(rxframe, currentTime)) {
       // No response or error - move to next node
       advanceToNextNode();
