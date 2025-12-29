@@ -1,6 +1,6 @@
 Open Inverter Web Interface
 =====================
-This is a fork of the [esp32-web-interface](https://github.com/jsphuebner/esp32-web-interface/) for OpenInverter.
+This is a fork of the [esp32-web-interface](https://github.com/jsphuebner/esp32-web-interface/) for Open Inverter built by [Johannes Huebner](https://github.com/jsphuebner)
 
 **Note:** This fork doesn't support UART based connections. It only works over CAN.
 
@@ -14,6 +14,10 @@ This is a fork of the [esp32-web-interface](https://github.com/jsphuebner/esp32-
 * OpenInverter devices that publish a name key for each parameter have a more legible display
 * UI to send `canio` control messages
 * UI to schedule and send CAN messages
+
+# Open Tasks
+- [ ] Improve UI for CAN mapping
+- [ ] Improve UI for sending CAN messages (canio, one shot, and interval messages)
 
 # Usage
 To use the web interface 2 things are needed :
@@ -35,6 +39,7 @@ So first try to reach it on http://inverter.local/
 Out of the box, this works with:
 * ESP32-C3-DevKitM-1
 * [Canipulator](https://www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) (ESP32-C6)
+* [CANLite](https://openinverter.org/shop/index.php?route=product/product&product_id=78)
 
 The firmware is easily adaptable to other ESP32 hardware as well, including the Xtensa based ESP32-S2/ESP32-S3. Just add the appropriate Platformio environments or use the override file
 
