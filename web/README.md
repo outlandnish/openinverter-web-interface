@@ -5,11 +5,13 @@ This folder contains the source code for the Preact + TypeScript web interface.
 ## Development Setup
 
 1. **Install dependencies:**
+
    ```bash
    npm install
    ```
 
 2. **Start development server:**
+
    ```bash
    npm run dev
    ```
@@ -18,6 +20,7 @@ This folder contains the source code for the Preact + TypeScript web interface.
    All API calls are proxied to http://inverter.local
 
 3. **Build for production:**
+
    ```bash
    npm run build
    ```
@@ -57,26 +60,27 @@ web/
 The `src/api/inverter.ts` module provides fully typed methods for all ESP32 endpoints:
 
 ```typescript
-import { api } from './api/inverter'
-import type { NodeIdResponse, ParameterList, CanMapping } from './api/inverter'
+import { api } from "./api/inverter";
+import type { NodeIdResponse, ParameterList, CanMapping } from "./api/inverter";
 
 // Get node ID (fully typed)
-const data: NodeIdResponse = await api.getNodeId()
-console.log(data.id, data.speed)
+const data: NodeIdResponse = await api.getNodeId();
+console.log(data.id, data.speed);
 
 // Set parameter
-await api.setParam('paramName', value)
+await api.setParam("paramName", value);
 
 // Get parameter list (typed as ParameterList)
-const params: ParameterList = await api.getParamList()
+const params: ParameterList = await api.getParamList();
 
 // Send custom command
-const response: string = await api.sendCommand('json')
+const response: string = await api.sendCommand("json");
 ```
 
 ### Type Safety
 
 All API methods are fully typed with TypeScript:
+
 - Return types are explicitly defined
 - Request parameters are validated at compile time
 - Autocomplete works in your IDE
@@ -85,11 +89,13 @@ All API methods are fully typed with TypeScript:
 ## TypeScript Features
 
 Run type checking at any time:
+
 ```bash
 npm run typecheck
 ```
 
 Benefits of using TypeScript:
+
 - **Type Safety**: Catch errors at compile time instead of runtime
 - **Better IDE Support**: Full autocomplete and IntelliSense
 - **Self-Documenting**: Types serve as inline documentation

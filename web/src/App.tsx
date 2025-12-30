@@ -1,20 +1,20 @@
-import { Route, Switch } from 'wouter'
-import { useIntlayer } from 'preact-intlayer'
-import { useEffect } from 'preact/hooks'
-import SystemOverview from '@pages/SystemOverview'
-import DeviceDetails from '@pages/DeviceDetails'
-import Settings from '@pages/Settings'
-import { useWebSocketContext } from '@contexts/WebSocketContext'
-import { api } from '@api/inverter'
+import { Route, Switch } from "wouter";
+import { useIntlayer } from "preact-intlayer";
+import { useEffect } from "preact/hooks";
+import SystemOverview from "@pages/SystemOverview";
+import DeviceDetails from "@pages/DeviceDetails";
+import Settings from "@pages/Settings";
+import { useWebSocketContext } from "@contexts/WebSocketContext";
+import { api } from "@api/inverter";
 
 export function App() {
-  const content = useIntlayer('app')
-  const { sendMessage } = useWebSocketContext()
+  const content = useIntlayer("app");
+  const { sendMessage } = useWebSocketContext();
 
   // Initialize API WebSocket sender when WebSocket is ready
   useEffect(() => {
-    api.setWebSocketSender(sendMessage)
-  }, [sendMessage])
+    api.setWebSocketSender(sendMessage);
+  }, [sendMessage]);
 
   return (
     <Switch>
@@ -27,5 +27,5 @@ export function App() {
         </div>
       </Route>
     </Switch>
-  )
+  );
 }

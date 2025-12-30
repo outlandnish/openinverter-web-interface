@@ -26,7 +26,8 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   overflow-x: hidden;
@@ -339,7 +340,7 @@ button:active {
 .info-value {
   color: var(--text-primary);
   font-weight: 600;
-  font-family: 'Monaco', 'Courier New', monospace;
+  font-family: "Monaco", "Courier New", monospace;
   word-break: break-all;
   overflow-wrap: break-word;
 }
@@ -688,8 +689,12 @@ button:active {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .scanner-result {
@@ -1554,7 +1559,6 @@ button:active {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-
 /* OTA Update Styles */
 .ota-upload-section,
 .ota-progress-section,
@@ -1686,8 +1690,15 @@ button:active {
 }
 
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.2); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.2);
+  }
 }
 
 .view-mode-tabs {
@@ -2194,13 +2205,15 @@ button:active {
   }
 
   /* Ensure cards and sections don't overflow */
-  .card, section {
+  .card,
+  section {
     max-width: 100%;
     overflow-x: hidden;
   }
 
   /* Full width cards with reduced padding on mobile */
-  .card, section {
+  .card,
+  section {
     border-radius: 0 !important;
     padding: 1rem 0.75rem;
     margin-left: 0;
@@ -2211,7 +2224,8 @@ button:active {
   }
 
   /* Tabs content should not overflow */
-  .tabs-container, .tabs-content {
+  .tabs-container,
+  .tabs-content {
     max-width: 100%;
     overflow-x: hidden;
   }
@@ -2330,4 +2344,3 @@ button:active {
     max-width: none;
   }
 }
-

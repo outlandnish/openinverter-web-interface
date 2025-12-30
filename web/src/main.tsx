@@ -1,26 +1,26 @@
-import { render } from 'preact'
-import { IntlayerProvider } from 'preact-intlayer'
-import { App } from './App'
-import { ToastProvider } from '@components/Toast/ToastContainer'
-import { WebSocketProvider } from '@contexts/WebSocketContext'
-import { DeviceProvider } from '@contexts/DeviceContext'
-import 'preact-hint/dist/style.css'
-import './styles/theme.css'
-import './style.css'
+import { render } from "preact";
+import { IntlayerProvider } from "preact-intlayer";
+import { App } from "./App";
+import { ToastProvider } from "@components/Toast/ToastContainer";
+import { WebSocketProvider } from "@contexts/WebSocketContext";
+import { DeviceProvider } from "@contexts/DeviceContext";
+import "preact-hint/dist/style.css";
+import "./styles/theme.css";
+import "./style.css";
 
 // Register PWA Service Worker
-import { registerSW } from 'virtual:pwa-register'
+import { registerSW } from "virtual:pwa-register";
 
 const updateSW = registerSW({
   onNeedRefresh() {
-    if (confirm('New content available. Reload?')) {
-      updateSW(true)
+    if (confirm("New content available. Reload?")) {
+      updateSW(true);
     }
   },
   onOfflineReady() {
-    console.log('App ready to work offline')
+    console.log("App ready to work offline");
   },
-})
+});
 
 render(
   <IntlayerProvider>
@@ -32,5 +32,5 @@ render(
       </WebSocketProvider>
     </ToastProvider>
   </IntlayerProvider>,
-  document.getElementById('app')!
-)
+  document.getElementById("app")!,
+);
