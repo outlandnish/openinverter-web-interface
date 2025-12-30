@@ -325,14 +325,21 @@ SetResult AddCanMapping(String json) {
 
   if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
     DBG_OUTPUT_PORT.println("Sent COB Id");
-    SDOProtocol::setValue(conn.getNodeId(), index, 1,
-                          doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) |
-                              (doc["length"].as<int32_t>() << 24));  // data item, position and length
+
+    uint32_t paramId = doc["paramid"].as<uint32_t>();
+    uint32_t position = doc["position"].as<uint32_t>();
+    int32_t length = doc["length"].as<int32_t>();
+    uint32_t paramPositionLength = paramId | (position << 16) | (length << 24);
+
+    SDOProtocol::setValue(conn.getNodeId(), index, 1, paramPositionLength);
     if (rxframe.data[0] != SDOProtocol::ABORT && SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
       DBG_OUTPUT_PORT.println("Sent position and length");
-      SDOProtocol::setValue(conn.getNodeId(), index, 2,
-                            (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) |
-                                doc["offset"].as<int32_t>() << 24);  // gain and offset
+
+      int32_t gainScaled = (int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF;
+      int32_t offset = doc["offset"].as<int32_t>();
+      uint32_t gainOffset = (uint32_t)gainScaled | (offset << 24);
+
+      SDOProtocol::setValue(conn.getNodeId(), index, 2, gainOffset);
 
       if (rxframe.data[0] != SDOProtocol::ABORT && SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
         if (rxframe.data[0] != SDOProtocol::ABORT) {
