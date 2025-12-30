@@ -20,11 +20,11 @@
 #define BOOTLOADER_RESPONSE_ID 0x7DE
 
 // CAN IO message bit masks
-#define CAN_IO_POT_MASK 0x0FFF       // 12 bits for throttle values
-#define CAN_IO_CANIO_MASK 0x3F       // 6 bits for digital I/O
-#define CAN_IO_COUNTER_MASK 0x03     // 2 bits for sequence counter
-#define CAN_IO_CRUISE_MASK 0x3FFF    // 14 bits for cruise speed
-#define CAN_IO_REGEN_MASK 0xFF       // 8 bits for regen preset
+#define CAN_IO_POT_MASK 0x0FFF     // 12 bits for throttle values
+#define CAN_IO_CANIO_MASK 0x3F     // 6 bits for digital I/O
+#define CAN_IO_COUNTER_MASK 0x03   // 2 bits for sequence counter
+#define CAN_IO_CRUISE_MASK 0x3FFF  // 14 bits for cruise speed
+#define CAN_IO_REGEN_MASK 0xFF     // 8 bits for regen preset
 
 // CAN baud rates
 enum BaudRate { Baud125k, Baud250k, Baud500k };
@@ -97,9 +97,17 @@ enum CANEventType {
 };
 
 // SetValue result codes (matches OICan::SetResult)
-enum SetValueResult {
-  SET_OK,
-  SET_UNKNOWN_INDEX,
-  SET_VALUE_OUT_OF_RANGE,
-  SET_COMM_ERROR
+enum SetValueResult { SET_OK, SET_UNKNOWN_INDEX, SET_VALUE_OUT_OF_RANGE, SET_COMM_ERROR };
+
+// CAN mapping data structure (used during mapping retrieval)
+struct CanMappingData {
+  bool isRx;
+  int cobId;
+  int paramId;
+  int position;
+  int length;
+  float gain;
+  int offset;
+  int sdoIndex;
+  int sdoSubIndex;
 };

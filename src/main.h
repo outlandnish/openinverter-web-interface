@@ -1,11 +1,13 @@
 #pragma once
 
+#include <ESPAsyncWebServer.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "status_led.h"
+
 #include "models/can_command.h"
 #include "models/can_types.h"
-#include "status_led.h"
-#include <ESPAsyncWebServer.h>
 
 // Forward declarations
 class Config;
@@ -32,11 +34,11 @@ extern Config config;
 // ============================================================================
 
 inline void setStatusLED(uint32_t color) {
-    StatusLED::instance().setColor(color);
+  StatusLED::instance().setColor(color);
 }
 
 inline void statusLEDOff() {
-    StatusLED::instance().off();
+  StatusLED::instance().off();
 }
 
 // ============================================================================
@@ -50,11 +52,11 @@ inline void statusLEDOff() {
  * @return true if queued successfully, false if queue was full
  */
 inline bool queueCanCommand(const CANCommand& cmd, const char* commandName) {
-    if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
-        DBG_OUTPUT_PORT.printf("[WebSocket] %s command queued\n", commandName);
-        return true;
-    } else {
-        DBG_OUTPUT_PORT.printf("[WebSocket] ERROR: Failed to queue %s command\n", commandName);
-        return false;
-    }
+  if (xQueueSend(canCommandQueue, &cmd, pdMS_TO_TICKS(QUEUE_SEND_TIMEOUT_MS)) == pdTRUE) {
+    DBG_OUTPUT_PORT.printf("[WebSocket] %s command queued\n", commandName);
+    return true;
+  } else {
+    DBG_OUTPUT_PORT.printf("[WebSocket] ERROR: Failed to queue %s command\n", commandName);
+    return false;
+  }
 }

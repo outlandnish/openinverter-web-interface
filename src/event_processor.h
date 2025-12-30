@@ -31,4 +31,4 @@ void processFirmwareProgress(AsyncWebSocket& ws);
  */
 const char* serializeEvent(const CANEvent& evt, JsonDocument& doc);
 
-} // namespace EventProcessor
+}  // namespace EventProcessor

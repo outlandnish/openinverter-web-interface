@@ -1,7 +1,8 @@
 #pragma once
 
-#include "can_types.h"
 #include <cstdint>
+
+#include "can_types.h"
 
 // Command payload structures
 struct ScanCommand {
@@ -50,60 +51,60 @@ struct StartCanIntervalCommand {
   uint8_t data[8];
   uint8_t dataLength;
   uint32_t intervalMs;
-  char intervalId[32]; // Unique ID for this interval message
+  char intervalId[32];  // Unique ID for this interval message
 };
 
 struct StopCanIntervalCommand {
-  char intervalId[32]; // ID of interval to stop
+  char intervalId[32];  // ID of interval to stop
 };
 
 struct StartCanIoIntervalCommand {
-  uint32_t canId;           // CAN ID (default 0x3F)
-  uint16_t pot;             // Throttle 1 (12 bits, 0-4095)
-  uint16_t pot2;            // Throttle 2 (12 bits, 0-4095)
-  uint8_t canio;            // Digital I/O flags (6 bits)
-  uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
-  uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
-  uint32_t intervalMs;      // Send interval in milliseconds
-  bool useCrc;              // Use CRC-32 (true) or counter-only (false)
+  uint32_t canId;        // CAN ID (default 0x3F)
+  uint16_t pot;          // Throttle 1 (12 bits, 0-4095)
+  uint16_t pot2;         // Throttle 2 (12 bits, 0-4095)
+  uint8_t canio;         // Digital I/O flags (6 bits)
+  uint16_t cruisespeed;  // Cruise speed (14 bits, 0-16383)
+  uint8_t regenpreset;   // Regen preset (8 bits, 0-255)
+  uint32_t intervalMs;   // Send interval in milliseconds
+  bool useCrc;           // Use CRC-32 (true) or counter-only (false)
 };
 
 struct UpdateCanIoFlagsCommand {
-  uint16_t pot;             // Throttle 1 (12 bits, 0-4095)
-  uint16_t pot2;            // Throttle 2 (12 bits, 0-4095)
-  uint8_t canio;            // Digital I/O flags (6 bits)
-  uint16_t cruisespeed;     // Cruise speed (14 bits, 0-16383)
-  uint8_t regenpreset;      // Regen preset (8 bits, 0-255)
+  uint16_t pot;          // Throttle 1 (12 bits, 0-4095)
+  uint16_t pot2;         // Throttle 2 (12 bits, 0-4095)
+  uint8_t canio;         // Digital I/O flags (6 bits)
+  uint16_t cruisespeed;  // Cruise speed (14 bits, 0-16383)
+  uint8_t regenpreset;   // Regen preset (8 bits, 0-255)
 };
 
 // Task 34: Device command payload structures
 
 struct StartDeviceCommand {
-  uint32_t mode;            // Start mode (0 = normal)
+  uint32_t mode;  // Start mode (0 = normal)
 };
 
 struct SetValueCommand {
-  int paramId;              // Parameter ID to set
-  double value;             // Value to set
+  int paramId;   // Parameter ID to set
+  double value;  // Value to set
 };
 
 struct ClearCanMapCommand {
-  bool isRx;                // true = clear RX mappings, false = clear TX mappings
+  bool isRx;  // true = clear RX mappings, false = clear TX mappings
 };
 
 struct AddCanMappingCommand {
-  bool isRx;                // true = RX mapping, false = TX mapping
-  uint32_t canId;           // CAN ID (COB-ID)
-  uint32_t paramId;         // Parameter ID
-  uint8_t position;         // Bit position in CAN frame
-  int8_t length;            // Bit length (negative = signed)
-  float gain;               // Gain multiplier
-  int8_t offset;            // Offset value
+  bool isRx;         // true = RX mapping, false = TX mapping
+  uint32_t canId;    // CAN ID (COB-ID)
+  uint32_t paramId;  // Parameter ID
+  uint8_t position;  // Bit position in CAN frame
+  int8_t length;     // Bit length (negative = signed)
+  float gain;        // Gain multiplier
+  int8_t offset;     // Offset value
 };
 
 struct RemoveCanMappingCommand {
-  uint32_t index;           // SDO index of mapping to remove
-  uint8_t subIndex;         // SDO subindex
+  uint32_t index;    // SDO index of mapping to remove
+  uint8_t subIndex;  // SDO subindex
 };
 
 // Command message structure

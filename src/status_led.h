@@ -3,10 +3,10 @@
 
 // WS2812B_PIN and WS2812B_COUNT are defined in platformio.ini for each board
 #ifndef WS2812B_PIN
-#define WS2812B_PIN 8  // Fallback default
+  #define WS2812B_PIN 8  // Fallback default
 #endif
 #ifndef WS2812B_COUNT
-#define WS2812B_COUNT 1  // Fallback default
+  #define WS2812B_COUNT 1  // Fallback default
 #endif
 #define STATUS_LED_PIN WS2812B_PIN
 #define STATUS_LED_COUNT WS2812B_COUNT

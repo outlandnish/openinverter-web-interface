@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <atomic>
+#include <cstdint>
 
 // Thread-safe request ID generator for matching async command/event pairs
 class RequestIdGenerator {
@@ -12,9 +12,7 @@ public:
   }
 
   // Generate next unique request ID (thread-safe)
-  uint32_t next() {
-    return ++counter_;
-  }
+  uint32_t next() { return ++counter_; }
 
 private:
   RequestIdGenerator() : counter_(0) {}

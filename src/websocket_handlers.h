@@ -1,11 +1,11 @@
 #pragma once
 
-#include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <ESPAsyncWebServer.h>
 
 // WebSocket event handler - register this with ws.onEvent()
-void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
-                      AwsEventType type, void* arg, uint8_t* data, size_t len);
+void onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data,
+                      size_t len);
 
 // Main dispatch function - called from onWebSocketEvent for WS_EVT_DATA
 void dispatchWebSocketMessage(AsyncWebSocketClient* client, JsonDocument& doc);

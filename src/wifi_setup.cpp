@@ -1,6 +1,8 @@
 #include "wifi_setup.h"
-#include "status_led.h"
+
 #include <LittleFS.h>
+
+#include "status_led.h"
 
 #define DBG_OUTPUT_PORT Serial
 
@@ -60,13 +62,13 @@ bool WiFiSetup::connectStation(const Credentials& creds, int maxAttempts) {
     DBG_OUTPUT_PORT.print("IP address: ");
     DBG_OUTPUT_PORT.println(WiFi.localIP());
     StatusLED::instance().setColor(StatusLED::WIFI_CONNECTED);
-    delay(1000); // Show connected status for 1 second
+    delay(1000);  // Show connected status for 1 second
     StatusLED::instance().off();
     return true;
   } else {
     DBG_OUTPUT_PORT.println("WiFi connection failed!");
     StatusLED::instance().setColor(StatusLED::ERROR);
-    delay(1000); // Show error for 1 second
+    delay(1000);  // Show error for 1 second
     StatusLED::instance().off();
     return false;
   }

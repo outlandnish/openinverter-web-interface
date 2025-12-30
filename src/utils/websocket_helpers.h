@@ -1,8 +1,9 @@
 #ifndef WEBSOCKET_HELPERS_H
 #define WEBSOCKET_HELPERS_H
 
-#include <AsyncWebSocket.h>
 #include <ArduinoJson.h>
+
+#include <AsyncWebSocket.h>
 
 /**
  * Sends a general error message via WebSocket
@@ -30,4 +31,4 @@ inline void sendDeviceBusyError(AsyncWebSocketClient* client, const char* eventN
   sendWebSocketError(client, eventName, "Device is busy");
 }
 
-#endif // WEBSOCKET_HELPERS_H
+#endif  // WEBSOCKET_HELPERS_H

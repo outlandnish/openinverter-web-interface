@@ -1,6 +1,6 @@
 #pragma once
-#include <WiFi.h>
 #include <Arduino.h>
+#include <WiFi.h>
 
 class WiFiSetup {
 public:

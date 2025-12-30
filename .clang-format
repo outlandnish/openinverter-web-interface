@@ -1,0 +1,82 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+IndentCaseLabels: true
+IndentPPDirectives: BeforeHash
+NamespaceIndentation: None
+
+# Braces
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+
+# Line length and wrapping
+ColumnLimit: 120
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignOperands: Align
+AlignTrailingComments: true
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyBlock: false
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInContainerLiterals: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Pointer alignment
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+# Includes
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Arduino/ESP system headers
+  - Regex: '^<(Arduino|WiFi|ESP|SPI|Wire|EEPROM|LittleFS|SPIFFS|Preferences|driver/|esp_|freertos/).*>'
+    Priority: 1
+  # Standard library
+  - Regex: '^<[a-z_]+>'
+    Priority: 2
+  # Third-party libraries
+  - Regex: '^<.*>'
+    Priority: 3
+  # Project headers with path
+  - Regex: '^"(managers|models|protocols|utils)/.*"'
+    Priority: 5
+  # Local project headers
+  - Regex: '^".*"'
+    Priority: 4
+SortIncludes: CaseSensitive
+
+# Other
+ReflowComments: true
+SortUsingDeclarations: true
+FixNamespaceComments: true
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Modern C++ features
+Standard: c++17
+...

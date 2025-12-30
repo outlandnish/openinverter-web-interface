@@ -1,12 +1,15 @@
 #include "http_handlers.h"
-#include "oi_can.h"
-#include "managers/device_connection.h"
-#include "managers/device_discovery.h"
-#include "main.h"
-#include "config.h"
-#include <LittleFS.h>
+
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
+#include <LittleFS.h>
+
+#include "config.h"
+#include "main.h"
+#include "oi_can.h"
+
+#include "managers/device_connection.h"
+#include "managers/device_discovery.h"
 
 // External references to globals from main.cpp
 extern AsyncWebSocket ws;
@@ -26,28 +29,43 @@ String formatBytes(uint64_t bytes) {
 }
 
 // Helper function to get content type from filename
-String getContentType(String filename, AsyncWebServerRequest *request) {
-  if (request && request->hasArg("download")) return "application/octet-stream";
-  else if (filename.endsWith(".bin")) return "application/octet-stream";
-  else if (filename.endsWith(".htm")) return "text/html";
-  else if (filename.endsWith(".html")) return "text/html";
-  else if (filename.endsWith(".css")) return "text/css";
-  else if (filename.endsWith(".js")) return "application/javascript";
-  else if (filename.endsWith(".png")) return "image/png";
-  else if (filename.endsWith(".gif")) return "image/gif";
-  else if (filename.endsWith(".jpg")) return "image/jpeg";
-  else if (filename.endsWith(".ico")) return "image/x-icon";
-  else if (filename.endsWith(".xml")) return "text/xml";
-  else if (filename.endsWith(".pdf")) return "application/x-pdf";
-  else if (filename.endsWith(".zip")) return "application/x-zip";
-  else if (filename.endsWith(".gz")) return "application/x-gzip";
+String getContentType(String filename, AsyncWebServerRequest* request) {
+  if (request && request->hasArg("download"))
+    return "application/octet-stream";
+  else if (filename.endsWith(".bin"))
+    return "application/octet-stream";
+  else if (filename.endsWith(".htm"))
+    return "text/html";
+  else if (filename.endsWith(".html"))
+    return "text/html";
+  else if (filename.endsWith(".css"))
+    return "text/css";
+  else if (filename.endsWith(".js"))
+    return "application/javascript";
+  else if (filename.endsWith(".png"))
+    return "image/png";
+  else if (filename.endsWith(".gif"))
+    return "image/gif";
+  else if (filename.endsWith(".jpg"))
+    return "image/jpeg";
+  else if (filename.endsWith(".ico"))
+    return "image/x-icon";
+  else if (filename.endsWith(".xml"))
+    return "text/xml";
+  else if (filename.endsWith(".pdf"))
+    return "application/x-pdf";
+  else if (filename.endsWith(".zip"))
+    return "application/x-zip";
+  else if (filename.endsWith(".gz"))
+    return "application/x-gzip";
   return "text/plain";
 }
 
 // Handle file requests from LittleFS
-void handleFileRequest(AsyncWebServerRequest *request) {
+void handleFileRequest(AsyncWebServerRequest* request) {
   String path = request->url();
-  if (path.endsWith("/")) path += "index.html";
+  if (path.endsWith("/"))
+    path += "index.html";
 
   String contentType = getContentType(path);
   bool isGzipped = false;
@@ -61,7 +79,7 @@ void handleFileRequest(AsyncWebServerRequest *request) {
       distPath += ".gz";
       isGzipped = true;
     }
-    AsyncWebServerResponse *response = request->beginResponse(LittleFS, distPath, contentType);
+    AsyncWebServerResponse* response = request->beginResponse(LittleFS, distPath, contentType);
     response->addHeader("Cache-Control", "max-age=86400");
     if (isGzipped) {
       response->addHeader("Content-Encoding", "gzip");
@@ -78,7 +96,7 @@ void handleFileRequest(AsyncWebServerRequest *request) {
       path += ".gz";
       isGzipped = true;
     }
-    AsyncWebServerResponse *response = request->beginResponse(LittleFS, path, contentType);
+    AsyncWebServerResponse* response = request->beginResponse(LittleFS, path, contentType);
     response->addHeader("Cache-Control", "max-age=86400");
     if (isGzipped) {
       response->addHeader("Content-Encoding", "gzip");
@@ -91,23 +109,21 @@ void handleFileRequest(AsyncWebServerRequest *request) {
 }
 
 // Handle version endpoint
-void handleVersion(AsyncWebServerRequest *request) {
+void handleVersion(AsyncWebServerRequest* request) {
   request->send(200, "text/plain", "1.1.R-WS");
 }
 
 // Handle devices endpoint
-void handleDevices(AsyncWebServerRequest *request) {
+void handleDevices(AsyncWebServerRequest* request) {
   String result = DeviceDiscovery::instance().getSavedDevices();
   request->send(200, "application/json", result);
 }
 
 // Handle settings endpoint (GET and POST)
-void handleSettings(AsyncWebServerRequest *request) {
+void handleSettings(AsyncWebServerRequest* request) {
   // If query parameters are provided, update settings
-  if (request->hasArg("canRXPin") || request->hasArg("canTXPin") ||
-      request->hasArg("canSpeed") || request->hasArg("scanStartNode") ||
-      request->hasArg("scanEndNode")) {
-
+  if (request->hasArg("canRXPin") || request->hasArg("canTXPin") || request->hasArg("canSpeed") ||
+      request->hasArg("scanStartNode") || request->hasArg("scanEndNode")) {
     if (request->hasArg("canRXPin")) {
       config.setCanRXPin(request->arg("canRXPin").toInt());
     }
@@ -146,15 +162,15 @@ void handleSettings(AsyncWebServerRequest *request) {
 }
 
 // Handle OTA upload complete
-void handleOtaUploadComplete(AsyncWebServerRequest *request) {
+void handleOtaUploadComplete(AsyncWebServerRequest* request) {
   // Firmware update completion is handled via WebSocket events
   // The actual update runs asynchronously in the background
   request->send(200, "text/plain", "Firmware upload started");
 }
 
 // Handle OTA upload chunks
-void handleOtaUpload(AsyncWebServerRequest *request, String filename,
-                     size_t index, uint8_t *data, size_t len, bool final) {
+void handleOtaUpload(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len,
+                     bool final) {
   static File firmwareFile;
   static String firmwareFilePath = "/firmware_update.bin";
 

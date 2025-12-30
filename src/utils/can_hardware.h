@@ -14,11 +14,11 @@ namespace CanHardware {
  * @param pinName Human-readable name for debug output (e.g., "CAN0 shutdown")
  */
 inline void initTransceiverPin(int pin, const char* pinName) {
-    if (pin >= 0) {
-        pinMode(pin, OUTPUT);
-        digitalWrite(pin, LOW);
-        Serial.printf("%s pin %d set to LOW\n", pinName, pin);
-    }
+  if (pin >= 0) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    Serial.printf("%s pin %d set to LOW\n", pinName, pin);
+  }
 }
 
 /**
@@ -27,4 +27,4 @@ inline void initTransceiverPin(int pin, const char* pinName) {
  */
 void initAllTransceiverPins();
 
-} // namespace CanHardware
+}  // namespace CanHardware

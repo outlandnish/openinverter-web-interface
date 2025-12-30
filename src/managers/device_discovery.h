@@ -19,19 +19,22 @@
  */
 #pragma once
 
-#include <map>
-#include <functional>
 #include <Arduino.h>
+
+#include <functional>
+#include <map>
+
 #include "driver/twai.h"
+
 #include "models/can_types.h"
 
 class DeviceDiscovery {
 public:
   // Scan state machine states
   enum class ScanState {
-    IDLE,           // Not actively scanning a node
-    SENDING,        // Need to send request
-    WAITING         // Waiting for response (non-blocking)
+    IDLE,     // Not actively scanning a node
+    SENDING,  // Need to send request
+    WAITING   // Waiting for response (non-blocking)
   };
 
   // Callback types
@@ -50,11 +53,12 @@ public:
   static DeviceDiscovery& instance();
 
   // Scanning operations
-  String scanDevices(uint8_t startNode, uint8_t endNode, uint8_t& nodeId, BaudRate baudRate, int canTxPin, int canRxPin);
+  String scanDevices(uint8_t startNode, uint8_t endNode, uint8_t& nodeId, BaudRate baudRate, int canTxPin,
+                     int canRxPin);
   bool startContinuousScan(uint8_t startNode = 1, uint8_t endNode = 32);
   void stopContinuousScan();
   bool isScanActive() const;
-  void processScan(); // Called from main loop
+  void processScan();  // Called from main loop
 
   // Callbacks
   void setDiscoveryCallback(DiscoveryCallback cb);
@@ -89,8 +93,8 @@ private:
   unsigned long requestSentTime = 0;  // When we sent the current request
 
   // Throttle passive heartbeat updates to prevent flooding WebSocket
-  static const unsigned long PASSIVE_HEARTBEAT_THROTTLE_MS = 1000; // Update at most once per second
-  std::map<uint8_t, unsigned long> lastPassiveHeartbeatByNode; // nodeId -> last update time
+  static const unsigned long PASSIVE_HEARTBEAT_THROTTLE_MS = 1000;  // Update at most once per second
+  std::map<uint8_t, unsigned long> lastPassiveHeartbeatByNode;      // nodeId -> last update time
 
   // Device list
   std::map<String, Device> devices;
@@ -107,6 +111,6 @@ private:
   bool requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4]);
 
   // Constants
-  static const unsigned long SCAN_DELAY_MS = 20; // Delay between node probes
-  static const unsigned long SCAN_TIMEOUT_MS = 50; // Timeout for scan response
+  static const unsigned long SCAN_DELAY_MS = 20;    // Delay between node probes
+  static const unsigned long SCAN_TIMEOUT_MS = 50;  // Timeout for scan response
 };

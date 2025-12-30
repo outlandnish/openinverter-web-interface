@@ -1,9 +1,9 @@
 #pragma once
 
+#include "can_task.h"
+#include "driver/twai.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "driver/twai.h"
-#include "can_task.h"
 
 // Queue-based CAN I/O functions for SDO protocol layer
 // These replace direct twai_transmit/twai_receive calls
@@ -15,10 +15,10 @@
  * @return true if frame was queued successfully
  */
 inline bool canQueueTransmit(const twai_message_t* frame, TickType_t timeout = pdMS_TO_TICKS(10)) {
-    if (canTxQueue == nullptr) {
-        return false;
-    }
-    return xQueueSend(canTxQueue, frame, timeout) == pdTRUE;
+  if (canTxQueue == nullptr) {
+    return false;
+  }
+  return xQueueSend(canTxQueue, frame, timeout) == pdTRUE;
 }
 
 /**
@@ -28,10 +28,10 @@ inline bool canQueueTransmit(const twai_message_t* frame, TickType_t timeout = p
  * @return true if a frame was received
  */
 inline bool canQueueReceive(twai_message_t* frame, TickType_t timeout = pdMS_TO_TICKS(10)) {
-    if (sdoResponseQueue == nullptr) {
-        return false;
-    }
-    return xQueueReceive(sdoResponseQueue, frame, timeout) == pdTRUE;
+  if (sdoResponseQueue == nullptr) {
+    return false;
+  }
+  return xQueueReceive(sdoResponseQueue, frame, timeout) == pdTRUE;
 }
 
 /**
@@ -39,11 +39,11 @@ inline bool canQueueReceive(twai_message_t* frame, TickType_t timeout = pdMS_TO_
  * Useful before starting a new request sequence
  */
 inline void canQueueClearResponses() {
-    if (sdoResponseQueue == nullptr) {
-        return;
-    }
-    twai_message_t frame;
-    while (xQueueReceive(sdoResponseQueue, &frame, 0) == pdTRUE) {
-        // Discard
-    }
+  if (sdoResponseQueue == nullptr) {
+    return;
+  }
+  twai_message_t frame;
+  while (xQueueReceive(sdoResponseQueue, &frame, 0) == pdTRUE) {
+    // Discard
+  }
 }

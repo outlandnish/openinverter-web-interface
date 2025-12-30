@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+
 #include "driver/twai.h"
 
 // CRC-32 calculation for CAN operations (STM32 polynomial 0x04C11DB7)

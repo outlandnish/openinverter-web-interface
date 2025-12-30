@@ -1,7 +1,8 @@
 #pragma once
 
-#include "can_types.h"
 #include <cstdint>
+
+#include "can_types.h"
 
 // Event payload structures
 struct DeviceDiscoveredEvent {
@@ -57,7 +58,7 @@ struct SpotValuesStatusEvent {
 
 struct SpotValuesEvent {
   uint32_t timestamp;
-  char valuesJson[1024]; // JSON string of values
+  char valuesJson[1024];  // JSON string of values
 };
 
 struct DeviceNameSetEvent {
@@ -129,7 +130,7 @@ struct CanMappingRemovedEvent {
 
 struct ErrorsListedEvent {
   bool success;
-  char errorsJson[1024];    // JSON string of errors
+  char errorsJson[1024];  // JSON string of errors
 };
 
 // Event message structure
@@ -155,7 +156,7 @@ struct CANEvent {
     CanIntervalStatusEvent canIntervalStatus;
     CanIoIntervalStatusEvent canIoIntervalStatus;
     // Task 34: Device command events
-    DeviceCommandEvent deviceCommand;       // For save/load/start/stop/reset
+    DeviceCommandEvent deviceCommand;  // For save/load/start/stop/reset
     ValueSetEvent valueSet;
     CanMapClearedEvent canMapCleared;
     CanMappingsReceivedEvent canMappingsReceived;

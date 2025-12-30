@@ -1,6 +1,8 @@
 #include "can_utils.h"
-#include "models/can_types.h"
+
 #include <Arduino.h>
+
+#include "models/can_types.h"
 
 // CRC-32 calculation for CAN operations (STM32 polynomial 0x04C11DB7)
 // This matches the IEEE 802.3 / Ethernet CRC-32 polynomial

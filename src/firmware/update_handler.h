@@ -20,20 +20,15 @@
  */
 #pragma once
 
-#include "driver/twai.h"
-#include <FS.h>
 #include <Arduino.h>
+
+#include <FS.h>
+
+#include "driver/twai.h"
 
 class FirmwareUpdateHandler {
 public:
-  enum State {
-    UPD_IDLE,
-    SEND_MAGIC,
-    SEND_SIZE,
-    SEND_PAGE,
-    CHECK_CRC,
-    REQUEST_JSON
-  };
+  enum State { UPD_IDLE, SEND_MAGIC, SEND_SIZE, SEND_PAGE, CHECK_CRC, REQUEST_JSON };
 
   // Get singleton instance
   static FirmwareUpdateHandler& instance();

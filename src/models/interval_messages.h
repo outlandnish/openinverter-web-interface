@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+
 #include <WString.h>  // Arduino String
 
 // Interval CAN message sending
@@ -24,6 +25,6 @@ struct CanIoInterval {
   uint8_t regenpreset;
   uint32_t intervalMs;
   uint32_t lastSentTime;
-  uint8_t sequenceCounter; // 2-bit counter (0-3)
-  bool useCrc;             // Use CRC-32 (true) or counter-only (false)
+  uint8_t sequenceCounter;  // 2-bit counter (0-3)
+  bool useCrc;              // Use CRC-32 (true) or counter-only (false)
 };

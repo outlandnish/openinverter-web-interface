@@ -18,10 +18,12 @@
  *
  */
 #include "update_handler.h"
+
 #include <LittleFS.h>
+
 #include "models/can_types.h"
-#include "utils/can_utils.h"
 #include "utils/can_queue.h"
+#include "utils/can_utils.h"
 
 #define DBG_OUTPUT_PORT Serial
 
@@ -91,7 +93,7 @@ void FirmwareUpdateHandler::handleMagicResponse(const twai_message_t* rxframe) {
 
     sendFrame(tx_frame);
 
-    if (rxframe->data[1] < 1) { // Bootloader with timing quirk, wait 100 ms
+    if (rxframe->data[1] < 1) {  // Bootloader with timing quirk, wait 100 ms
       delay(100);
     }
   }
@@ -149,8 +151,7 @@ void FirmwareUpdateHandler::handlePageResponse(const twai_message_t* rxframe) {
 
     state = SEND_PAGE;
     sendFrame(tx_frame);
-  }
-  else if (rxframe->data[0] == 'C') {
+  } else if (rxframe->data[0] == 'C') {
     twai_message_t tx_frame;
     tx_frame.extd = false;
     tx_frame.identifier = BOOTLOADER_COMMAND_ID;
@@ -174,14 +175,12 @@ void FirmwareUpdateHandler::handleCrcResponse(const twai_message_t* rxframe) {
     currentPage++;
     DBG_OUTPUT_PORT.printf("CRC Good\r\n");
     processResponse(rxframe);
-  }
-  else if (rxframe->data[0] == 'E') {
+  } else if (rxframe->data[0] == 'E') {
     state = SEND_PAGE;
     currentByte = currentPage * PAGE_SIZE_BYTES;
     DBG_OUTPUT_PORT.printf("CRC Error\r\n");
     processResponse(rxframe);
-  }
-  else if (rxframe->data[0] == 'D') {
+  } else if (rxframe->data[0] == 'D') {
     state = REQUEST_JSON;
     updateFile.close();
     DBG_OUTPUT_PORT.printf("Done!\r\n");

@@ -18,21 +18,24 @@
  *
  */
 #include "device_discovery.h"
-#include "device_connection.h"
-#include "device_storage.h"
-#include "models/can_types.h"
-#include "oi_can.h"
-#include "utils/can_queue.h"
-#include "protocols/sdo_protocol.h"
+
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+
+#include "device_connection.h"
+#include "device_storage.h"
+#include "oi_can.h"
+
+#include "models/can_types.h"
+#include "protocols/sdo_protocol.h"
+#include "utils/can_queue.h"
 
 #define DBG_OUTPUT_PORT Serial
 
 // SDO protocol constants (duplicated from oi_can.cpp - could be extracted to a protocol header)
-#define SDO_READ              (2 << 5)
-#define SDO_ABORT             0x80
-#define SDO_INDEX_SERIAL      0x5000
+#define SDO_READ (2 << 5)
+#define SDO_ABORT 0x80
+#define SDO_INDEX_SERIAL 0x5000
 
 // Singleton instance
 DeviceDiscovery& DeviceDiscovery::instance() {
@@ -47,10 +50,8 @@ DeviceDiscovery::DeviceDiscovery() {
 // Helper function: Check if response is valid for serial request
 bool DeviceDiscovery::isValidSerialResponse(const twai_message_t& frame, uint8_t nodeId, uint8_t partIndex) const {
   uint16_t rxIndex = (frame.data[1] | (frame.data[2] << 8));
-  return frame.identifier == (SDO_RESPONSE_BASE_ID | nodeId) &&
-         frame.data[0] != SDO_ABORT &&
-         rxIndex == SDO_INDEX_SERIAL &&
-         frame.data[3] == partIndex;
+  return frame.identifier == (SDO_RESPONSE_BASE_ID | nodeId) && frame.data[0] != SDO_ABORT &&
+         rxIndex == SDO_INDEX_SERIAL && frame.data[3] == partIndex;
 }
 
 // Helper function: Advance to next node in scan
@@ -58,15 +59,13 @@ void DeviceDiscovery::advanceToNextNode() {
   currentSerialPart = 0;
   currentNode++;
   if (currentNode > scanEnd) {
-    currentNode = scanStart; // Wrap around to start
+    currentNode = scanStart;  // Wrap around to start
   }
 }
 
 // Helper function: Check if we should process scan now
 bool DeviceDiscovery::shouldProcessScan(unsigned long currentTime) const {
-  return scanActive &&
-         DeviceConnection::instance().isIdle() &&
-         (currentTime - lastScanTime >= SCAN_DELAY_MS);
+  return scanActive && DeviceConnection::instance().isIdle() && (currentTime - lastScanTime >= SCAN_DELAY_MS);
 }
 
 // Helper function: Handle scan response
@@ -81,8 +80,8 @@ bool DeviceDiscovery::handleScanResponse(const twai_message_t& frame, unsigned l
   // If we've read all 4 parts, we found a device
   if (currentSerialPart >= 4) {
     char serialStr[40];
-    sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
-            currentSerial[0], currentSerial[1], currentSerial[2], currentSerial[3]);
+    sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32, currentSerial[0], currentSerial[1],
+            currentSerial[2], currentSerial[3]);
 
     DBG_OUTPUT_PORT.printf("Continuous scan found device at node %d: %s\n", currentNode, serialStr);
 
@@ -138,8 +137,10 @@ bool DeviceDiscovery::requestDeviceSerial(uint8_t nodeId, uint32_t serialParts[4
 }
 
 // Scan for devices on the CAN bus (one-time scan)
-String DeviceDiscovery::scanDevices(uint8_t startNode, uint8_t endNode, uint8_t& nodeId, BaudRate baudRate, int canTxPin, int canRxPin) {
-  if (!DeviceConnection::instance().isIdle()) return "[]";
+String DeviceDiscovery::scanDevices(uint8_t startNode, uint8_t endNode, uint8_t& nodeId, BaudRate baudRate,
+                                    int canTxPin, int canRxPin) {
+  if (!DeviceConnection::instance().isIdle())
+    return "[]";
 
   JsonDocument doc;
   JsonArray devicesArray = doc.to<JsonArray>();
@@ -172,8 +173,8 @@ String DeviceDiscovery::scanDevices(uint8_t startNode, uint8_t endNode, uint8_t&
     // Request serial number from device
     if (requestDeviceSerial(node, deviceSerial)) {
       char serialStr[40];
-      sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32,
-              deviceSerial[0], deviceSerial[1], deviceSerial[2], deviceSerial[3]);
+      sprintf(serialStr, "%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32 ":%08" PRIX32, deviceSerial[0], deviceSerial[1],
+              deviceSerial[2], deviceSerial[3]);
 
       DBG_OUTPUT_PORT.printf("Found device at node %d: %s\n", node, serialStr);
 
@@ -428,7 +429,7 @@ void DeviceDiscovery::updateLastSeenByNodeId(uint8_t nodeId, uint32_t lastSeen) 
   if (lastPassiveHeartbeatByNode.count(nodeId) > 0) {
     unsigned long timeSinceLastUpdate = lastSeen - lastPassiveHeartbeatByNode[nodeId];
     if (timeSinceLastUpdate < PASSIVE_HEARTBEAT_THROTTLE_MS) {
-      return; // Too soon, skip this update
+      return;  // Too soon, skip this update
     }
   }
 
