@@ -18,25 +18,29 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
+#include "oi_can.h"
+
+#include <ArduinoJson.h>
+
+#include <functional>
+#include <map>
+#include <vector>
+
+#include <FS.h>
+#include <StreamUtils.h>
+
 #include "driver/gpio.h"
 #include "driver/twai.h"
 #include "esp_task_wdt.h"
-#include <FS.h>
-#include <LittleFS.h>
-#include <StreamUtils.h>
-#include <ArduinoJson.h>
-#include <map>
-#include <vector>
-#include <functional>
-#include "oi_can.h"
-#include "models/can_types.h"
-#include "utils/can_utils.h"
-#include "managers/device_storage.h"
-#include "managers/device_discovery.h"
-#include "managers/device_connection.h"
 #include "firmware/update_handler.h"
+
+#include "managers/device_connection.h"
+#include "managers/device_discovery.h"
+#include "managers/device_storage.h"
+#include "models/can_types.h"
 #include "protocols/sdo_protocol.h"
 #include "utils/can_queue.h"
+#include "utils/can_utils.h"
 
 #define DBG_OUTPUT_PORT Serial
 
@@ -44,6 +48,12 @@ namespace OICan {
 
 // Use DeviceConnection singleton for all connection and JSON cache state
 static DeviceConnection& conn = DeviceConnection::instance();
+
+// Helper: Extract parameter value from SDO response frame
+// Parameters are stored as signed fixed-point with scale of 32
+static double extractParameterValue(const twai_message_t& frame) {
+  return ((double)*(int32_t*)&frame.data[4]) / 32.0;
+}
 
 // Send SDO request for a parameter value (truly non-blocking with rate limiting)
 bool RequestValue(int paramId) {
@@ -106,26 +116,27 @@ String GetRawJson() {
 String GetRawJson(uint8_t nodeId) {
   // Only return JSON if we're connected to the requested node
   if (conn.getNodeId() != nodeId) {
-    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Not connected to node %d (currently connected to %d)\n", nodeId, conn.getNodeId());
+    DBG_OUTPUT_PORT.printf("[GetRawJson(nodeId)] Not connected to node %d (currently connected to %d)\n", nodeId,
+                           conn.getNodeId());
     return "{}";
   }
 
   return GetRawJson();
 }
 
-bool SendJson(WiFiClient client) {
-  if (!conn.isIdle()) return false;
+// Callback type for receiving parameter values during iteration
+typedef std::function<void(const char* key, int id, double value)> ParameterValueCallback;
 
-  JsonDocument doc;
-  twai_message_t rxframe;
-
-  // Use in-memory JSON if available
+// Helper: Iterate through cached parameters and fetch current values
+// Returns number of failed requests (0 = all succeeded)
+static int iterateParameterValues(ParameterValueCallback callback) {
   if (conn.getCachedJson().isNull() || conn.getCachedJson().size() == 0) {
     DBG_OUTPUT_PORT.println("No parameter JSON in memory");
-    return false;
+    return -1;  // Error: no cached JSON
   }
 
   JsonObject root = conn.getCachedJson().as<JsonObject>();
+  twai_message_t rxframe;
   int failed = 0;
 
   SDOProtocol::clearPendingResponses();
@@ -137,12 +148,27 @@ bool SendJson(WiFiClient client) {
       SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_PARAM_UID | (id >> 8), id & 0xff);
 
       if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10)) && rxframe.data[3] == (id & 0xFF)) {
-        kv.value()["value"] = ((double)*(int32_t*)&rxframe.data[4]) / 32;
+        callback(kv.key().c_str(), id, extractParameterValue(rxframe));
       } else {
         failed++;
       }
     }
   }
+
+  return failed;
+}
+
+bool SendJson(WiFiClient client) {
+  if (!conn.isIdle())
+    return false;
+
+  JsonDocument doc;
+
+  int failed = iterateParameterValues([&doc](const char* key, int id, double value) { doc[key]["value"] = value; });
+
+  if (failed < 0)
+    return false;  // No cached JSON
+
   if (failed < 5) {
     WriteBufferingStream bufferedWifiClient{client, 1000};
     serializeJson(doc, bufferedWifiClient);
@@ -151,125 +177,108 @@ bool SendJson(WiFiClient client) {
 }
 
 // Callback type for receiving individual CAN mapping items
-typedef std::function<void(bool isRx, int cobid, int paramid, int pos, int len, float gain, int offset, int index, int subIndex)> CanMappingCallback;
+typedef std::function<void(const CanMappingData& mapping)> CanMappingCallback;
 
-// Helper function to retrieve CAN mappings via callback
-// Returns true if successful, false on error
+// Helper: Parse 24-bit signed fixed-point gain from SDO response
+static float parseGainFromResponse(const twai_message_t& frame) {
+  // Extract 24-bit signed value and convert to float
+  int32_t gainFixedPoint = ((*(uint32_t*)&frame.data[4]) & 0xFFFFFF) << 8;
+  gainFixedPoint >>= 8;  // Sign-extend
+  return gainFixedPoint / 1000.0f;
+}
+
+// Helper: Request SDO element and wait for non-abort response
+// Returns true if got valid response, false on timeout or abort
+static bool requestMappingElement(uint16_t index, uint8_t subIndex, twai_message_t& response) {
+  SDOProtocol::requestElement(conn.getNodeId(), index, subIndex);
+  if (!SDOProtocol::waitForResponse(&response, pdMS_TO_TICKS(10))) {
+    return false;  // Timeout
+  }
+  return response.data[0] != SDOProtocol::ABORT;
+}
+
+// Helper: Retrieve all mappings for one direction (TX or RX)
+// Returns true to continue to next direction, false to stop
+static bool retrieveMappingsForDirection(bool isRx, uint16_t baseIndex, CanMappingCallback callback) {
+  twai_message_t rxframe;
+  uint16_t index = baseIndex;
+  const int MAX_ITEMS_PER_MESSAGE = 100;
+
+  while (true) {
+    // Request COB ID (subindex 0)
+    if (!requestMappingElement(index, 0, rxframe)) {
+      return true;  // No more messages in this direction, continue to next
+    }
+
+    int cobId = *(int32_t*)&rxframe.data[4];
+    uint8_t subIndex = 1;
+
+    // Collect all items in this message
+    while (subIndex < MAX_ITEMS_PER_MESSAGE) {
+      // Request param ID, position, length
+      if (!requestMappingElement(index, subIndex, rxframe)) {
+        DBG_OUTPUT_PORT.println("Mapping received, moving to next");
+        break;  // Move to next message
+      }
+
+      int paramId = *(uint16_t*)&rxframe.data[4];
+      int position = rxframe.data[6];
+      int length = (int8_t)rxframe.data[7];
+      subIndex++;
+
+      // Request gain and offset
+      if (!requestMappingElement(index, subIndex, rxframe)) {
+        return false;  // Unexpected abort
+      }
+
+      float gain = parseGainFromResponse(rxframe);
+      int offset = (int8_t)rxframe.data[7];
+
+      DBG_OUTPUT_PORT.printf("can %s %d %d %d %d %f %d\r\n", isRx ? "rx" : "tx", paramId, cobId, position, length, gain,
+                             offset);
+
+      // Call callback with mapping data
+      callback({isRx, cobId, paramId, position, length, gain, offset, index, subIndex});
+
+      subIndex++;
+    }
+
+    index++;  // Move to next message
+  }
+}
+
+// Main function: Retrieve all CAN mappings (TX then RX) via callback
 static bool retrieveCanMappings(CanMappingCallback callback) {
   if (!conn.isIdle()) {
     DBG_OUTPUT_PORT.println("retrieveCanMappings called while not DeviceConnection::IDLE, ignoring");
     return false;
   }
 
-  enum ReqMapStt { START, COBID, DATAPOSLEN, GAINOFS, DONE };
-
-  twai_message_t rxframe;
-  int index = SDOProtocol::INDEX_MAP_RD, subIndex = 0;
-  int cobid = 0, pos = 0, len = 0, paramid = 0;
-  bool rx = false;
-  ReqMapStt reqMapStt = START;
-
   SDOProtocol::clearPendingResponses();
 
-  while (DONE != reqMapStt) {
-    switch (reqMapStt) {
-    case START:
-      SDOProtocol::requestElement(conn.getNodeId(), index, 0); //request COB ID
-      reqMapStt = COBID;
-      cobid = 0;
-      pos = 0;
-      len = 0;
-      paramid = 0;
-      break;
-    case COBID:
-      if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-        if (rxframe.data[0] != SDOProtocol::ABORT) {
-          cobid = *(int32_t*)&rxframe.data[4]; //convert bytes to word
-          subIndex++;
-          SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //request parameter id, position and length
-          reqMapStt = DATAPOSLEN;
-        }
-        else if (!rx) { //after receiving tx item collect rx items
-          rx = true;
-          index = SDOProtocol::INDEX_MAP_RD + 0x80;
-          reqMapStt = START;
-          DBG_OUTPUT_PORT.println("Getting RX items");
-        }
-        else //no more items, we are done
-          reqMapStt = DONE;
-      }
-      else
-        reqMapStt = DONE; //don't lock up when not receiving
-      break;
-    case DATAPOSLEN:
-      if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-        if (rxframe.data[0] != SDOProtocol::ABORT) {
-          paramid = *(uint16_t*)&rxframe.data[4];
-          pos = rxframe.data[6];
-          len = (int8_t)rxframe.data[7];
-          subIndex++;
-          SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //gain and offset
-          reqMapStt = GAINOFS;
-        }
-        else { //all items of this message collected, move to next message
-          index++;
-          subIndex = 0;
-          reqMapStt = START;
-          DBG_OUTPUT_PORT.println("Mapping received, moving to next");
-        }
-      }
-      else
-        reqMapStt = DONE; //don't lock up when not receiving
-      break;
-    case GAINOFS:
-      if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-        if (rxframe.data[0] != SDOProtocol::ABORT) {
-          int32_t gainFixedPoint = ((*(uint32_t*)&rxframe.data[4]) & 0xFFFFFF) << (32-24);
-          gainFixedPoint >>= (32-24);
-          float gain = gainFixedPoint / 1000.0f;
-          int offset = (int8_t)rxframe.data[7];
-          DBG_OUTPUT_PORT.printf("can %s %d %d %d %d %f %d\r\n", rx ? "rx" : "tx", paramid, cobid, pos, len, gain, offset);
+  // Retrieve TX mappings (0x3100+)
+  retrieveMappingsForDirection(false, SDOProtocol::INDEX_MAP_RD, callback);
 
-          // Call the callback with mapping data
-          callback(rx, cobid, paramid, pos, len, gain, offset, index, subIndex);
-
-          subIndex++;
-
-          if (subIndex < 100) { //limit maximum items in case there is a bug ;)
-            SDOProtocol::requestElement(conn.getNodeId(), index, subIndex); //request next item
-            reqMapStt = DATAPOSLEN;
-          }
-          else {
-            reqMapStt = DONE;
-          }
-        }
-        else //should never get here
-          reqMapStt = DONE;
-      }
-      else
-        reqMapStt = DONE; //don't lock up when not receiving
-      break;
-    case DONE:
-      break;
-    }
-  }
+  // Retrieve RX mappings (0x3180+)
+  DBG_OUTPUT_PORT.println("Getting RX items");
+  retrieveMappingsForDirection(true, SDOProtocol::INDEX_MAP_RD + 0x80, callback);
 
   return true;
 }
 
 // Helper: Retrieve CAN mappings and return as JsonDocument
 static bool retrieveCanMappingsAsJson(JsonDocument& doc) {
-  return retrieveCanMappings([&doc](bool isRx, int cobid, int paramid, int pos, int len, float gain, int offset, int index, int subIndex) {
-    JsonObject object = doc.add<JsonObject>();
-    object["isrx"] = isRx;
-    object["id"] = cobid;
-    object["paramid"] = paramid;
-    object["position"] = pos;
-    object["length"] = len;
-    object["gain"] = gain;
-    object["offset"] = offset;
-    object["index"] = index;
-    object["subindex"] = subIndex;
+  return retrieveCanMappings([&doc](const CanMappingData& m) {
+    JsonObject obj = doc.add<JsonObject>();
+    obj["isrx"] = m.isRx;
+    obj["id"] = m.cobId;
+    obj["paramid"] = m.paramId;
+    obj["position"] = m.position;
+    obj["length"] = m.length;
+    obj["gain"] = m.gain;
+    obj["offset"] = m.offset;
+    obj["index"] = m.sdoIndex;
+    obj["subindex"] = m.sdoSubIndex;
   });
 }
 
@@ -295,7 +304,8 @@ void SendCanMapping(WiFiClient client) {
 }
 
 SetResult AddCanMapping(String json) {
-  if (!conn.isIdle()) return CommError;
+  if (!conn.isIdle())
+    return CommError;
 
   JsonDocument doc;
   twai_message_t rxframe;
@@ -311,17 +321,21 @@ SetResult AddCanMapping(String json) {
   int index = doc["isrx"] ? SDOProtocol::INDEX_MAP_RX : SDOProtocol::INDEX_MAP_TX;
 
   SDOProtocol::clearPendingResponses();
-  SDOProtocol::setValue(conn.getNodeId(), index, 0, (uint32_t)doc["id"]); //Send CAN Id
+  SDOProtocol::setValue(conn.getNodeId(), index, 0, (uint32_t)doc["id"]);  // Send CAN Id
 
   if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
     DBG_OUTPUT_PORT.println("Sent COB Id");
-    SDOProtocol::setValue(conn.getNodeId(), index, 1, doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) | (doc["length"].as<int32_t>() << 24)); //data item, position and length
+    SDOProtocol::setValue(conn.getNodeId(), index, 1,
+                          doc["paramid"].as<uint32_t>() | (doc["position"].as<uint32_t>() << 16) |
+                              (doc["length"].as<int32_t>() << 24));  // data item, position and length
     if (rxframe.data[0] != SDOProtocol::ABORT && SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
       DBG_OUTPUT_PORT.println("Sent position and length");
-      SDOProtocol::setValue(conn.getNodeId(), index, 2, (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) | doc["offset"].as<int32_t>() << 24); //gain and offset
+      SDOProtocol::setValue(conn.getNodeId(), index, 2,
+                            (uint32_t)((int32_t)(doc["gain"].as<double>() * 1000) & 0xFFFFFF) |
+                                doc["offset"].as<int32_t>() << 24);  // gain and offset
 
       if (rxframe.data[0] != SDOProtocol::ABORT && SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-        if (rxframe.data[0] != SDOProtocol::ABORT){
+        if (rxframe.data[0] != SDOProtocol::ABORT) {
           DBG_OUTPUT_PORT.println("Sent gain and offset -> map successful");
           return Ok;
         }
@@ -334,12 +348,11 @@ SetResult AddCanMapping(String json) {
   return CommError;
 }
 
-SetResult RemoveCanMapping(String json){
-  if (!conn.isIdle()) return CommError;
+SetResult RemoveCanMapping(String json) {
+  if (!conn.isIdle())
+    return CommError;
 
   JsonDocument doc;
-  twai_message_t rxframe;
-
   deserializeJson(doc, json);
 
   if (doc["index"].isNull() || doc["subindex"].isNull()) {
@@ -367,34 +380,34 @@ SetResult RemoveCanMapping(String json){
     return UnknownIndex;
   }
 
-  DBG_OUTPUT_PORT.printf("Removing %s mapping at index 0x%lX, subindex 0\n",
-                         isRx ? "RX" : "TX", (unsigned long)writeIndex);
+  DBG_OUTPUT_PORT.printf("Removing %s mapping at index 0x%lX, subindex 0\n", isRx ? "RX" : "TX",
+                         (unsigned long)writeIndex);
 
   // Write 0 to subindex 0 (COB ID) to remove the entire mapping
-  SDOProtocol::clearPendingResponses();
-  SDOProtocol::setValue(conn.getNodeId(), writeIndex, 0, 0U);
-
-  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-    if (rxframe.data[0] != SDOProtocol::ABORT){
-      DBG_OUTPUT_PORT.println("Item removed");
-      return Ok;
-    }
-    else {
-      DBG_OUTPUT_PORT.println("Invalid item index/subindex");
-      return UnknownIndex;
-    }
+  twai_message_t rxframe;
+  if (SDOProtocol::writeAndWait(conn.getNodeId(), writeIndex, 0, 0U, &rxframe)) {
+    DBG_OUTPUT_PORT.println("Item removed");
+    return Ok;
   }
+
+  // writeAndWait returns false on timeout or abort
+  if (rxframe.data[0] == SDOProtocol::ABORT) {
+    DBG_OUTPUT_PORT.println("Invalid item index/subindex");
+    return UnknownIndex;
+  }
+
   DBG_OUTPUT_PORT.println("Comm Error");
   return CommError;
 }
 
-bool ClearCanMap(bool isRx) {
-  if (!conn.isIdle()) return false;
+bool ClearCanMap(bool isRx, ClearMapProgressCallback onProgress) {
+  if (!conn.isIdle())
+    return false;
 
   twai_message_t rxframe;
   int baseIndex = isRx ? (SDOProtocol::INDEX_MAP_RD + 0x80) : SDOProtocol::INDEX_MAP_RD;
   int removedCount = 0;
-  const int MAX_ITERATIONS = 100; // Safety limit to prevent infinite loops
+  const int MAX_ITERATIONS = 100;  // Safety limit to prevent infinite loops
 
   DBG_OUTPUT_PORT.printf("Clearing all %s CAN mappings\n", isRx ? "RX" : "TX");
   SDOProtocol::clearPendingResponses();
@@ -413,6 +426,11 @@ bool ClearCanMap(bool isRx) {
         // Successfully removed one entry
         removedCount++;
         DBG_OUTPUT_PORT.printf("Removed %s mapping #%d\n", isRx ? "RX" : "TX", removedCount);
+
+        // Notify progress callback if provided
+        if (onProgress) {
+          onProgress(removedCount);
+        }
       }
     } else {
       // Communication timeout
@@ -422,46 +440,42 @@ bool ClearCanMap(bool isRx) {
   }
 
   // Hit maximum iterations - probably a bug
-  DBG_OUTPUT_PORT.printf("Warning: Hit maximum iterations (%d) while clearing %s mappings\n",
-                         MAX_ITERATIONS, isRx ? "RX" : "TX");
+  DBG_OUTPUT_PORT.printf("Warning: Hit maximum iterations (%d) while clearing %s mappings\n", MAX_ITERATIONS,
+                         isRx ? "RX" : "TX");
   return false;
 }
 
 SetResult SetValue(int paramId, double value) {
-  if (!conn.isIdle()) return CommError;
+  if (!conn.isIdle())
+    return CommError;
 
   twai_message_t rxframe;
+  uint16_t index = SDOProtocol::INDEX_PARAM_UID | (paramId >> 8);
+  uint8_t subIndex = paramId & 0xFF;
 
-  SDOProtocol::clearPendingResponses();
-  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_PARAM_UID | (paramId >> 8), paramId & 0xFF, (uint32_t)(value * 32));
-
-  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-    if (rxframe.data[0] == SDOProtocol::RESPONSE_DOWNLOAD)
-      return Ok;
-    else if (*(uint32_t*)&rxframe.data[4] == SDOProtocol::ERR_RANGE)
-      return ValueOutOfRange;
-    else
-      return UnknownIndex;
-  }
-  else {
+  if (!SDOProtocol::writeAndWait(conn.getNodeId(), index, subIndex, (uint32_t)(value * 32), &rxframe)) {
+    // Check if we got a response but it was an abort
+    if (rxframe.data[0] == SDOProtocol::ABORT) {
+      if (*(uint32_t*)&rxframe.data[4] == SDOProtocol::ERR_RANGE)
+        return ValueOutOfRange;
+      else
+        return UnknownIndex;
+    }
     return CommError;
   }
+
+  return Ok;
 }
 
 // Helper: Send a device command and wait for acknowledgment
 static const int DEVICE_COMMAND_TIMEOUT_MS = 200;
 
 static bool sendDeviceCommand(uint8_t cmd, uint32_t value = 0) {
-  if (!conn.isIdle()) return false;
+  if (!conn.isIdle())
+    return false;
 
-  twai_message_t rxframe;
-  SDOProtocol::clearPendingResponses();  // Clear any stale responses
-  SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, cmd, value);
-
-  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(DEVICE_COMMAND_TIMEOUT_MS))) {
-    return true;
-  }
-  return false;
+  return SDOProtocol::writeAndWait(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, cmd, value,
+                                   pdMS_TO_TICKS(DEVICE_COMMAND_TIMEOUT_MS));
 }
 
 bool SaveToFlash() {
@@ -500,13 +514,13 @@ static std::map<int, String> buildErrorDescriptionMap() {
 
 // Helper: Determine tick duration from uptime parameter's unit
 static int determineTickDuration() {
-  int tickDurationMs = 10; // Default to 10ms
+  int tickDurationMs = 10;  // Default to 10ms
   if (!conn.getCachedJson().isNull() && conn.getCachedJson().containsKey("uptime")) {
     JsonObject uptime = conn.getCachedJson()["uptime"].as<JsonObject>();
     if (uptime.containsKey("unit")) {
       String unit = uptime["unit"].as<String>();
       if (unit == "sec" || unit == "s") {
-        tickDurationMs = 1000; // 1 second
+        tickDurationMs = 1000;  // 1 second
         DBG_OUTPUT_PORT.println("Using 1-second tick duration based on uptime unit");
       }
     }
@@ -516,38 +530,22 @@ static int determineTickDuration() {
 
 // Helper: Request error data (timestamp and number) for a specific index
 static bool requestErrorAtIndex(uint8_t index, uint32_t& errorTime, uint32_t& errorNum) {
-  twai_message_t rxframe;
-  bool hasErrorTime = false;
-  bool hasErrorNum = false;
-
   // Request error timestamp
-  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_TIME, index);
-  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-    if (rxframe.data[0] != SDOProtocol::ABORT &&
-        (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_TIME &&
-        rxframe.data[3] == index) {
-      errorTime = *(uint32_t*)&rxframe.data[4];
-      hasErrorTime = true;
-    }
+  if (!SDOProtocol::requestValue(conn.getNodeId(), SDOProtocol::INDEX_ERROR_TIME, index, &errorTime)) {
+    return false;
   }
 
   // Request error number
-  SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_ERROR_NUM, index);
-  if (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-    if (rxframe.data[0] != SDOProtocol::ABORT &&
-        (rxframe.data[1] | rxframe.data[2] << 8) == SDOProtocol::INDEX_ERROR_NUM &&
-        rxframe.data[3] == index) {
-      errorNum = *(uint32_t*)&rxframe.data[4];
-      hasErrorNum = true;
-    }
+  if (!SDOProtocol::requestValue(conn.getNodeId(), SDOProtocol::INDEX_ERROR_NUM, index, &errorNum)) {
+    return false;
   }
 
-  return hasErrorTime && hasErrorNum;
+  return true;
 }
 
 // Helper: Create JSON object for an error entry
 static void createErrorJsonObject(JsonArray& errors, uint8_t index, uint32_t errorNum, uint32_t errorTime,
-                                   int tickDurationMs, const std::map<int, String>& errorDescriptions) {
+                                  int tickDurationMs, const std::map<int, String>& errorDescriptions) {
   JsonObject errorObj = errors.add<JsonObject>();
   errorObj["index"] = index;
   errorObj["errorNum"] = errorNum;
@@ -561,9 +559,8 @@ static void createErrorJsonObject(JsonArray& errors, uint8_t index, uint32_t err
     errorObj["description"] = "Unknown error " + String(errorNum);
   }
 
-  DBG_OUTPUT_PORT.printf("Error %lu at index %d: time=%lu ticks (%lu ms), desc=%s\n",
-                         (unsigned long)errorNum, index, (unsigned long)errorTime,
-                         (unsigned long)(errorTime * tickDurationMs),
+  DBG_OUTPUT_PORT.printf("Error %lu at index %d: time=%lu ticks (%lu ms), desc=%s\n", (unsigned long)errorNum, index,
+                         (unsigned long)errorTime, (unsigned long)(errorTime * tickDurationMs),
                          errorObj["description"].as<const char*>());
 }
 
@@ -605,12 +602,13 @@ String ListErrors() {
 }
 
 bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength) {
-  if (dataLength > 8) return false; // CAN data cannot be longer than 8 bytes
+  if (dataLength > 8)
+    return false;  // CAN data cannot be longer than 8 bytes
 
   twai_message_t frame;
   frame.identifier = canId;
   frame.data_length_code = dataLength;
-  frame.flags = 0; // Standard frame, no RTR
+  frame.flags = 0;  // Standard frame, no RTR
 
   // Copy data to frame
   for (uint8_t i = 0; i < dataLength; i++) {
@@ -632,45 +630,75 @@ bool SendCanMessage(uint32_t canId, const uint8_t* data, uint8_t dataLength) {
   }
 }
 
-String StreamValues(String paramIds, int samples) {
-  if (!conn.isIdle()) return "";
+// Helper: Parse comma-separated parameter IDs from string
+// Returns vector of parameter IDs
+static std::vector<int> parseParameterIds(const String& paramIds) {
+  std::vector<int> ids;
+  ids.reserve(30);  // Reasonable initial capacity
 
-  twai_message_t rxframe;
-
-  int ids[30], numItems = 0;
-  String result;
-
-  // Parse comma-separated parameter IDs
   for (int pos = 0; pos >= 0; pos = paramIds.indexOf(',', pos + 1)) {
     String idStr = paramIds.substring(pos + 1, paramIds.indexOf(',', pos + 1));
-    ids[numItems++] = idStr.toInt();
+    ids.push_back(idStr.toInt());
   }
+
+  return ids;
+}
+
+// Callback for streaming parameter values
+// sampleIndex: which sample (0 to samples-1)
+// itemIndex: which parameter in this sample (0 to numItems-1)
+// numItems: total number of parameters per sample
+// value: the parameter value (or 0 on error)
+typedef std::function<void(int sampleIndex, int itemIndex, int numItems, double value)> StreamValueCallback;
+
+// Helper: Stream parameter values with callback
+// Returns true if completed successfully
+static bool streamParameterValues(const std::vector<int>& ids, int samples, StreamValueCallback callback) {
+  twai_message_t rxframe;
+  int numItems = ids.size();
 
   SDOProtocol::clearPendingResponses();
 
-  for (int i = 0; i < samples; i++) {
-    for (int item = 0; item < numItems; item++) {
-      int id = ids[item];
+  for (int sampleIdx = 0; sampleIdx < samples; sampleIdx++) {
+    // Send all requests for this sample
+    for (int itemIdx = 0; itemIdx < numItems; itemIdx++) {
+      int id = ids[itemIdx];
       SDOProtocol::requestElement(conn.getNodeId(), SDOProtocol::INDEX_PARAM_UID | (id >> 8), id & 0xFF);
     }
 
-    int item = 0;
+    // Collect all responses for this sample
+    int itemIdx = 0;
     while (SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(10))) {
-      if (item > 0) result += ",";
-      if (rxframe.data[0] == 0x80)
-        result += "0";
-      else {
+      double value = 0;
+      if (rxframe.data[0] != 0x80) {
         int receivedItem = (rxframe.data[1] << 8) + rxframe.data[3];
-
-        if (receivedItem == ids[item])
-          result += String(((double)*(int32_t*)&rxframe.data[4]) / 32, 2);
-        else
-          result += "0";
+        if (receivedItem == ids[itemIdx]) {
+          value = extractParameterValue(rxframe);
+        }
       }
-      item++;
+      callback(sampleIdx, itemIdx, numItems, value);
+      itemIdx++;
     }
-    result += "\r\n";
   }
+
+  return true;
+}
+
+String StreamValues(String paramIds, int samples) {
+  if (!conn.isIdle())
+    return "";
+
+  auto ids = parseParameterIds(paramIds);
+  String result;
+
+  streamParameterValues(ids, samples, [&result](int sampleIdx, int itemIdx, int numItems, double value) {
+    if (itemIdx > 0)
+      result += ",";
+    result += String(value, 2);
+    if (itemIdx == numItems - 1)
+      result += "\r\n";
+  });
+
   return result;
 }
 
@@ -680,11 +708,11 @@ bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs) {
   twai_message_t rxframe;
 
   if (!SDOProtocol::waitForResponse(&rxframe, pdMS_TO_TICKS(timeoutMs))) {
-    return false; // No message available
+    return false;  // No message available
   }
-  
+
   printCanRx(&rxframe);
-  
+
   // Parse the response to extract paramId
   uint16_t responseIndex = rxframe.data[1] | (rxframe.data[2] << 8);
   uint8_t responseSubIndex = rxframe.data[3];
@@ -694,21 +722,17 @@ bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs) {
     // Not a parameter response, skip
     return false;
   }
-  
+
   // Reconstruct paramId from index and subindex
   int paramId = ((responseIndex & 0xFF) << 8) | responseSubIndex;
-  
+
   // Check for SDO error response
   if (rxframe.data[0] == 0x80) {
     return false;
   }
-  
-  // Extract value (converted by dividing by 32)
-  uint32_t rawValue = *(uint32_t*)&rxframe.data[4];
-  double convertedValue = ((double)rawValue) / 32.0;
-  
+
   outParamId = paramId;
-  outValue = convertedValue;
+  outValue = extractParameterValue(rxframe);
   return true;
 }
 
@@ -719,15 +743,15 @@ double GetValue(int paramId) {
   }
 
   RequestValue(paramId);
-  
+
   // Wait for response with timeout
   unsigned long startTime = millis();
   const unsigned long TIMEOUT_MS = 100;
-  
+
   while ((millis() - startTime) < TIMEOUT_MS) {
     int receivedParamId;
     double value;
-    
+
     if (TryGetValueResponse(receivedParamId, value, 10)) {
       if (receivedParamId == paramId) {
         return value;
@@ -735,8 +759,8 @@ double GetValue(int paramId) {
       // Got a response for a different parameter, keep waiting
     }
   }
-  
-  return 0; // Timeout
+
+  return 0;  // Timeout
 }
 
 // Initialize CAN bus without connecting to a specific device
@@ -750,13 +774,11 @@ void Init(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
 }
 
 bool ReloadJson() {
-  if (!conn.isIdle()) return false;
+  if (!conn.isIdle())
+    return false;
 
   // Remove the cached JSON file to force re-download
-  if (LittleFS.exists(conn.getJsonFileName())) {
-    LittleFS.remove(conn.getJsonFileName());
-    DBG_OUTPUT_PORT.printf("Removed cached JSON file: %s\r\n", conn.getJsonFileName());
-  }
+  DeviceStorage::removeJsonCache(conn.getSerial());
 
   // Clear cached JSON and trigger download
   conn.clearJsonCache();
@@ -789,7 +811,8 @@ bool ReloadJson(uint8_t nodeId) {
 }
 
 bool ResetDevice() {
-  if (!conn.isIdle()) return false;
+  if (!conn.isIdle())
+    return false;
 
   // Send reset command to the device
   SDOProtocol::setValue(conn.getNodeId(), SDOProtocol::INDEX_COMMANDS, SDOProtocol::CMD_RESET, 1U);
@@ -798,7 +821,7 @@ bool ResetDevice() {
 
   // The device will reset immediately and won't send an acknowledgment
   // After a short delay, trigger serial re-acquisition
-  delay(500); // Give device time to start resetting
+  delay(500);  // Give device time to start resetting
   conn.startSerialAcquisition();
 
   return true;
@@ -808,7 +831,8 @@ bool ResetDevice() {
 
 String ScanDevices(uint8_t startNodeId, uint8_t endNodeId) {
   uint8_t nodeId = conn.getNodeId();
-  return DeviceDiscovery::instance().scanDevices(startNodeId, endNodeId, nodeId, conn.getBaudRate(), conn.getCanTxPin(), conn.getCanRxPin());
+  return DeviceDiscovery::instance().scanDevices(startNodeId, endNodeId, nodeId, conn.getBaudRate(), conn.getCanTxPin(),
+                                                 conn.getCanRxPin());
 }
 
 // Continuous scanning implementation
@@ -822,9 +846,9 @@ bool StartContinuousScan(uint8_t startNodeId, uint8_t endNodeId) {
   // Reinitialize CAN bus with accept-all filter for scanning
   // This ensures we can see all nodes, not just the previously connected one
   DBG_OUTPUT_PORT.println("Reinitializing CAN bus for scanning (accept all messages)");
-  InitCAN(conn.getBaudRate(), conn.getCanTxPin(), conn.getCanRxPin()); // Use current baud rate and stored pins
+  InitCAN(conn.getBaudRate(), conn.getCanTxPin(), conn.getCanRxPin());  // Use current baud rate and stored pins
 
   return DeviceDiscovery::instance().startContinuousScan(startNodeId, endNodeId);
 }
 
-}
+}  // namespace OICan

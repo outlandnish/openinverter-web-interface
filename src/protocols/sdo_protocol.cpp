@@ -19,6 +19,9 @@
  *
  */
 #include "sdo_protocol.h"
+
+#include <cstring>
+
 #include "models/can_types.h"
 #include "utils/can_queue.h"
 
@@ -140,4 +143,51 @@ void clearPendingResponses() {
   canQueueClearResponses();
 }
 
-} // namespace SDOProtocol
+// SDO Write-and-Wait Helpers
+
+bool writeAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value, twai_message_t* response,
+                  TickType_t timeout) {
+  clearPendingResponses();
+  setValue(nodeId, index, subIndex, value);
+
+  if (!waitForResponse(response, timeout)) {
+    // Zero-initialize on timeout so caller can distinguish timeout from abort
+    memset(response, 0, sizeof(twai_message_t));
+    return false;
+  }
+
+  return response->data[0] != ABORT;
+}
+
+bool writeAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value, TickType_t timeout) {
+  twai_message_t response;
+  return writeAndWait(nodeId, index, subIndex, value, &response, timeout);
+}
+
+// SDO Request-and-Wait Helpers
+
+bool requestAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, twai_message_t* response, TickType_t timeout) {
+  clearPendingResponses();
+  requestElement(nodeId, index, subIndex);
+
+  if (!waitForResponse(response, timeout)) {
+    // Zero-initialize on timeout so caller can distinguish timeout from abort
+    memset(response, 0, sizeof(twai_message_t));
+    return false;
+  }
+
+  return response->data[0] != ABORT;
+}
+
+bool requestValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t* outValue, TickType_t timeout) {
+  twai_message_t response;
+
+  if (!requestAndWait(nodeId, index, subIndex, &response, timeout)) {
+    return false;
+  }
+
+  *outValue = *(uint32_t*)&response.data[4];
+  return true;
+}
+
+}  // namespace SDOProtocol

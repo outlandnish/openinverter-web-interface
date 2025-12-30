@@ -1,8 +1,8 @@
-* Project root is a PlatformIO project with environments for both an ESP32-C3-DevKitM-1 and a Caniuplator (based on the ESP32-C6)
-* Preact web project in /web for the interface
-* Do not add emoji into text or UI elements unless explicitly asked to do so.
-* Use intlayer translations / keys for text
-* If you need to test code compilation, ask me to do it for you.
-* Use `#pragma once` for header guards
-* Where possible, switch from Arduino String to std::string
-* When creating single use classes that need to be thread safe, create a singleton instance to do so
+- Project root is a PlatformIO project with environments for both an ESP32-C3-DevKitM-1 and a Caniuplator (based on the ESP32-C6)
+- Preact web project in /web for the interface
+- Do not add emoji into text or UI elements unless explicitly asked to do so.
+- Use intlayer translations / keys for text
+- If you need to test code compilation, ask me to do it for you.
+- Use `#pragma once` for header guards
+- Where possible, switch from Arduino String to std::string
+- When creating single use classes that need to be thread safe, create a singleton instance to do so

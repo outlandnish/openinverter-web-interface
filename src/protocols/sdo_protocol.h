@@ -20,8 +20,9 @@
  */
 #pragma once
 
-#include "driver/twai.h"
 #include <cstdint>
+
+#include "driver/twai.h"
 
 namespace SDOProtocol {
 
@@ -75,4 +76,24 @@ void requestNextSegment(uint8_t nodeId, bool toggleBit);
 bool waitForResponse(twai_message_t* response, TickType_t timeout);
 void clearPendingResponses();
 
-} // namespace SDOProtocol
+// SDO Write-and-Wait Helpers
+// Combines: clearPendingResponses, setValue, waitForResponse, check for ABORT
+// Returns true if write succeeded (response received and not aborted)
+bool writeAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value,
+                  TickType_t timeout = pdMS_TO_TICKS(10));
+
+// Version that also returns the response frame for error code inspection
+bool writeAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value, twai_message_t* response,
+                  TickType_t timeout = pdMS_TO_TICKS(10));
+
+// SDO Request-and-Wait Helpers
+// Combines: clearPendingResponses, requestElement, waitForResponse, check for ABORT
+// Returns true if read succeeded (response received and not aborted)
+bool requestAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, twai_message_t* response,
+                    TickType_t timeout = pdMS_TO_TICKS(10));
+
+// Convenience version that extracts the 32-bit value directly
+bool requestValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t* outValue,
+                  TickType_t timeout = pdMS_TO_TICKS(10));
+
+}  // namespace SDOProtocol

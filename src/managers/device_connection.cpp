@@ -18,11 +18,14 @@
  *
  */
 #include "device_connection.h"
-#include "device_discovery.h"
-#include "protocols/sdo_protocol.h"
-#include "can_task.h"
-#include "models/can_event.h"
+
 #include <Arduino.h>
+
+#include "can_task.h"
+#include "device_discovery.h"
+
+#include "models/can_event.h"
+#include "protocols/sdo_protocol.h"
 
 // External queue for events
 extern QueueHandle_t canEventQueue;
@@ -30,386 +33,412 @@ extern QueueHandle_t canEventQueue;
 #define DBG_OUTPUT_PORT Serial
 
 DeviceConnection::DeviceConnection() {
-    // Initialize arrays
-    for (int i = 0; i < 4; i++) {
-        serial_[i] = 0;
-    }
-    jsonFileName_[0] = '\0';
+  // Initialize arrays
+  for (int i = 0; i < 4; i++) {
+    serial_[i] = 0;
+  }
+  jsonFileName_[0] = '\0';
 
-    // Create mutex for JSON buffer protection
-    jsonBufferMutex_ = xSemaphoreCreateMutex();
+  // Create mutex for JSON buffer protection
+  jsonBufferMutex_ = xSemaphoreCreateMutex();
 }
 
 DeviceConnection& DeviceConnection::instance() {
-    static DeviceConnection instance;
-    return instance;
+  static DeviceConnection instance;
+  return instance;
 }
 
 void DeviceConnection::setState(State newState) {
-    state_ = newState;
-    resetStateStartTime();
+  state_ = newState;
+  resetStateStartTime();
 }
 
 void DeviceConnection::setSerialPart(uint8_t index, uint32_t value) {
-    if (index < 4) {
-        serial_[index] = value;
-    }
+  if (index < 4) {
+    serial_[index] = value;
+  }
 }
 
 uint32_t DeviceConnection::getSerialPart(uint8_t index) const {
-    return (index < 4) ? serial_[index] : 0;
+  return (index < 4) ? serial_[index] : 0;
+}
+
+String DeviceConnection::getSerial() const {
+  char buf[40];
+  snprintf(buf, sizeof(buf), "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32, serial_[0], serial_[1], serial_[2],
+           serial_[3]);
+  return String(buf);
 }
 
 void DeviceConnection::generateJsonFileName() {
-    snprintf(jsonFileName_, sizeof(jsonFileName_), "/%" PRIx32 ".json", serial_[3]);
+  snprintf(jsonFileName_, sizeof(jsonFileName_), "/%" PRIx32 ".json", serial_[3]);
 }
 
 void DeviceConnection::resetStateStartTime() {
-    stateStartTime_ = millis();
+  stateStartTime_ = millis();
 }
 
 unsigned long DeviceConnection::getStateElapsedTime() const {
-    return millis() - stateStartTime_;
+  return millis() - stateStartTime_;
 }
 
 bool DeviceConnection::hasStateTimedOut(unsigned long timeoutMs) const {
-    return getStateElapsedTime() > timeoutMs;
+  return getStateElapsedTime() > timeoutMs;
 }
 
 void DeviceConnection::clearJsonCache() {
-    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-        cachedParamJson_.clear();
-        jsonReceiveBuffer_ = "";
-        jsonTotalSize_ = 0;
-        xSemaphoreGive(jsonBufferMutex_);
-    }
+  if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    cachedParamJson_.clear();
+    jsonReceiveBuffer_ = "";
+    jsonTotalSize_ = 0;
+    xSemaphoreGive(jsonBufferMutex_);
+  }
 }
 
 // Thread-safe JSON buffer accessors
 String DeviceConnection::getJsonReceiveBufferCopy() {
-    String copy;
-    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-        copy = jsonReceiveBuffer_;
-        xSemaphoreGive(jsonBufferMutex_);
-    }
-    return copy;
+  String copy;
+  if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    copy = jsonReceiveBuffer_;
+    xSemaphoreGive(jsonBufferMutex_);
+  }
+  return copy;
 }
 
 int DeviceConnection::getJsonReceiveBufferLength() {
-    int len = 0;
-    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-        len = jsonReceiveBuffer_.length();
-        xSemaphoreGive(jsonBufferMutex_);
-    }
-    return len;
+  int len = 0;
+  if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    len = jsonReceiveBuffer_.length();
+    xSemaphoreGive(jsonBufferMutex_);
+  }
+  return len;
 }
 
 bool DeviceConnection::isJsonBufferEmpty() {
-    bool empty = true;
-    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-        empty = jsonReceiveBuffer_.isEmpty();
-        xSemaphoreGive(jsonBufferMutex_);
-    }
-    return empty;
+  bool empty = true;
+  if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    empty = jsonReceiveBuffer_.isEmpty();
+    xSemaphoreGive(jsonBufferMutex_);
+  }
+  return empty;
 }
 
 bool DeviceConnection::canSendParameterRequest() {
-    unsigned long currentTime = micros();
-    unsigned long timeSinceLastRequest = currentTime - lastParamRequestTime_;
-    return timeSinceLastRequest >= minParamRequestIntervalUs_;
+  unsigned long currentTime = micros();
+  unsigned long timeSinceLastRequest = currentTime - lastParamRequestTime_;
+  return timeSinceLastRequest >= minParamRequestIntervalUs_;
 }
 
 void DeviceConnection::markParameterRequestSent() {
-    lastParamRequestTime_ = micros();
+  lastParamRequestTime_ = micros();
 }
 
 // Start JSON download (called when browser requests JSON)
 void DeviceConnection::startJsonDownload() {
-    if (state_ != IDLE) {
-        DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start JSON download - not in IDLE state");
-        return;
-    }
+  if (state_ != IDLE) {
+    DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start JSON download - not in IDLE state");
+    return;
+  }
 
-    jsonReceiveBuffer_ = "";
-    jsonTotalSize_ = 0;
-    toggleBit_ = false;
-    setState(JSON_INIT_SENDING);
+  jsonReceiveBuffer_ = "";
+  jsonTotalSize_ = 0;
+  toggleBit_ = false;
+  setState(JSON_INIT_SENDING);
 }
 
 // Start JSON download for a specific client (non-blocking)
 bool DeviceConnection::startJsonDownloadAsync(uint32_t clientId) {
-    if (state_ != IDLE) {
-        DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start JSON download - not in IDLE state");
-        return false;
-    }
+  if (state_ != IDLE) {
+    DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start JSON download - not in IDLE state");
+    return false;
+  }
 
-    jsonRequestClientId_ = clientId;
-    clearJsonCache();
-    jsonReceiveBuffer_ = "";
-    jsonTotalSize_ = 0;
-    toggleBit_ = false;
-    setState(JSON_INIT_SENDING);
-    DBG_OUTPUT_PORT.printf("[DeviceConnection] Started async JSON download for client %lu\n", (unsigned long)clientId);
-    return true;
+  jsonRequestClientId_ = clientId;
+  clearJsonCache();
+  jsonReceiveBuffer_ = "";
+  jsonTotalSize_ = 0;
+  toggleBit_ = false;
+  setState(JSON_INIT_SENDING);
+  DBG_OUTPUT_PORT.printf("[DeviceConnection] Started async JSON download for client %lu\n", (unsigned long)clientId);
+  return true;
 }
 
 // Start serial acquisition (used after device reset)
 void DeviceConnection::startSerialAcquisition() {
-    if (state_ != IDLE) {
-        DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start serial acquisition - not in IDLE state");
-        return;
-    }
+  if (state_ != IDLE) {
+    DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot start serial acquisition - not in IDLE state");
+    return;
+  }
 
-    currentSerialPart_ = 0;
-    toggleBit_ = false;
-    setState(SERIAL_SENDING);
-    DBG_OUTPUT_PORT.printf("[DeviceConnection] Starting serial acquisition for node %d\n", nodeId_);
+  currentSerialPart_ = 0;
+  toggleBit_ = false;
+  setState(SERIAL_SENDING);
+  DBG_OUTPUT_PORT.printf("[DeviceConnection] Starting serial acquisition for node %d\n", nodeId_);
 }
 
 // Non-blocking state machine processing (called from can_task loop)
 void DeviceConnection::processConnection() {
-    unsigned long currentTime = millis();
-    twai_message_t rxframe;
+  unsigned long currentTime = millis();
+  twai_message_t rxframe;
 
-    switch (state_) {
-        case IDLE:
-        case ERROR:
-            // Nothing to do
-            break;
+  switch (state_) {
+    case IDLE:
+    case ERROR:
+      // Nothing to do
+      break;
 
-        // =====================================================================
-        // Serial number acquisition states
-        // =====================================================================
-        case SERIAL_SENDING:
-            // Clear any stale responses
-            SDOProtocol::clearPendingResponses();
+    // =====================================================================
+    // Serial number acquisition states
+    // =====================================================================
+    case SERIAL_SENDING:
+      // Clear any stale responses
+      SDOProtocol::clearPendingResponses();
 
-            // Send request for current serial part
-            SDOProtocol::requestElement(nodeId_, SDOProtocol::INDEX_SERIAL, currentSerialPart_);
-            requestSentTime_ = currentTime;
-            state_ = SERIAL_WAITING;
-            break;
+      // Send request for current serial part
+      SDOProtocol::requestElement(nodeId_, SDOProtocol::INDEX_SERIAL, currentSerialPart_);
+      requestSentTime_ = currentTime;
+      state_ = SERIAL_WAITING;
+      break;
 
-        case SERIAL_WAITING:
-            // Non-blocking check for response
-            if (SDOProtocol::waitForResponse(&rxframe, 0)) {
-                // Check for abort
-                if (rxframe.data[0] == SDOProtocol::ABORT) {
-                    DBG_OUTPUT_PORT.println("[DeviceConnection] SDO abort - error obtaining serial");
-                    setState(ERROR);
-                    break;
-                }
+    case SERIAL_WAITING:
+      // Non-blocking check for response
+      if (SDOProtocol::waitForResponse(&rxframe, 0)) {
+        // Check for abort
+        if (rxframe.data[0] == SDOProtocol::ABORT) {
+          DBG_OUTPUT_PORT.println("[DeviceConnection] SDO abort - error obtaining serial");
+          setState(ERROR);
+          break;
+        }
 
-                // Validate response is for serial index
-                uint16_t rxIndex = rxframe.data[1] | (rxframe.data[2] << 8);
-                if (rxIndex == SDOProtocol::INDEX_SERIAL && rxframe.data[3] == currentSerialPart_) {
-                    setSerialPart(currentSerialPart_, *(uint32_t*)&rxframe.data[4]);
-                    currentSerialPart_++;
+        // Validate response is for serial index
+        uint16_t rxIndex = rxframe.data[1] | (rxframe.data[2] << 8);
+        if (rxIndex == SDOProtocol::INDEX_SERIAL && rxframe.data[3] == currentSerialPart_) {
+          setSerialPart(currentSerialPart_, *(uint32_t*)&rxframe.data[4]);
+          currentSerialPart_++;
 
-                    if (currentSerialPart_ < 4) {
-                        // More parts to fetch
-                        state_ = SERIAL_SENDING;
-                    } else {
-                        // Got all 4 parts
-                        generateJsonFileName();
-                        DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n",
-                            serial_[0], serial_[1], serial_[2], serial_[3]);
+          if (currentSerialPart_ < 4) {
+            // More parts to fetch
+            state_ = SERIAL_SENDING;
+          } else {
+            // Got all 4 parts
+            generateJsonFileName();
+            DBG_OUTPUT_PORT.printf("Got Serial Number %" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32 "\r\n", serial_[0],
+                                   serial_[1], serial_[2], serial_[3]);
 
-                        setState(IDLE);
-                        DBG_OUTPUT_PORT.println("Connection established. Parameter JSON available on request.");
+            setState(IDLE);
+            DBG_OUTPUT_PORT.println("Connection established. Parameter JSON available on request.");
 
-                        // Notify that connection is ready
-                        if (connectionReadyCallback_) {
-                            char serialStr[64];
-                            sprintf(serialStr, "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32,
-                                serial_[0], serial_[1], serial_[2], serial_[3]);
-                            connectionReadyCallback_(nodeId_, serialStr);
-                        }
-                    }
-                }
-            } else if ((currentTime - requestSentTime_) >= SDO_TIMEOUT_MS) {
-                // Timeout - retry or error
-                if (hasStateTimedOut(CONNECTION_TIMEOUT_MS)) {
-                    DBG_OUTPUT_PORT.println("[DeviceConnection] Connection timeout");
-                    setState(ERROR);
-                } else {
-                    // Retry current part
-                    state_ = SERIAL_SENDING;
-                }
+            // Notify that connection is ready
+            if (connectionReadyCallback_) {
+              char serialStr[64];
+              sprintf(serialStr, "%" PRIX32 ":%" PRIX32 ":%" PRIX32 ":%" PRIX32, serial_[0], serial_[1], serial_[2],
+                      serial_[3]);
+              connectionReadyCallback_(nodeId_, serialStr);
             }
-            break;
+          }
+        }
+      } else if ((currentTime - requestSentTime_) >= SDO_TIMEOUT_MS) {
+        // Timeout - retry or error
+        if (hasStateTimedOut(CONNECTION_TIMEOUT_MS)) {
+          DBG_OUTPUT_PORT.println("[DeviceConnection] Connection timeout");
+          setState(ERROR);
+        } else {
+          // Retry current part
+          state_ = SERIAL_SENDING;
+        }
+      }
+      break;
 
-        // =====================================================================
-        // JSON download states
-        // =====================================================================
-        case JSON_INIT_SENDING:
-            // Clear any stale responses
-            SDOProtocol::clearPendingResponses();
+    // =====================================================================
+    // JSON download states
+    // =====================================================================
+    case JSON_INIT_SENDING:
+      // Clear any stale responses
+      SDOProtocol::clearPendingResponses();
 
-            // Send initiate upload request for strings index
-            SDOProtocol::requestElement(nodeId_, SDOProtocol::INDEX_STRINGS, 0);
-            requestSentTime_ = currentTime;
-            state_ = JSON_INIT_WAITING;
-            break;
+      // Send initiate upload request for strings index
+      SDOProtocol::requestElement(nodeId_, SDOProtocol::INDEX_STRINGS, 0);
+      requestSentTime_ = currentTime;
+      state_ = JSON_INIT_WAITING;
+      break;
 
-        case JSON_INIT_WAITING:
-            if (SDOProtocol::waitForResponse(&rxframe, 0)) {
-                if (rxframe.data[0] == SDOProtocol::ABORT) {
-                    DBG_OUTPUT_PORT.println("[DeviceConnection] SDO abort during JSON init");
-                    setState(ERROR);
-                    break;
-                }
+    case JSON_INIT_WAITING:
+      if (SDOProtocol::waitForResponse(&rxframe, 0)) {
+        if (rxframe.data[0] == SDOProtocol::ABORT) {
+          DBG_OUTPUT_PORT.println("[DeviceConnection] SDO abort during JSON init");
+          setState(ERROR);
+          break;
+        }
 
-                // Check for initiate upload response
-                if ((rxframe.data[0] & SDOProtocol::READ) == SDOProtocol::READ) {
-                    DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Initiate upload response received");
+        // Check for initiate upload response
+        if ((rxframe.data[0] & SDOProtocol::READ) == SDOProtocol::READ) {
+          DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Initiate upload response received");
 
-                    if (rxframe.data[0] & SDOProtocol::SIZE_SPECIFIED) {
-                        jsonTotalSize_ = *(uint32_t*)&rxframe.data[4];
-                        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Total size: %d bytes\r\n", jsonTotalSize_);
+          if (rxframe.data[0] & SDOProtocol::SIZE_SPECIFIED) {
+            jsonTotalSize_ = *(uint32_t*)&rxframe.data[4];
+            DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Total size: %d bytes\r\n", jsonTotalSize_);
 
-                        if (jsonProgressCallback_) {
-                            jsonProgressCallback_(0);
-                        }
-                    } else {
-                        jsonTotalSize_ = 0;
-                    }
-
-                    // Request first segment
-                    state_ = JSON_SEGMENT_SENDING;
-                }
-            } else if ((currentTime - requestSentTime_) >= SDO_TIMEOUT_MS) {
-                DBG_OUTPUT_PORT.println("[DeviceConnection] JSON init timeout");
-                setState(ERROR);
+            if (jsonProgressCallback_) {
+              jsonProgressCallback_(0);
             }
-            break;
+          } else {
+            jsonTotalSize_ = 0;
+          }
 
-        case JSON_SEGMENT_SENDING:
-            SDOProtocol::requestNextSegment(nodeId_, toggleBit_);
-            requestSentTime_ = currentTime;
-            state_ = JSON_SEGMENT_WAITING;
-            break;
+          // Request first segment
+          state_ = JSON_SEGMENT_SENDING;
+        }
+      } else if ((currentTime - requestSentTime_) >= SDO_TIMEOUT_MS) {
+        DBG_OUTPUT_PORT.println("[DeviceConnection] JSON init timeout");
+        setState(ERROR);
+      }
+      break;
 
-        case JSON_SEGMENT_WAITING:
-            if (SDOProtocol::waitForResponse(&rxframe, 0)) {
-                if (rxframe.data[0] == SDOProtocol::ABORT) {
-                    DBG_OUTPUT_PORT.println("[DeviceConnection] SDO abort during JSON download");
-                    setState(ERROR);
-                    break;
-                }
+    case JSON_SEGMENT_SENDING:
+      SDOProtocol::requestNextSegment(nodeId_, toggleBit_);
+      requestSentTime_ = currentTime;
+      state_ = JSON_SEGMENT_WAITING;
+      break;
 
-                // Check for last segment
-                if ((rxframe.data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe.data[0] & SDOProtocol::READ) == 0) {
-                    // Last segment - protect buffer access
-                    bool parseSuccess = false;
-                    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        int size = 7 - ((rxframe.data[0] >> 1) & 0x7);
-                        for (int i = 0; i < size; i++) {
-                            jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
-                        }
+    case JSON_SEGMENT_WAITING:
+      if (SDOProtocol::waitForResponse(&rxframe, 0)) {
+        if (rxframe.data[0] == SDOProtocol::ABORT) {
+          DBG_OUTPUT_PORT.println("[DeviceConnection] SDO abort during JSON download");
+          setState(ERROR);
+          break;
+        }
 
-                        DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
-                        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer_.length());
-
-                        // Parse JSON
-                        DeserializationError error = deserializeJson(cachedParamJson_, jsonReceiveBuffer_);
-                        if (error) {
-                            DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
-                        } else {
-                            DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
-                            parseSuccess = true;
-                        }
-                        xSemaphoreGive(jsonBufferMutex_);
-                    }
-
-                    // Send JSON ready event if a client requested it
-                    if (jsonRequestClientId_ != 0 && canEventQueue != nullptr) {
-                        CANEvent evt;
-                        evt.type = EVT_JSON_READY;
-                        evt.data.jsonReady.clientId = jsonRequestClientId_;
-                        evt.data.jsonReady.nodeId = nodeId_;
-                        evt.data.jsonReady.success = parseSuccess;
-                        xQueueSend(canEventQueue, &evt, 0);
-                        DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Sent JSON ready event for client %lu\n", (unsigned long)jsonRequestClientId_);
-                        jsonRequestClientId_ = 0;  // Clear after sending
-                    }
-
-                    setState(IDLE);
-                }
-                // Normal segment
-                else if ((rxframe.data[0] & 0xE0) == 0 && rxframe.data[0] == (toggleBit_ << 4)) {
-                    // Protect buffer access
-                    if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        for (int i = 0; i < 7; i++) {
-                            jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
-                        }
-                        xSemaphoreGive(jsonBufferMutex_);
-                    }
-                    toggleBit_ = !toggleBit_;
-                    state_ = JSON_SEGMENT_SENDING;
-                }
-            } else if ((currentTime - requestSentTime_) >= SDO_TIMEOUT_MS) {
-                // Timeout - retry
-                DBG_OUTPUT_PORT.println("[DeviceConnection] JSON segment timeout, retrying");
-                state_ = JSON_SEGMENT_SENDING;
+        // Check for last segment
+        if ((rxframe.data[0] & SDOProtocol::SIZE_SPECIFIED) && (rxframe.data[0] & SDOProtocol::READ) == 0) {
+          // Last segment - protect buffer access
+          bool parseSuccess = false;
+          if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+            int size = 7 - ((rxframe.data[0] >> 1) & 0x7);
+            for (int i = 0; i < size; i++) {
+              jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
             }
-            break;
-    }
-}
 
-bool DeviceConnection::connectToDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
-    setCanPins(txPin, rxPin);
-    setBaudRate(baud);
+            DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Download complete");
+            DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] JSON size: %d bytes\r\n", jsonReceiveBuffer_.length());
 
-    // If a JSON download was in progress, send error to waiting client
-    if (jsonRequestClientId_ != 0 && isDownloadingJson()) {
-        DBG_OUTPUT_PORT.printf("[DeviceConnection] Interrupting download for client %lu due to reconnect\n",
-                               (unsigned long)jsonRequestClientId_);
-        // Send error event for interrupted download
-        if (canEventQueue != nullptr) {
+            // Parse JSON
+            DeserializationError error = deserializeJson(cachedParamJson_, jsonReceiveBuffer_);
+            if (error) {
+              DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Parse error: %s\r\n", error.c_str());
+            } else {
+              DBG_OUTPUT_PORT.println("[OBTAIN_JSON] Parsed successfully");
+              parseSuccess = true;
+            }
+            xSemaphoreGive(jsonBufferMutex_);
+          }
+
+          // Send JSON ready event if a client requested it
+          if (jsonRequestClientId_ != 0 && canEventQueue != nullptr) {
             CANEvent evt;
             evt.type = EVT_JSON_READY;
             evt.data.jsonReady.clientId = jsonRequestClientId_;
             evt.data.jsonReady.nodeId = nodeId_;
-            evt.data.jsonReady.success = false;
+            evt.data.jsonReady.success = parseSuccess;
             xQueueSend(canEventQueue, &evt, 0);
+            DBG_OUTPUT_PORT.printf("[OBTAIN_JSON] Sent JSON ready event for client %lu\n",
+                                   (unsigned long)jsonRequestClientId_);
+            jsonRequestClientId_ = 0;  // Clear after sending
+          }
+
+          setState(IDLE);
         }
-        jsonRequestClientId_ = 0;
-    }
+        // Normal segment
+        else if ((rxframe.data[0] & 0xE0) == 0 && rxframe.data[0] == (toggleBit_ << 4)) {
+          // Protect buffer access
+          if (xSemaphoreTake(jsonBufferMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+            for (int i = 0; i < 7; i++) {
+              jsonReceiveBuffer_ += (char)rxframe.data[1 + i];
+            }
+            xSemaphoreGive(jsonBufferMutex_);
+          }
+          toggleBit_ = !toggleBit_;
+          state_ = JSON_SEGMENT_SENDING;
+        }
+      } else if ((currentTime - requestSentTime_) >= SDO_TIMEOUT_MS) {
+        // Timeout - retry
+        DBG_OUTPUT_PORT.println("[DeviceConnection] JSON segment timeout, retrying");
+        state_ = JSON_SEGMENT_SENDING;
+      }
+      break;
+  }
+}
 
-    if (!initCanBusForDevice(nodeId, baud, txPin, rxPin)) {
-        DBG_OUTPUT_PORT.println("Failed to initialize CAN bus");
-        return false;
-    }
+bool DeviceConnection::connectToDevice(uint8_t nodeId, BaudRate baud, int txPin, int rxPin) {
+  setCanPins(txPin, rxPin);
+  setBaudRate(baud);
 
-    // Clear cached JSON when switching to a different device
-    if (nodeId_ != nodeId) {
-        clearJsonCache();
-        DBG_OUTPUT_PORT.println("Cleared cached JSON (switching devices)");
+  // If a JSON download was in progress, send error to waiting client
+  if (jsonRequestClientId_ != 0 && isDownloadingJson()) {
+    DBG_OUTPUT_PORT.printf("[DeviceConnection] Interrupting download for client %lu due to reconnect\n",
+                           (unsigned long)jsonRequestClientId_);
+    // Send error event for interrupted download
+    if (canEventQueue != nullptr) {
+      CANEvent evt;
+      evt.type = EVT_JSON_READY;
+      evt.data.jsonReady.clientId = jsonRequestClientId_;
+      evt.data.jsonReady.nodeId = nodeId_;
+      evt.data.jsonReady.success = false;
+      xQueueSend(canEventQueue, &evt, 0);
     }
+    jsonRequestClientId_ = 0;
+  }
 
-    nodeId_ = nodeId;
-    currentSerialPart_ = 0;
-    toggleBit_ = false;
-    setState(SERIAL_SENDING);  // Start the serial acquisition state machine
-    DBG_OUTPUT_PORT.printf("Connecting to node %d...\n", nodeId);
-    return true;
+  if (!initCanBusForDevice(nodeId, baud, txPin, rxPin)) {
+    DBG_OUTPUT_PORT.println("Failed to initialize CAN bus");
+    return false;
+  }
+
+  // Clear cached JSON when switching to a different device
+  if (nodeId_ != nodeId) {
+    clearJsonCache();
+    DBG_OUTPUT_PORT.println("Cleared cached JSON (switching devices)");
+  }
+
+  nodeId_ = nodeId;
+  currentSerialPart_ = 0;
+  toggleBit_ = false;
+  setState(SERIAL_SENDING);  // Start the serial acquisition state machine
+  DBG_OUTPUT_PORT.printf("Connecting to node %d...\n", nodeId);
+  return true;
 }
 
 bool DeviceConnection::initializeForScanning(BaudRate baud, int txPin, int rxPin) {
-    setCanPins(txPin, rxPin);
-    setBaudRate(baud);
+  setCanPins(txPin, rxPin);
+  setBaudRate(baud);
 
-    if (!initCanBusScanning(baud, txPin, rxPin)) {
-        DBG_OUTPUT_PORT.println("Failed to initialize CAN bus for scanning");
-        return false;
-    }
+  if (!initCanBusScanning(baud, txPin, rxPin)) {
+    DBG_OUTPUT_PORT.println("Failed to initialize CAN bus for scanning");
+    return false;
+  }
 
-    nodeId_ = 0; // No specific device connected yet
-    setState(IDLE);
-    DBG_OUTPUT_PORT.println("CAN bus initialized (no device connected)");
+  nodeId_ = 0;  // No specific device connected yet
+  setState(IDLE);
+  DBG_OUTPUT_PORT.println("CAN bus initialized (no device connected)");
 
-    // Load saved devices into memory
-    DeviceDiscovery::instance().loadDevices();
-    return true;
+  // Load saved devices into memory
+  DeviceDiscovery::instance().loadDevices();
+  return true;
+}
+
+bool DeviceConnection::resetToScanningMode() {
+  if (canTxPin_ < 0 || canRxPin_ < 0) {
+    DBG_OUTPUT_PORT.println("[DeviceConnection] Cannot reset to scanning - CAN pins not configured");
+    return false;
+  }
+
+  if (!initCanBusScanning(baudRate_, canTxPin_, canRxPin_)) {
+    DBG_OUTPUT_PORT.println("[DeviceConnection] Failed to reset CAN filter to scanning mode");
+    return false;
+  }
+
+  nodeId_ = 0;
+  setState(IDLE);
+  clearJsonCache();
+  DBG_OUTPUT_PORT.println("[DeviceConnection] Reset to scanning mode");
+  return true;
 }
