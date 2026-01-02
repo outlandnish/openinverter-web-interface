@@ -6,7 +6,6 @@
 
 #include "main.h"
 #include "oi_can.h"
-#include "protocols/sdo_protocol.h"
 
 #include "managers/can_interval_manager.h"
 #include "managers/client_lock_manager.h"
@@ -14,6 +13,7 @@
 #include "managers/device_connection.h"
 #include "managers/device_discovery.h"
 #include "managers/spot_values_manager.h"
+#include "protocols/sdo_protocol.h"
 #include "utils/string_utils.h"
 #include "utils/websocket_helpers.h"
 
@@ -424,13 +424,13 @@ void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
   DBG_OUTPUT_PORT.printf("[WebSocket] Sending parameter update to nodeId=%d\n", nodeId);
   if (!SDOProtocol::setValueAsync(nodeId, paramId, value)) {
     DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue parameter update");
-    
+
     // Resume spot values if we paused it
     if (wasSpotValuesActive) {
       // Note: Cannot resume here without knowing original params/interval
       // The client will need to restart spot values after the error
     }
-    
+
     JsonDocument errorDoc;
     errorDoc["event"] = "paramUpdateError";
     errorDoc["data"]["paramId"] = paramId;
@@ -442,7 +442,7 @@ void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 
   DBG_OUTPUT_PORT.printf("[WebSocket] Parameter %d update queued (value=%f)\n", paramId, value);
-  
+
   // Note: Spot values will be restarted by the UI after receiving paramUpdateResult
   // Response will be sent when EVT_VALUE_SET event is processed by event_processor
 }
