@@ -1,5 +1,6 @@
 import { createContext, ComponentChildren } from 'preact'
 import { useContext, useState, useCallback } from 'preact/hooks'
+import { ParameterList } from '../utils/paramStorage'
 
 // Types for monitoring state
 export interface HistoricalDataPoint {
@@ -45,6 +46,12 @@ export interface CanIoState {
 
 // Context value interface
 export interface DeviceDetailsContextValue {
+  // Parameter cache (persists between tab changes during a session)
+  parameters: {
+    cached: ParameterList | null
+    lastFetchTime: number | null
+  }
+
   // Monitoring state
   monitoring: {
     streaming: boolean
@@ -73,6 +80,7 @@ export interface DeviceDetailsContextValue {
   setStreaming: (streaming: boolean) => void
   setInterval: (interval: number) => void
   setSpotValues: (values: Record<string, number>) => void
+  mergeSpotValues: (values: Record<string, number>) => void
   updateSpotValue: (paramId: string, value: number) => void
   setHistoricalData: (data: HistoricalData | ((prev: HistoricalData) => HistoricalData)) => void
   addHistoricalDataPoint: (paramId: string, value: number) => void
@@ -83,6 +91,11 @@ export interface DeviceDetailsContextValue {
   toggleChartParam: (paramId: string) => void
   setViewMode: (mode: 'table' | 'chart') => void
   setConnectedSerial: (serial: string | null) => void
+
+  // Parameter actions
+  setCachedParameters: (params: ParameterList | null) => void
+  updateParameterValue: (paramName: string, value: number) => void
+  clearParameterCache: () => void
 
   // CAN message actions
   setCanId: (canId: string) => void
@@ -124,6 +137,10 @@ const DEFAULT_PERIODIC_FORM_DATA: PeriodicFormData = {
 }
 
 export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) {
+  // Parameter cache state (persists during session, cleared on disconnect)
+  const [cachedParameters, setCachedParameters] = useState<ParameterList | null>(null)
+  const [lastFetchTime, setLastFetchTime] = useState<number | null>(null)
+
   // Monitoring state
   const [streaming, setStreaming] = useState(false)
   const [interval, setInterval] = useState(1000)
@@ -156,7 +173,14 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
   const [canIoRegenpreset, setCanIoRegenpreset] = useState(0)
   const [canIoUseCrc, setCanIoUseCrc] = useState(false)
 
-  // Monitoring actions
+  // Monitoring actions - merge new values with existing ones to preserve values not in current batch
+  const mergeSpotValues = useCallback((values: Record<string, number>) => {
+    setSpotValues(prev => ({
+      ...prev,
+      ...values
+    }))
+  }, [])
+
   const updateSpotValue = useCallback((paramId: string, value: number) => {
     setSpotValues(prev => ({
       ...prev,
@@ -228,7 +252,35 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
     setPeriodicFormData(DEFAULT_PERIODIC_FORM_DATA)
   }, [])
 
+  // Parameter actions
+  const handleSetCachedParameters = useCallback((params: ParameterList | null) => {
+    setCachedParameters(params)
+    setLastFetchTime(params ? Date.now() : null)
+  }, [])
+
+  const updateParameterValue = useCallback((paramName: string, value: number) => {
+    setCachedParameters(prev => {
+      if (!prev || !prev[paramName]) return prev
+      return {
+        ...prev,
+        [paramName]: {
+          ...prev[paramName],
+          value
+        }
+      }
+    })
+  }, [])
+
+  const clearParameterCache = useCallback(() => {
+    setCachedParameters(null)
+    setLastFetchTime(null)
+  }, [])
+
   const value: DeviceDetailsContextValue = {
+    parameters: {
+      cached: cachedParameters,
+      lastFetchTime,
+    },
     monitoring: {
       streaming,
       interval,
@@ -264,6 +316,7 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
     setStreaming,
     setInterval,
     setSpotValues,
+    mergeSpotValues,
     updateSpotValue,
     setHistoricalData,
     addHistoricalDataPoint,
@@ -274,6 +327,9 @@ export function DeviceDetailsProvider({ children }: DeviceDetailsProviderProps) 
     toggleChartParam,
     setViewMode,
     setConnectedSerial,
+    setCachedParameters: handleSetCachedParameters,
+    updateParameterValue,
+    clearParameterCache,
     setCanId,
     setDataBytes,
     addPeriodicMessage,

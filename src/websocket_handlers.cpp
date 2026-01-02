@@ -6,6 +6,7 @@
 
 #include "main.h"
 #include "oi_can.h"
+#include "protocols/sdo_protocol.h"
 
 #include "managers/can_interval_manager.h"
 #include "managers/client_lock_manager.h"
@@ -385,46 +386,65 @@ void handleUpdateParam(AsyncWebSocketClient* client, JsonDocument& doc) {
 
   DBG_OUTPUT_PORT.printf("[WebSocket] Update param request: paramId=%d, value=%f\n", paramId, value);
 
+  // Check if device is connected
   if (!DeviceConnection::instance().isIdle()) {
-    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Cannot update parameter - device busy");
+    DBG_OUTPUT_PORT.printf("[WebSocket] ERROR: Device not idle (state=%d)\n", DeviceConnection::instance().getState());
     JsonDocument errorDoc;
     errorDoc["event"] = "paramUpdateError";
     errorDoc["data"]["paramId"] = paramId;
-    errorDoc["data"]["error"] = "Device is busy";
+    errorDoc["data"]["error"] = "Device busy";
     String errorOutput;
     serializeJson(errorDoc, errorOutput);
     client->text(errorOutput);
     return;
   }
 
-  OICan::SetResult result = OICan::SetValue(paramId, value);
-
-  JsonDocument responseDoc;
-  if (result == OICan::Ok) {
-    responseDoc["event"] = "paramUpdateSuccess";
-    responseDoc["data"]["paramId"] = paramId;
-    responseDoc["data"]["value"] = value;
-    DBG_OUTPUT_PORT.printf("[WebSocket] Parameter %d updated successfully to %f\n", paramId, value);
-  } else {
-    responseDoc["event"] = "paramUpdateError";
-    responseDoc["data"]["paramId"] = paramId;
-    responseDoc["data"]["value"] = value;
-
-    if (result == OICan::UnknownIndex) {
-      responseDoc["data"]["error"] = "Unknown parameter ID";
-    } else if (result == OICan::ValueOutOfRange) {
-      responseDoc["data"]["error"] = "Value out of range";
-    } else if (result == OICan::CommError) {
-      responseDoc["data"]["error"] = "Communication error";
-    } else {
-      responseDoc["data"]["error"] = "Unknown error";
-    }
-    DBG_OUTPUT_PORT.printf("[WebSocket] Parameter %d update failed: %d\n", paramId, result);
+  // Check if there's already a pending write
+  if (SDOProtocol::hasPendingWrite()) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Another parameter update is in progress");
+    JsonDocument errorDoc;
+    errorDoc["event"] = "paramUpdateError";
+    errorDoc["data"]["paramId"] = paramId;
+    errorDoc["data"]["error"] = "Another update in progress";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
   }
 
-  String output;
-  serializeJson(responseDoc, output);
-  client->text(output);
+  // Temporarily pause spot values if active to avoid conflicts
+  bool wasSpotValuesActive = SpotValuesManager::instance().isActive();
+  if (wasSpotValuesActive) {
+    DBG_OUTPUT_PORT.println("[WebSocket] Temporarily pausing spot values for parameter write");
+    SpotValuesManager::instance().stop();
+  }
+
+  // Send the write asynchronously - response will come via EVT_VALUE_SET event
+  uint8_t nodeId = DeviceConnection::instance().getNodeId();
+  DBG_OUTPUT_PORT.printf("[WebSocket] Sending parameter update to nodeId=%d\n", nodeId);
+  if (!SDOProtocol::setValueAsync(nodeId, paramId, value)) {
+    DBG_OUTPUT_PORT.println("[WebSocket] ERROR: Failed to queue parameter update");
+    
+    // Resume spot values if we paused it
+    if (wasSpotValuesActive) {
+      // Note: Cannot resume here without knowing original params/interval
+      // The client will need to restart spot values after the error
+    }
+    
+    JsonDocument errorDoc;
+    errorDoc["event"] = "paramUpdateError";
+    errorDoc["data"]["paramId"] = paramId;
+    errorDoc["data"]["error"] = "Failed to queue update";
+    String errorOutput;
+    serializeJson(errorDoc, errorOutput);
+    client->text(errorOutput);
+    return;
+  }
+
+  DBG_OUTPUT_PORT.printf("[WebSocket] Parameter %d update queued (value=%f)\n", paramId, value);
+  
+  // Note: Spot values will be restarted by the UI after receiving paramUpdateResult
+  // Response will be sent when EVT_VALUE_SET event is processed by event_processor
 }
 
 void handleReloadParams(AsyncWebSocketClient* client, JsonDocument& doc) {
@@ -499,6 +519,8 @@ void handleGetParamSchema(AsyncWebSocketClient* client, JsonDocument& doc) {
   }
 }
 
+// Lightweight handler that only returns parameter values (id -> value mapping)
+// Used when schema is already cached on the client side
 void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
   int nodeId = doc["nodeId"];
   DBG_OUTPUT_PORT.printf("[WebSocket] Get param values request for nodeId: %d\n", nodeId);
@@ -518,37 +540,44 @@ void handleGetParamValues(AsyncWebSocketClient* client, JsonDocument& doc) {
     return;
   }
 
-  // Check if JSON is already cached
-  if (!conn.isJsonBufferEmpty()) {
+  // Check if JSON is already cached and valid
+  if (!conn.isJsonBufferEmpty() && !conn.getCachedJson().isNull() && conn.getCachedJson().size() > 0) {
     DBG_OUTPUT_PORT.printf("[WebSocket] Returning cached JSON\n");
     String json = conn.getJsonReceiveBufferCopy();
 
-    // Update with latest spot values
-    const auto& latestSpotValues = SpotValuesManager::instance().getLatestValues();
-    if (!latestSpotValues.empty()) {
-      JsonDocument paramsDoc;
-      DeserializationError error = deserializeJson(paramsDoc, json);
-      if (!error) {
-        for (const auto& pair : latestSpotValues) {
-          String paramId = String(pair.first);
-          if (paramsDoc.containsKey(paramId)) {
-            paramsDoc[paramId]["value"] = pair.second;
+    // Verify the JSON string is not empty or just "{}"
+    if (json.length() < 5 || json == "{}") {
+      DBG_OUTPUT_PORT.println("[WebSocket] Cached JSON is empty, forcing re-download");
+      conn.clearJsonCache();
+      // Fall through to start async download
+    } else {
+      // Update with latest spot values
+      const auto& latestSpotValues = SpotValuesManager::instance().getLatestValues();
+      if (!latestSpotValues.empty()) {
+        JsonDocument paramsDoc;
+        DeserializationError error = deserializeJson(paramsDoc, json);
+        if (!error) {
+          for (const auto& pair : latestSpotValues) {
+            String paramId = String(pair.first);
+            if (paramsDoc.containsKey(paramId)) {
+              paramsDoc[paramId]["value"] = pair.second;
+            }
           }
+          json = "";
+          serializeJson(paramsDoc, json);
         }
-        json = "";
-        serializeJson(paramsDoc, json);
       }
+
+      String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
+      output += nodeId;
+      output += ",\"rawParams\":";
+      output += json;
+      output += "}}";
+
+      client->text(output);
+      DBG_OUTPUT_PORT.printf("[WebSocket] Sent cached param values (%d bytes)\n", output.length());
+      return;
     }
-
-    String output = "{\"event\":\"paramValuesData\",\"data\":{\"nodeId\":";
-    output += nodeId;
-    output += ",\"rawParams\":";
-    output += json;
-    output += "}}";
-
-    client->text(output);
-    DBG_OUTPUT_PORT.printf("[WebSocket] Sent cached param values (%d bytes)\n", output.length());
-    return;
   }
 
   // No cached JSON - start async download

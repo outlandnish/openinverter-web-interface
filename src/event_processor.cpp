@@ -115,6 +115,29 @@ static void serializeError(const CANEvent& evt, JsonObject& data) {
   data["message"] = evt.data.error.message;
 }
 
+static void serializeValueSet(const CANEvent& evt, JsonObject& data) {
+  data["paramId"] = evt.data.valueSet.paramId;
+  data["value"] = evt.data.valueSet.value;
+  switch (evt.data.valueSet.result) {
+    case SetValueResult::SET_OK:
+      data["success"] = true;
+      break;
+    case SetValueResult::SET_VALUE_OUT_OF_RANGE:
+      data["success"] = false;
+      data["error"] = "Value out of range";
+      break;
+    case SetValueResult::SET_UNKNOWN_INDEX:
+      data["success"] = false;
+      data["error"] = "Unknown parameter ID";
+      break;
+    case SetValueResult::SET_COMM_ERROR:
+    default:
+      data["success"] = false;
+      data["error"] = "Communication error";
+      break;
+  }
+}
+
 // Event name and serializer dispatch table
 struct EventInfo {
   const char* eventName;
@@ -136,6 +159,7 @@ static const std::map<CANEventType, EventInfo> eventDispatch = {
     {EVT_CAN_MESSAGE_SENT, {"canMessageSent", serializeCanMessageSent}},
     {EVT_CAN_INTERVAL_STATUS, {"canIntervalStatus", serializeCanIntervalStatus}},
     {EVT_CANIO_INTERVAL_STATUS, {"canIoIntervalStatus", serializeCanIoIntervalStatus}},
+    {EVT_VALUE_SET, {"paramUpdateResult", serializeValueSet}},
     {EVT_ERROR, {"error", serializeError}}};
 
 const char* serializeEvent(const CANEvent& evt, JsonDocument& doc) {

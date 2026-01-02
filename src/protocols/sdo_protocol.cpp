@@ -22,10 +22,22 @@
 
 #include <cstring>
 
+#include "Arduino.h"
+
 #include "models/can_types.h"
 #include "utils/can_queue.h"
 
 namespace SDOProtocol {
+
+// Pending write tracking for async response matching
+static struct {
+  bool active = false;
+  uint16_t index = 0;
+  uint8_t subIndex = 0;
+  int paramId = 0;
+  double value = 0;
+  uint32_t timestamp = 0;
+} pendingWrite;
 
 // SDO Request/Response Constants
 const uint8_t REQUEST_DOWNLOAD = (1 << 5);
@@ -147,16 +159,39 @@ void clearPendingResponses() {
 
 bool writeAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value, twai_message_t* response,
                   TickType_t timeout) {
-  clearPendingResponses();
+  // Note: Spot value responses are now routed directly to SpotValuesManager,
+  // but other SDO responses may still appear (device connection, scan, etc.)
+  // We loop through responses looking for one that matches our index/subindex
   setValue(nodeId, index, subIndex, value);
 
-  if (!waitForResponse(response, timeout)) {
-    // Zero-initialize on timeout so caller can distinguish timeout from abort
-    memset(response, 0, sizeof(twai_message_t));
-    return false;
+  TickType_t startTick = xTaskGetTickCount();
+  TickType_t remainingTimeout = timeout;
+
+  while (remainingTimeout > 0) {
+    if (!waitForResponse(response, remainingTimeout)) {
+      // Timeout - zero-initialize so caller can distinguish timeout from abort
+      memset(response, 0, sizeof(twai_message_t));
+      return false;
+    }
+
+    // Check if this response matches our request (same index/subindex)
+    uint16_t respIndex = response->data[1] | (response->data[2] << 8);
+    uint8_t respSubIndex = response->data[3];
+
+    if (respIndex == index && respSubIndex == subIndex) {
+      // This response is for our request
+      return response->data[0] != ABORT;
+    }
+
+    // Response was for a different request, keep waiting
+    // Update remaining timeout
+    TickType_t elapsed = xTaskGetTickCount() - startTick;
+    remainingTimeout = (elapsed < timeout) ? (timeout - elapsed) : 0;
   }
 
-  return response->data[0] != ABORT;
+  // Timeout while waiting for matching response
+  memset(response, 0, sizeof(twai_message_t));
+  return false;
 }
 
 bool writeAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t value, TickType_t timeout) {
@@ -188,6 +223,91 @@ bool requestValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t* ou
 
   *outValue = *(uint32_t*)&response.data[4];
   return true;
+}
+
+// Async write support - non-blocking parameter updates
+
+bool setValueAsync(uint8_t nodeId, int paramId, double value) {
+  if (pendingWrite.active) {
+    return false;  // Already have a pending write
+  }
+
+  uint16_t index = INDEX_PARAM_UID | (paramId >> 8);
+  uint8_t subIndex = paramId & 0xFF;
+
+  // Register the pending write
+  pendingWrite.active = true;
+  pendingWrite.index = index;
+  pendingWrite.subIndex = subIndex;
+  pendingWrite.paramId = paramId;
+  pendingWrite.value = value;
+  pendingWrite.timestamp = millis();
+
+  Serial.printf("[SDO] setValueAsync: nodeId=%d, paramId=%d, index=0x%04X, subIndex=%d, value=%.2f\n", nodeId, paramId,
+                index, subIndex, value);
+
+  // Send the write (non-blocking)
+  setValue(nodeId, index, subIndex, (uint32_t)(value * 32));
+  return true;
+}
+
+bool hasPendingWrite() {
+  return pendingWrite.active;
+}
+
+bool matchPendingWrite(uint16_t respIndex, uint8_t respSubIndex, bool isAbort, uint32_t errorCode, int& outParamId,
+                       double& outValue, SetValueResult& outResult) {
+  if (!pendingWrite.active) {
+    return false;
+  }
+
+  Serial.printf("[SDO] matchPendingWrite: resp=0x%04X/%d, pending=0x%04X/%d, isAbort=%d\n", respIndex, respSubIndex,
+                pendingWrite.index, pendingWrite.subIndex, isAbort);
+
+  // Check if response matches our pending write
+  if (respIndex != pendingWrite.index || respSubIndex != pendingWrite.subIndex) {
+    return false;
+  }
+
+  // Match found - extract info and clear pending
+  outParamId = pendingWrite.paramId;
+  outValue = pendingWrite.value;
+
+  if (isAbort) {
+    if (errorCode == ERR_RANGE) {
+      outResult = SetValueResult::SET_VALUE_OUT_OF_RANGE;
+    } else {
+      outResult = SetValueResult::SET_UNKNOWN_INDEX;
+    }
+  } else {
+    outResult = SetValueResult::SET_OK;
+  }
+
+  pendingWrite.active = false;
+  return true;
+}
+
+bool checkPendingWriteTimeout(int& outParamId, double& outValue, SetValueResult& outResult) {
+  if (!pendingWrite.active) {
+    return false;
+  }
+
+  const uint32_t TIMEOUT_MS = 500;
+  if ((millis() - pendingWrite.timestamp) >= TIMEOUT_MS) {
+    Serial.printf("[SDO] Pending write TIMEOUT: paramId=%d, index=0x%04X, subIndex=%d\n", pendingWrite.paramId,
+                  pendingWrite.index, pendingWrite.subIndex);
+    outParamId = pendingWrite.paramId;
+    outValue = pendingWrite.value;
+    outResult = SetValueResult::SET_COMM_ERROR;
+    pendingWrite.active = false;
+    return true;
+  }
+
+  return false;
+}
+
+void clearPendingWrite() {
+  pendingWrite.active = false;
 }
 
 }  // namespace SDOProtocol

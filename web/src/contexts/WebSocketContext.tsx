@@ -78,7 +78,10 @@ export function WebSocketProvider({ children, url }: WebSocketProviderProps) {
       ws.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data)
-          console.log('WebSocket message:', message)
+          // Don't log spot values to reduce console noise
+          if (message.event !== 'spotValues') {
+            console.log('WebSocket message:', message)
+          }
 
           // Notify all subscribers
           subscribersRef.current.forEach(handler => {

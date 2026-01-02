@@ -23,6 +23,7 @@
 #include <cstdint>
 
 #include "driver/twai.h"
+#include "models/can_types.h"
 
 namespace SDOProtocol {
 
@@ -95,5 +96,14 @@ bool requestAndWait(uint8_t nodeId, uint16_t index, uint8_t subIndex, twai_messa
 // Convenience version that extracts the 32-bit value directly
 bool requestValue(uint8_t nodeId, uint16_t index, uint8_t subIndex, uint32_t* outValue,
                   TickType_t timeout = pdMS_TO_TICKS(10));
+
+// Async write support - non-blocking parameter updates
+// The CAN task monitors for responses and fires events when matched
+bool setValueAsync(uint8_t nodeId, int paramId, double value);
+bool hasPendingWrite();
+bool matchPendingWrite(uint16_t respIndex, uint8_t respSubIndex, bool isAbort, uint32_t errorCode,
+                       int& outParamId, double& outValue, SetValueResult& outResult);
+bool checkPendingWriteTimeout(int& outParamId, double& outValue, SetValueResult& outResult);
+void clearPendingWrite();
 
 }  // namespace SDOProtocol

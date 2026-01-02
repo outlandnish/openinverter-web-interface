@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'preact/hooks'
 import { useIntlayer } from 'preact-intlayer'
 import { useParams } from '@hooks/useParams'
 import { useWebSocketContext } from '@contexts/WebSocketContext'
+import { useDeviceDetailsContext } from '@contexts/DeviceDetailsContext'
 import { useToast } from '@hooks/useToast'
 import { api } from '@api/inverter'
 import ParameterCategory from './ParameterCategory'
@@ -23,42 +24,40 @@ export default function DeviceParameters({
 }: DeviceParametersProps) {
   const content = useIntlayer('device-details')
   const { showError, showSuccess } = useToast()
-  const { isConnected, subscribe } = useWebSocketContext()
+  const { isConnected, subscribe, sendMessage } = useWebSocketContext()
+  const { updateParameterValue } = useDeviceDetailsContext()
   // Parse nodeId to number for fetching params from specific device
   const numericNodeId = parseInt(nodeId)
   const { params, loading, getDisplayName, downloadProgress, downloadTotal, refresh } = useParams(serial, isNaN(numericNodeId) ? undefined : numericNodeId)
 
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
-  const [localParams, setLocalParams] = useState(params)
   const [isImporting, setIsImporting] = useState(false)
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 })
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  // Sync localParams with params when params changes (e.g., on initial load or refresh)
-  useEffect(() => {
-    setLocalParams(params)
-  }, [params])
 
   // Subscribe to WebSocket events for save to flash responses and parameter update errors
   useEffect(() => {
     const unsubscribe = subscribe((message) => {
       if (message.event === 'saveToFlashSuccess') {
-        // Refresh parameters from device to verify they were saved correctly
-        // Note: Schema is still cached, only values are refreshed
-        refresh()
+        // No need to refresh - saving to flash doesn't change values, just persists them
         showSuccess(content.parametersSaved)
       } else if (message.event === 'saveToFlashError') {
         showError(content.saveParametersFailed)
-      } else if (message.event === 'paramUpdateError') {
-        // Show parameter update errors to the user
+      } else if (message.event === 'paramUpdateResult' && !message.data?.success) {
+        // Show parameter update errors to the user (failures only)
         const paramName = message.data?.paramId ? `Parameter ${message.data.paramId}` : 'Parameter'
         const errorMsg = message.data?.error || 'Unknown error'
         showError(`${paramName}: ${errorMsg}`)
+      } else if (message.event === 'connected' && message.data?.serial === serial) {
+        // Refresh parameters when device reconnects to ensure we have the latest values
+        // Note: Firmware cache is automatically kept in sync when values are set from UI
+        console.log('[DeviceParameters] Device reconnected, refreshing parameters for serial:', serial)
+        refresh()
       }
     })
 
     return unsubscribe
-  }, [subscribe, showSuccess, showError, content, refresh])
+  }, [subscribe, showSuccess, showError, content, refresh, serial])
 
   const toggleSection = (category: string) => {
     const newCollapsed = new Set(collapsedSections)
@@ -70,22 +69,17 @@ export default function DeviceParameters({
     setCollapsedSections(newCollapsed)
   }
 
-  // Update a single parameter locally without full reload
+  // Update a single parameter in the context cache
   const handleParamUpdate = (paramId: number, newValue: number) => {
-    if (!localParams) return
+    if (!params) return
 
-    // Find and update the parameter by ID
-    const updatedParams = { ...localParams }
-    for (const key in updatedParams) {
-      if (updatedParams[key].id === paramId) {
-        updatedParams[key] = {
-          ...updatedParams[key],
-          value: newValue
-        }
+    // Find the parameter key by ID and update in context
+    for (const key in params) {
+      if (params[key].id === paramId) {
+        updateParameterValue(key, newValue)
         break
       }
     }
-    setLocalParams(updatedParams)
   }
 
   const handleSaveToFlash = () => {
@@ -98,14 +92,14 @@ export default function DeviceParameters({
   }
 
   const handleExportToJSON = () => {
-    if (!localParams) {
+    if (!params) {
       showError(content.noParametersToExport)
       return
     }
 
     // Create export object with only parameter values
     const exportData: Record<string, number | string> = {}
-    Object.entries(localParams).forEach(([key, param]) => {
+    Object.entries(params).forEach(([key, param]) => {
       if (param.isparam) {
         exportData[key] = param.value
       }
@@ -139,7 +133,7 @@ export default function DeviceParameters({
       const text = await file.text()
       const importedData = JSON.parse(text)
 
-      if (!localParams) {
+      if (!params) {
         showError(content.noParameterDefinitions)
         return
       }
@@ -157,7 +151,7 @@ export default function DeviceParameters({
           return
         }
 
-        const param = localParams[key]
+        const param = params[key]
 
         if (!param) {
           invalidCount++
@@ -272,7 +266,7 @@ export default function DeviceParameters({
     )
   }
 
-  if (!localParams) {
+  if (!params) {
     return (
       <section id="device-parameters" class="card">
         <h2 class="section-header">{content.deviceParameters}</h2>
@@ -284,7 +278,7 @@ export default function DeviceParameters({
   }
 
   // Group parameters by category
-  const categorizedParams = Object.entries(localParams)
+  const categorizedParams = Object.entries(params)
     .filter(([_, param]) => param.isparam)
     .sort((a, b) => {
       // Sort by category, then by name
@@ -350,10 +344,10 @@ export default function DeviceParameters({
       <div class="form-group" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #ddd' }}>
         <label style={{ marginBottom: '1rem' }}>{content.importExportParameters}</label>
         <div class="button-group" style={{ marginTop: 0 }}>
-          <button class="btn-secondary" onClick={handleExportToJSON} disabled={!localParams || isImporting}>
-            {content.exportToJSON}
+          <button class="btn-secondary" onClick={handleExportToJSON} disabled={!params || isImporting}>
+            {content.exportToJson}
           </button>
-          <button class="btn-secondary" onClick={handleImportFromJSON} disabled={!localParams || isImporting}>
+          <button class="btn-secondary" onClick={handleImportFromJSON} disabled={!params || isImporting}>
             {isImporting
               ? content.importing({ current: importProgress.current, total: importProgress.total })
               : content.importFromJSON

@@ -41,6 +41,7 @@ void SpotValuesManager::stop() {
 
 void SpotValuesManager::processQueue() {
   // Try to send one request from queue (if rate limit allows)
+  // NOTE: Does NOT consume responses - responses are routed by CAN task via handleResponse()
   if (!requestQueue_.empty()) {
     int paramId = requestQueue_.front();
 
@@ -51,17 +52,26 @@ void SpotValuesManager::processQueue() {
     }
     // If request failed (rate limit or TX queue full), leave it in queue and try next iteration
   }
+}
 
-  // Try to receive and accumulate responses in batch
-  int responseParamId;
-  double value;
-
-  if (OICan::TryGetValueResponse(responseParamId, value, 0)) {
-    // Got a response - add to batch (map auto-replaces if param already exists)
-    batch_[responseParamId] = value;
-    // Also update persistent cache for getParamValues
-    latestValues_[responseParamId] = value;
+bool SpotValuesManager::isWaitingForParam(int paramId) const {
+  if (!isActive()) {
+    return false;
   }
+  // Check if this paramId is one we're monitoring
+  for (int id : paramIds_) {
+    if (id == paramId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void SpotValuesManager::handleResponse(int paramId, double value) {
+  // Add to batch (map auto-replaces if param already exists)
+  batch_[paramId] = value;
+  // Also update persistent cache for getParamValues
+  latestValues_[paramId] = value;
 }
 
 void SpotValuesManager::reloadQueue() {

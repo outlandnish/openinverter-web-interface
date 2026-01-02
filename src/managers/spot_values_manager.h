@@ -29,9 +29,13 @@ public:
   void stop();
 
   // Processing (called from CAN task)
-  void processQueue();  // Process pending requests and accumulate responses
+  void processQueue();  // Send pending requests (does NOT consume responses)
   void reloadQueue();   // Reload request queue at interval boundaries
   void flushBatch();    // Send accumulated values to event queue
+
+  // Response routing (called by CAN task when SDO response received)
+  bool isWaitingForParam(int paramId) const;
+  void handleResponse(int paramId, double value);
 
   // Batch access (for getParamValues to merge latest values)
   const std::map<int, double>& getLatestValues() const { return latestValues_; }

@@ -459,6 +459,42 @@ void processTxQueue() {
 // CAN Message Reception and Processing
 // ============================================================================
 
+// Helper: Extract parameter ID and value from SDO response frame
+// Returns true if this is a valid parameter value response (index 0x21xx)
+static bool parseParamValueResponse(const twai_message_t& frame, int& outParamId, double& outValue) {
+  // Check for abort response
+  if (frame.data[0] == SDOProtocol::ABORT) {
+    return false;
+  }
+
+  // Parse index and subindex
+  uint16_t index = frame.data[1] | (frame.data[2] << 8);
+  uint8_t subIndex = frame.data[3];
+
+  // Check if this is a parameter value response (index 0x21xx range)
+  if ((index & 0xFF00) != (SDOProtocol::INDEX_PARAM_UID & 0xFF00)) {
+    return false;
+  }
+
+  // Reconstruct paramId from index and subindex
+  outParamId = ((index & 0xFF) << 8) | subIndex;
+
+  // Extract value (signed fixed-point with scale of 32)
+  outValue = ((double)*(int32_t*)&frame.data[4]) / 32.0;
+
+  return true;
+}
+
+// Helper: Send value set event
+static void sendValueSetEvent(int paramId, double value, SetValueResult result) {
+  CANEvent evt;
+  evt.type = EVT_VALUE_SET;
+  evt.data.valueSet.paramId = paramId;
+  evt.data.valueSet.value = value;
+  evt.data.valueSet.result = result;
+  xQueueSend(canEventQueue, &evt, 0);
+}
+
 void receiveAndProcessCanMessages() {
   twai_message_t rxframe;
 
@@ -471,13 +507,54 @@ void receiveAndProcessCanMessages() {
       uint8_t nodeId = rxframe.identifier & 0x7F;
       DeviceDiscovery::instance().updateLastSeenByNodeId(nodeId, millis());
 
-      // Route all SDO responses to the queue for processing by scan or device connection
-      if (sdoResponseQueue != nullptr) {
-        xQueueSend(sdoResponseQueue, &rxframe, 0);
+      // Parse response info for routing
+      uint16_t respIndex = rxframe.data[1] | (rxframe.data[2] << 8);
+      uint8_t respSubIndex = rxframe.data[3];
+      bool isAbort = (rxframe.data[0] == SDOProtocol::ABORT);
+      uint32_t errorCode = isAbort ? *(uint32_t*)&rxframe.data[4] : 0;
+
+      // Priority 1: Check for pending async write response (uses INDEX_PARAM_UID 0x21xx)
+      // This is checked first since it won't interfere with JSON download (INDEX_STRINGS 0x5001)
+      int paramId;
+      double value;
+      SetValueResult result;
+      if (SDOProtocol::matchPendingWrite(respIndex, respSubIndex, isAbort, errorCode, paramId, value, result)) {
+        sendValueSetEvent(paramId, value, result);
+        return;  // Response consumed
+      }
+
+      // Priority 2: If DeviceConnection is actively downloading JSON, route all responses there
+      if (DeviceConnection::instance().isDownloadingJson()) {
+        if (sdoResponseQueue != nullptr) {
+          xQueueSend(sdoResponseQueue, &rxframe, 0);
+        }
+        return;
+      }
+
+      // Priority 3: Check if this is a spot value response - route directly to manager
+      if (parseParamValueResponse(rxframe, paramId, value) &&
+          SpotValuesManager::instance().isWaitingForParam(paramId)) {
+        // Route directly to spot values manager (does not go to sdoResponseQueue)
+        SpotValuesManager::instance().handleResponse(paramId, value);
+      } else {
+        // Route to SDO response queue for other operations (GetCanMappings, etc.)
+        if (sdoResponseQueue != nullptr) {
+          xQueueSend(sdoResponseQueue, &rxframe, 0);
+        }
       }
     } else {
       DBG_OUTPUT_PORT.printf("Received unwanted frame %" PRIu32 "\r\n", rxframe.identifier);
     }
+  }
+}
+
+// Check for pending write timeouts (call from main task loop)
+void checkPendingWriteTimeouts() {
+  int paramId;
+  double value;
+  SetValueResult result;
+  if (SDOProtocol::checkPendingWriteTimeout(paramId, value, result)) {
+    sendValueSetEvent(paramId, value, result);
   }
 }
 
@@ -527,6 +604,9 @@ void canTask(void* parameter) {
 
     // CAN message reception and routing
     receiveAndProcessCanMessages();
+
+    // Check for pending async write timeouts
+    checkPendingWriteTimeouts();
 
     // Device connection state machine
     DeviceConnection::instance().processConnection();

@@ -50,7 +50,7 @@ function DeviceDetailsContent() {
   const { isConnected, sendMessage, subscribe } = useWebSocketContext()
 
   // Use shared device details context
-  const { monitoring, setStreaming, clearHistoricalData, setCanIoActive, setConnectedSerial } = useDeviceDetailsContext()
+  const { monitoring, setStreaming, clearHistoricalData, setCanIoActive, setConnectedSerial, clearParameterCache } = useDeviceDetailsContext()
 
   // Disconnect from device and stop all activities when component unmounts (navigating away)
   useEffect(() => {
@@ -73,7 +73,10 @@ function DeviceDetailsContent() {
   // Subscribe to WebSocket messages and load settings when ready
   useEffect(() => {
     const unsubscribe = subscribe((message: any) => {
-      console.log('WebSocket event:', message.event, message.data)
+      // Don't log spot values to reduce console noise
+      if (message.event !== 'spotValues') {
+        console.log('WebSocket event:', message.event, message.data)
+      }
 
       switch (message.event) {
         case 'connected':
@@ -93,6 +96,8 @@ function DeviceDetailsContent() {
             setStreaming(false)
             clearHistoricalData()
           }
+          // Clear parameter cache on disconnect
+          clearParameterCache()
           showWarning(content.deviceDisconnected)
           break
 

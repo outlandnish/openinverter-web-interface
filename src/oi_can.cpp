@@ -743,33 +743,6 @@ bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs) {
   return true;
 }
 
-// Legacy blocking version (kept for compatibility with other code)
-double GetValue(int paramId) {
-  if (!conn.isIdle()) {
-    return 0;
-  }
-
-  RequestValue(paramId);
-
-  // Wait for response with timeout
-  unsigned long startTime = millis();
-  const unsigned long TIMEOUT_MS = 100;
-
-  while ((millis() - startTime) < TIMEOUT_MS) {
-    int receivedParamId;
-    double value;
-
-    if (TryGetValueResponse(receivedParamId, value, 10)) {
-      if (receivedParamId == paramId) {
-        return value;
-      }
-      // Got a response for a different parameter, keep waiting
-    }
-  }
-
-  return 0;  // Timeout
-}
-
 // Initialize CAN bus without connecting to a specific device
 void InitCAN(BaudRate baud, int txPin, int rxPin) {
   conn.initializeForScanning(baud, txPin, rxPin);

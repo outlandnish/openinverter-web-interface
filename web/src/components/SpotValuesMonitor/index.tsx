@@ -45,7 +45,7 @@ export default function SpotValuesMonitor({
     monitoring,
     setStreaming,
     setInterval,
-    setSpotValues,
+    mergeSpotValues,
     setHistoricalData,
     clearHistoricalData,
     setSelectedParams,
@@ -123,7 +123,8 @@ export default function SpotValuesMonitor({
           const timestamp = message.data.timestamp
           const values = message.data.values
 
-          setSpotValues(values)
+          // Merge new values with existing ones to preserve values not in current batch
+          mergeSpotValues(values)
 
           // Update historical data with conversions applied
           setHistoricalData(prev => {

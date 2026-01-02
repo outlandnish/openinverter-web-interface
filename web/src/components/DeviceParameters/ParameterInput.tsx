@@ -32,16 +32,15 @@ export default function ParameterInput({
   // Subscribe to WebSocket events for parameter update responses
   useEffect(() => {
     const unsubscribe = subscribe((message) => {
-      if (message.event === 'paramUpdateSuccess') {
+      if (message.event === 'paramUpdateResult') {
         if (message.data.paramId === paramId && pendingUpdate !== null) {
-          showSuccess(content.parameterUpdatedSuccess({ paramName: displayName }))
-          // Update local parameter value without full reload
-          onUpdate(paramId, pendingUpdate)
-          setPendingUpdate(null)
-        }
-      } else if (message.event === 'paramUpdateError') {
-        if (message.data.paramId === paramId && pendingUpdate !== null) {
-          showError(content.failedToUpdateParam({ paramName: displayName }) + ': ' + message.data.error)
+          if (message.data.success) {
+            showSuccess(content.parameterUpdatedSuccess({ paramName: displayName }))
+            // Update local parameter value without full reload
+            onUpdate(paramId, pendingUpdate)
+          } else {
+            showError(content.failedToUpdateParam({ paramName: displayName }) + ': ' + message.data.error)
+          }
           setPendingUpdate(null)
         }
       }

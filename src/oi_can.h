@@ -47,7 +47,6 @@ String GetCanMapping();  // Get CAN mappings as JSON string
 SetResult AddCanMapping(String json);
 SetResult RemoveCanMapping(String json);
 SetResult SetValue(int paramId, double value);
-double GetValue(int paramId);
 bool RequestValue(int paramId);  // Send SDO request without waiting (async, non-blocking with rate limiting, returns
                                  // false if TX queue full)
 bool TryGetValueResponse(int& outParamId, double& outValue, int timeoutMs);  // Try to receive response (async)
